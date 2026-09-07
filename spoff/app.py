@@ -197,7 +197,7 @@ class SpoffTUI(App):
     }
 
     #sidebar {
-        width: 30;
+        width: 34;
         height: 100%;
         border-right: solid #262626;
         background: transparent;
@@ -474,6 +474,13 @@ class SpoffTUI(App):
         Binding("down", "vol_down", "Vol-"),
         Binding("n", "next_track", "Next"),
         Binding("p", "prev_track", "Prev"),
+        Binding("f7", "prev_track", "Prev", show=False),
+        Binding("f8", "toggle_play", "Play/Pause", show=False),
+        Binding("f9", "next_track", "Next", show=False),
+        Binding("audio_prev", "prev_track", "Prev", show=False),
+        Binding("audio_play", "toggle_play", "Play/Pause", show=False),
+        Binding("audio_pause", "toggle_play", "Play/Pause", show=False),
+        Binding("audio_next", "next_track", "Next", show=False),
         Binding("slash", "focus_search", "Search"),
         Binding("i", "focus_import", "Import"),
         Binding("a", "add_to_playlist", "Add to Playlist"),
@@ -521,7 +528,7 @@ class SpoffTUI(App):
         with Horizontal(id="main-layout"):
             with Vertical(id="sidebar"):
                 yield Static("PLAYLISTS", classes="pane-title")
-                yield Input(placeholder="New playlist name or Spotify URL...", id="sidebar-import-input", classes="action-input")
+                yield Input(placeholder="Name or Spotify link...", id="sidebar-import-input", classes="action-input")
                 yield DataTable(id="side-table", cursor_type="row", show_header=False)
                 yield Static("[dim]Enter: open  |  Del: remove[/dim]", id="sidebar-hint")
 
@@ -571,7 +578,16 @@ class SpoffTUI(App):
             _update()
 
     def on_key(self, event) -> None:
-        if event.key == "down" and isinstance(self.focused, Input):
+        if event.key in ("f7", "audio_prev"):
+            self.action_prev_track()
+            event.prevent_default()
+        elif event.key in ("f8", "audio_play", "audio_pause"):
+            self.action_toggle_play()
+            event.prevent_default()
+        elif event.key in ("f9", "audio_next"):
+            self.action_next_track()
+            event.prevent_default()
+        elif event.key == "down" and isinstance(self.focused, Input):
             if self.focused.id == "search-box":
                 self.query_one("#track-table", DataTable).focus()
                 event.prevent_default()
@@ -915,7 +931,7 @@ class SpoffTUI(App):
 
         queue_len = len(self.queue)
         queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "Empty"
-        hints = f"Vol: {self.volume}%  |  Queue: {queue_pos}  |  Enter: Play  |  Space: Pause  |  a: Add to Playlist  |  /: Search  |  Tab: Switch Pane  |  Del: Remove  |  q: Quit"
+        hints = f"Vol: {self.volume}%  |  Queue: {queue_pos}  |  Enter: Play  |  Space/F8: Pause  |  F7/F9: Prev/Next  |  a: Add  |  /: Search  |  Tab: Pane  |  Del: Remove  |  q: Quit"
         self.query_one("#deck-line-3", Static).update(escape(hints))
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:

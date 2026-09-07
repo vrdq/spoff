@@ -55,7 +55,9 @@ uv run python3 -m spoff
 | Key | Action |
 | :--- | :--- |
 | `Enter` | Play highlighted track / Open highlighted playlist |
-| `Space` | Toggle Play / Pause |
+| `Space` / `F8` | Toggle Play / Pause |
+| `F7` / `p` | Previous track in queue |
+| `F9` / `n` | Next track in queue |
 | `/` | Focus live YouTube search bar |
 | `i` | Focus playlist import / create input |
 | `a` / `+` | Add highlighted or playing track to playlist |
@@ -64,7 +66,6 @@ uv run python3 -m spoff
 | `j` / `k` (or `Down` / `Up`) | Navigate table rows |
 | `Left` / `Right` | Seek backward / forward 5 seconds |
 | `Up` / `Down` | Adjust volume |
-| `n` / `p` | Next / Previous track in queue |
 | `Delete` / `d` / `x` | Remove playlist (with confirmation) or delete track |
 | `1` | View 1: Search |
 | `2` | View 2: Current Playlist |
