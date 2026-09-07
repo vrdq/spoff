@@ -33,6 +33,16 @@ paru -S spoff
 paru -S spoff-git
 ```
 
+### Arch Linux (Local Build)
+
+If AUR registration is unavailable, build and install locally with pacman:
+
+```bash
+git clone https://github.com/yassinMMK/spoff.git
+cd spoff
+makepkg -si
+```
+
 ### Manual / From Source
 
 Prerequisites: `mpv`, `python>=3.10`
@@ -58,19 +68,22 @@ uv run python3 -m spoff
 | `Space` / `F8` | Toggle Play / Pause |
 | `F7` / `p` | Previous track in queue |
 | `F9` / `n` | Next track in queue |
+| `b` | Focus song scrub / seek bar |
+| `h` / `l` | Seek -/+ 5s on scrub bar (or switch sidebar/tracks) |
+| `H` / `L` | Fast seek -/+ 15s on scrub bar |
+| `0` – `9` | Jump directly to 0% – 90% of song on scrub bar |
 | `/` | Focus live YouTube search bar |
 | `i` | Focus playlist import / create input |
 | `a` / `+` | Add highlighted or playing track to playlist |
-| `h` / `l` | Switch pane (Left: Playlists, Right: Tracks) |
-| `Tab` | Toggle active pane focus |
-| `j` / `k` (or `Down` / `Up`) | Navigate table rows |
+| `Tab` | Cycle active focus (Sidebar $\rightarrow$ Tracks $\rightarrow$ Scrub Bar) |
+| `j` / `k` (or `Down` / `Up`) | Navigate table rows (scrolling past last row focuses Scrub Bar) |
 | `Left` / `Right` | Seek backward / forward 5 seconds |
 | `Up` / `Down` | Adjust volume |
 | `Delete` / `d` / `x` | Remove playlist (with confirmation) or delete track |
 | `1` | View 1: Search |
 | `2` | View 2: Current Playlist |
 | `3` | View 3: Offline Library |
-| `Escape` | Unfocus input / dismiss modal |
+| `Escape` | Unfocus input / return from scrub bar to tracks / dismiss modal |
 | `q` | Quit |
 
 ---
