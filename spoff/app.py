@@ -232,15 +232,9 @@ class SpoffTUI(App):
         align: left middle;
     }
 
-    #logo {
-        text-style: bold;
-        width: 14;
-        color: #ffffff;
-    }
-
     #nav-bar {
         width: 1fr;
-        padding-left: 2;
+        padding-left: 0;
         color: #767676;
     }
 
@@ -371,8 +365,7 @@ class SpoffTUI(App):
     }
 
     #player-deck:focus-within {
-        border-top: solid #569f68;
-        background: #141815;
+        border-top: solid #383838;
     }
 
     /* MODAL: ADD TO PLAYLIST */
@@ -496,17 +489,7 @@ class SpoffTUI(App):
     #deck-line-2 {
         height: 1;
         align: left middle;
-        padding: 0 1;
-    }
-
-    #deck-line-2:focus-within {
-        background: #1c271f;
-        border-left: thick #569f68;
-    }
-
-    #deck-bar-pill {
-        width: 17;
-        margin-right: 1;
+        padding: 0;
     }
 
     #time-elapsed, #time-total {
@@ -527,23 +510,23 @@ class SpoffTUI(App):
     }
 
     #playback-bar > Bar > .bar--bar {
-        color: #ffffff;
-        background: #2e2e2e;
+        color: #767676;
+        background: #262626;
     }
 
     #playback-bar > Bar > .bar--complete {
-        color: #ffffff;
-        background: #2e2e2e;
+        color: #767676;
+        background: #262626;
     }
 
     #playback-bar:focus > Bar > .bar--bar {
-        color: #78c98d;
-        background: #2d3e32;
+        color: #569f68;
+        background: #262626;
     }
 
     #playback-bar:focus > Bar > .bar--complete {
-        color: #78c98d;
-        background: #2d3e32;
+        color: #569f68;
+        background: #262626;
     }
 
     #deck-line-3 {
@@ -613,7 +596,6 @@ class SpoffTUI(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-bar"):
-            yield Static("SPOFF", id="logo")
             yield Static("[bold #ffffff][1] Search[/]    [#666666][2] Playlist[/]    [#666666][3] Offline Library[/]", id="nav-bar")
             yield Static("[dim]STANDBY[/dim]", id="status-pill")
 
@@ -625,20 +607,19 @@ class SpoffTUI(App):
                 yield Static("[dim]Enter: open  |  Del: delete[/dim]", id="sidebar-hint")
 
             with Vertical(id="content-pane"):
-                yield Input(placeholder="Search songs or artists & press Enter...", id="search-box", classes="action-input")
+                yield Input(placeholder="Search songs or artists...", id="search-box", classes="action-input")
                 yield DataTable(id="track-table", cursor_type="row", show_header=True)
 
         with Vertical(id="player-deck"):
-            yield Static("Ready. Highlight any song and press Enter to play.", id="notification-line")
+            yield Static("", id="notification-line")
             with Horizontal(id="deck-line-1"):
                 yield Static("No track playing", id="deck-track")
                 yield Static("[dim]IDLE[/dim]", id="deck-source")
             with Horizontal(id="deck-line-2"):
-                yield Static("[dim]              [/dim]", id="deck-bar-pill")
                 yield Static("00:00", id="time-elapsed")
                 yield ScrubBar(total=100, show_eta=False, id="playback-bar")
                 yield Static("00:00", id="time-total")
-            yield Static("Enter: Play  |  Space: Pause  |  a: Add to Playlist  |  /: Search  |  b: Seek Bar  |  Tab: Switch Pane  |  Del: Delete  |  q: Quit", id="deck-line-3")
+            yield Static("Enter: play  |  Space: pause  |  b: seek  |  a: add  |  /: search  |  Tab: pane  |  Del: delete  |  q: quit", id="deck-line-3")
 
     def on_mount(self) -> None:
         self.player.start_mpv()
@@ -1037,47 +1018,30 @@ class SpoffTUI(App):
         curr = self.player.current_track
         is_scrubbing = (self.focused and self.focused.id == "playback-bar")
 
-        bar_pill = self.query_one("#deck-bar-pill", Static)
-        if is_scrubbing:
-            bar_pill.update("[bold #131313 on #569f68] ► SEEK ACTIVE [/]")
-        else:
-            bar_pill.update("[dim]              [/dim]")
-
         if curr:
-            if is_scrubbing:
-                state_pill = "[bold #131313 on #569f68] SEEKING [/]"
-            elif self.player.is_paused:
+            if self.player.is_paused:
                 state_pill = "[bold #c4a768][PAUSED][/]"
             else:
                 state_pill = "[bold #569f68][PLAYING][/]"
             self.query_one("#status-pill", Static).update(state_pill)
 
             is_cached = get_cached_track_path(curr.get("id", "")) is not None
-            if is_cached:
-                src = "[bold #569f68]LOCAL DISK[/]"
-            else:
-                src = "[bold #c4a768]STREAMING[/]"
+            src = "[bold #569f68]LOCAL DISK[/]" if is_cached else "[bold #c4a768]STREAMING[/]"
             self.query_one("#deck-source", Static).update(src)
             safe_title = escape(str(curr.get("title", "")))
             safe_artist = escape(str(curr.get("artist", "")))
             self.query_one("#deck-track", Static).update(f"{safe_title}  -  {safe_artist}")
         else:
-            if is_scrubbing:
-                self.query_one("#status-pill", Static).update("[bold #131313 on #569f68] SEEKING [/]")
-            else:
-                self.query_one("#status-pill", Static).update("[dim]STANDBY[/dim]")
+            self.query_one("#status-pill", Static).update("[dim]STANDBY[/dim]")
             self.query_one("#deck-source", Static).update("[dim]IDLE[/dim]")
             self.query_one("#deck-track", Static).update("No track playing")
 
         if is_scrubbing:
-            hints = "SEEK MODE: h/Left (-5s)  |  l/Right (+5s)  |  H/L (-/+15s)  |  0-9 (jump %)  |  Space (Pause)  |  k/Up/Esc (Return to tracks)"
-            self.query_one("#notification-line", Static).update(
-                "[bold #569f68]► PROGRESS BAR ACTIVE[/]  [#e2e2e2]h/l: seek -/+5s  |  H/L: -/+15s  |  0-9: jump %  |  k/Up/Esc: return to tracks[/]"
-            )
+            hints = "Seek: h/l (-/+5s)  |  H/L (-/+15s)  |  0-9: jump %  |  Space: pause  |  Esc: back"
         else:
             queue_len = len(self.queue)
-            queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "Empty"
-            hints = f"Vol: {self.volume}%  |  Queue: {queue_pos}  |  Enter: Play  |  Space/F8: Pause  |  F7/F9: Prev/Next  |  b: Seek Bar  |  a: Add  |  /: Search  |  Tab: Pane  |  Del: Delete  |  q: Quit"
+            queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "empty"
+            hints = f"Vol: {self.volume}%  |  Queue: {queue_pos}  |  Enter: play  |  Space: pause  |  b: seek  |  a: add  |  /: search  |  Tab: pane  |  Del: delete  |  q: quit"
         self.query_one("#deck-line-3", Static).update(escape(hints))
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
