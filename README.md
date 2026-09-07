@@ -38,7 +38,7 @@ paru -S spoff-git
 If AUR registration is unavailable, build and install locally with pacman:
 
 ```bash
-git clone https://github.com/yassinMMK/spoff.git
+git clone https://github.com/vrdq/spoff.git
 cd spoff
 makepkg -si
 ```
@@ -48,7 +48,7 @@ makepkg -si
 Prerequisites: `mpv`, `python>=3.10`
 
 ```bash
-git clone https://github.com/yassinMMK/spoff.git
+git clone https://github.com/vrdq/spoff.git
 cd spoff
 pip install .
 ```
@@ -90,4 +90,4 @@ uv run python3 -m spoff
 
 ## License
 
-MIT © [yassinMMK](https://github.com/yassinMMK)
+MIT © [vrdq](https://github.com/vrdq)

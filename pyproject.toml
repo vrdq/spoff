@@ -9,7 +9,7 @@ description = "Fast, minimalist, dark-monochrome Spotify & YouTube streaming mus
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "yassinMMK" }]
+authors = [{ name = "vrdq" }]
 keywords = ["spotify", "youtube", "music", "player", "tui", "cli", "audio"]
 classifiers = [
     "Development Status :: 4 - Beta",

@@ -1,10 +1,10 @@
-# Maintainer: yassinMMK <y25mmk@gmail.com>
+# Maintainer: vrdq
 pkgname=spoff
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Fast, minimalist, dark-monochrome Spotify & YouTube music TUI with offline caching"
 arch=('any')
-url="https://github.com/yassinMMK/spoff"
+url="https://github.com/vrdq/spoff"
 license=('MIT')
 depends=(
     'python'
