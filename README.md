@@ -47,10 +47,19 @@ makepkg -si
 
 Prerequisites: `mpv`, `python>=3.10`
 
+Using standard Python virtual environment:
 ```bash
 git clone https://github.com/vrdq/spoff.git
 cd spoff
-pip install .
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+spoff
+```
+
+Using `pipx`:
+```bash
+pipx install .
 ```
 
 Or run directly with `uv`:

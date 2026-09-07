@@ -20,11 +20,30 @@ makedepends=(
     'python-hatchling'
 )
 
+prepare() {
+    cd "$srcdir"
+    if [ ! -f "pyproject.toml" ]; then
+        if [ -f "$startdir/pyproject.toml" ]; then
+            cp -a "$startdir/pyproject.toml" "$startdir/spoff" "$startdir/README.md" "$startdir/LICENSE" "$srcdir/"
+        elif [ -d "$srcdir/$pkgname-$pkgver" ]; then
+            cd "$srcdir/$pkgname-$pkgver"
+        fi
+    fi
+}
+
 build() {
+    cd "$srcdir"
+    if [ -d "$srcdir/$pkgname-$pkgver" ]; then
+        cd "$srcdir/$pkgname-$pkgver"
+    fi
     python -m build --wheel --no-isolation
 }
 
 package() {
+    cd "$srcdir"
+    if [ -d "$srcdir/$pkgname-$pkgver" ]; then
+        cd "$srcdir/$pkgname-$pkgver"
+    fi
     python -m installer --destdir="$pkgdir" dist/*.whl
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }
