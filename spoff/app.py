@@ -178,6 +178,12 @@ class ScrubBar(ProgressBar):
     def action_toggle_play(self) -> None:
         self.app.action_toggle_play()
 
+    def on_focus(self) -> None:
+        self.app.update_player_hud()
+
+    def on_blur(self) -> None:
+        self.app.update_player_hud()
+
     def on_key(self, event: events.Key) -> None:
         if event.key in "0123456789":
             pct = int(event.key) / 10.0
@@ -250,7 +256,7 @@ class SpoffTUI(App):
     }
 
     #sidebar {
-        width: 34;
+        width: 44;
         height: 100%;
         border-right: solid #262626;
         background: transparent;
@@ -366,6 +372,7 @@ class SpoffTUI(App):
 
     #player-deck:focus-within {
         border-top: solid #569f68;
+        background: #141815;
     }
 
     /* MODAL: ADD TO PLAYLIST */
@@ -489,11 +496,28 @@ class SpoffTUI(App):
     #deck-line-2 {
         height: 1;
         align: left middle;
+        padding: 0 1;
+    }
+
+    #deck-line-2:focus-within {
+        background: #1c271f;
+        border-left: thick #569f68;
+    }
+
+    #deck-bar-pill {
+        width: 17;
+        margin-right: 1;
     }
 
     #time-elapsed, #time-total {
         width: 6;
         color: #767676;
+    }
+
+    #deck-line-2:focus-within > #time-elapsed,
+    #deck-line-2:focus-within > #time-total {
+        color: #ffffff;
+        text-style: bold;
     }
 
     #playback-bar {
@@ -513,13 +537,13 @@ class SpoffTUI(App):
     }
 
     #playback-bar:focus > Bar > .bar--bar {
-        color: #569f68;
-        background: #383838;
+        color: #78c98d;
+        background: #2d3e32;
     }
 
     #playback-bar:focus > Bar > .bar--complete {
-        color: #569f68;
-        background: #383838;
+        color: #78c98d;
+        background: #2d3e32;
     }
 
     #deck-line-3 {
@@ -590,30 +614,31 @@ class SpoffTUI(App):
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-bar"):
             yield Static("SPOFF", id="logo")
-            yield Static("[bold #ffffff][1] Search[/]    [#666666][2] Current Playlist[/]    [#666666][3] Offline Library[/]", id="nav-bar")
+            yield Static("[bold #ffffff][1] Search[/]    [#666666][2] Playlist[/]    [#666666][3] Offline Library[/]", id="nav-bar")
             yield Static("[dim]STANDBY[/dim]", id="status-pill")
 
         with Horizontal(id="main-layout"):
             with Vertical(id="sidebar"):
                 yield Static("PLAYLISTS", classes="pane-title")
-                yield Input(placeholder="Name or Spotify link...", id="sidebar-import-input", classes="action-input")
+                yield Input(placeholder="New playlist name or Spotify link", id="sidebar-import-input", classes="action-input")
                 yield DataTable(id="side-table", cursor_type="row", show_header=False)
-                yield Static("[dim]Enter: open  |  Del: remove[/dim]", id="sidebar-hint")
+                yield Static("[dim]Enter: open  |  Del: delete[/dim]", id="sidebar-hint")
 
             with Vertical(id="content-pane"):
-                yield Input(placeholder="Search any song or artist & press Enter...", id="search-box", classes="action-input")
+                yield Input(placeholder="Search songs or artists & press Enter...", id="search-box", classes="action-input")
                 yield DataTable(id="track-table", cursor_type="row", show_header=True)
 
         with Vertical(id="player-deck"):
-            yield Static("Ready. Press Enter on any song to play.", id="notification-line")
+            yield Static("Ready. Highlight any song and press Enter to play.", id="notification-line")
             with Horizontal(id="deck-line-1"):
                 yield Static("No track playing", id="deck-track")
                 yield Static("[dim]IDLE[/dim]", id="deck-source")
             with Horizontal(id="deck-line-2"):
+                yield Static("[dim]              [/dim]", id="deck-bar-pill")
                 yield Static("00:00", id="time-elapsed")
                 yield ScrubBar(total=100, show_eta=False, id="playback-bar")
                 yield Static("00:00", id="time-total")
-            yield Static("Enter: Play  |  Space: Pause  |  a: Add to Playlist  |  /: Search  |  b: Seek Bar  |  Tab: Switch Pane  |  Del: Remove  |  q: Quit", id="deck-line-3")
+            yield Static("Enter: Play  |  Space: Pause  |  a: Add to Playlist  |  /: Search  |  b: Seek Bar  |  Tab: Switch Pane  |  Del: Delete  |  q: Quit", id="deck-line-3")
 
     def on_mount(self) -> None:
         self.player.start_mpv()
@@ -687,7 +712,7 @@ class SpoffTUI(App):
             return f"[#666666]{label}[/]"
 
         t1 = tab_str("search", "[1] Search")
-        t2 = tab_str("playlist", "[2] Current Playlist")
+        t2 = tab_str("playlist", "[2] Playlist")
         t3 = tab_str("offline", "[3] Offline Library")
         self.query_one("#nav-bar", Static).update(f"{t1}    {t2}    {t3}")
 
@@ -836,7 +861,7 @@ class SpoffTUI(App):
 
             if pl.get("tracks"):
                 self.current_playlist_tracks = list(pl["tracks"])
-                self.notify_user(f"Loaded '{name}' ({len(self.current_playlist_tracks)} tracks).")
+                self.notify_user(f"Loaded playlist '{name}' ({len(self.current_playlist_tracks)} tracks).")
                 self.switch_view("playlist")
                 self.query_one("#track-table", DataTable).focus()
                 return
@@ -847,7 +872,7 @@ class SpoffTUI(App):
             else:
                 self.current_playlist_tracks = []
                 self.render_tracks([])
-                self.notify_user(f"Opened empty playlist '{name}'. Press 'a' on any song to add tracks.")
+                self.notify_user(f"Opened empty playlist '{name}'. Press 'a' on any song to add it.")
                 self.switch_view("playlist")
                 self.query_one("#track-table", DataTable).focus()
 
@@ -875,7 +900,7 @@ class SpoffTUI(App):
             track = self.player.current_track
 
         if not track:
-            self.notify_user("Select a track or play a song to add to a playlist.")
+            self.notify_user("Select a track first, or play a song to add it to a playlist.")
             return
 
         self.prompt_add_track_to_playlist(track)
@@ -944,12 +969,12 @@ class SpoffTUI(App):
                             if self.active_tab == "playlist":
                                 self.render_tracks([])
 
-                    self.notify_user(f"Removed playlist '{pname}' from library.")
+                    self.notify_user(f"Deleted playlist '{pname}'.")
 
                 self.push_screen(
                     ConfirmModal(
                         title="DELETE PLAYLIST",
-                        message=f"Are you sure you want to remove '[bold #ffffff]{escape(pname)}[/]' from your library?",
+                        message=f"Permanently delete playlist '[bold #ffffff]{escape(pname)}[/]' from your library?",
                         confirm_label="Delete"
                     ),
                     handle_delete_confirm
@@ -971,7 +996,7 @@ class SpoffTUI(App):
                     if remaining:
                         new_row = max(0, min(row_idx, len(remaining) - 1))
                         f.move_cursor(row=new_row)
-                    self.notify_user(f"Deleted cached file for '{t_title}'.")
+                    self.notify_user(f"Removed '{t_title}' from offline disk cache.")
 
             elif self.active_tab == "playlist":
                 if 0 <= row_idx < len(self.current_playlist_tracks):
@@ -994,7 +1019,7 @@ class SpoffTUI(App):
                     if self.search_results:
                         new_row = max(0, min(row_idx, len(self.search_results) - 1))
                         f.move_cursor(row=new_row)
-                    self.notify_user(f"Dismissed search result: '{t.get('title')}'.")
+                    self.notify_user(f"Removed '{t.get('title')}' from search results.")
 
     def on_track_finished(self):
         self.call_from_thread(self.action_next_track)
@@ -1011,9 +1036,16 @@ class SpoffTUI(App):
 
         curr = self.player.current_track
         is_scrubbing = (self.focused and self.focused.id == "playback-bar")
+
+        bar_pill = self.query_one("#deck-bar-pill", Static)
+        if is_scrubbing:
+            bar_pill.update("[bold #131313 on #569f68] ► SEEK ACTIVE [/]")
+        else:
+            bar_pill.update("[dim]              [/dim]")
+
         if curr:
             if is_scrubbing:
-                state_pill = "[bold #569f68][SEEKING][/]"
+                state_pill = "[bold #131313 on #569f68] SEEKING [/]"
             elif self.player.is_paused:
                 state_pill = "[bold #c4a768][PAUSED][/]"
             else:
@@ -1031,18 +1063,21 @@ class SpoffTUI(App):
             self.query_one("#deck-track", Static).update(f"{safe_title}  -  {safe_artist}")
         else:
             if is_scrubbing:
-                self.query_one("#status-pill", Static).update("[bold #569f68][SEEKING][/]")
+                self.query_one("#status-pill", Static).update("[bold #131313 on #569f68] SEEKING [/]")
             else:
                 self.query_one("#status-pill", Static).update("[dim]STANDBY[/dim]")
             self.query_one("#deck-source", Static).update("[dim]IDLE[/dim]")
             self.query_one("#deck-track", Static).update("No track playing")
 
         if is_scrubbing:
-            hints = "SEEK MODE: h/l: -/+5s  |  H/L: -/+15s  |  0-9: %  |  Space: Pause  |  k/Up/Esc: Return to tracks"
+            hints = "SEEK MODE: h/Left (-5s)  |  l/Right (+5s)  |  H/L (-/+15s)  |  0-9 (jump %)  |  Space (Pause)  |  k/Up/Esc (Return to tracks)"
+            self.query_one("#notification-line", Static).update(
+                "[bold #569f68]► PROGRESS BAR ACTIVE[/]  [#e2e2e2]h/l: seek -/+5s  |  H/L: -/+15s  |  0-9: jump %  |  k/Up/Esc: return to tracks[/]"
+            )
         else:
             queue_len = len(self.queue)
             queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "Empty"
-            hints = f"Vol: {self.volume}%  |  Queue: {queue_pos}  |  Enter: Play  |  Space/F8: Pause  |  F7/F9: Prev/Next  |  b: Seek Bar  |  a: Add  |  /: Search  |  Tab: Pane  |  Del: Remove  |  q: Quit"
+            hints = f"Vol: {self.volume}%  |  Queue: {queue_pos}  |  Enter: Play  |  Space/F8: Pause  |  F7/F9: Prev/Next  |  b: Seek Bar  |  a: Add  |  /: Search  |  Tab: Pane  |  Del: Delete  |  q: Quit"
         self.query_one("#deck-line-3", Static).update(escape(hints))
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -1061,7 +1096,7 @@ class SpoffTUI(App):
                     self.playlists = load_saved_playlists()
                     self.refresh_side_table()
                     self.load_playlist_by_index(0)
-                    self.notify_user(f"Created playlist '{u}'. Press 'a' on any song to add tracks.")
+                    self.notify_user(f"Created playlist '{u}'. Press 'a' on any song to add it.")
 
     @work(thread=True)
     def do_search(self, query: str):
@@ -1079,7 +1114,7 @@ class SpoffTUI(App):
 
     @work(thread=True)
     def import_playlist_url(self, url: str):
-        self.notify_user("Fetching playlist tracks...")
+        self.notify_user("Fetching tracks from Spotify link...")
         parsed = parse_spotify_url(url)
         tracks = []
         name = "Spotify Playlist"
@@ -1095,7 +1130,7 @@ class SpoffTUI(App):
             name = pl.get("name", name)
             pid = pl["id"]
         else:
-            self.notify_user("Could not load playlist. Check if the link is valid.")
+            self.notify_user("Could not load Spotify playlist. Please check that the link is public.")
             return
 
         add_saved_playlist({"id": pid, "name": name, "url": url, "tracks": tracks})
@@ -1105,7 +1140,7 @@ class SpoffTUI(App):
 
         def _update():
             self.refresh_side_table()
-            self.notify_user(f"Loaded '{name}' ({len(tracks)} tracks).")
+            self.notify_user(f"Imported playlist '{name}' ({len(tracks)} tracks).")
             self.switch_view("playlist")
             self.query_one("#track-table", DataTable).focus()
         self.call_from_thread(_update)
@@ -1138,26 +1173,26 @@ class SpoffTUI(App):
         if cached:
             if req_id != self._play_request_id:
                 return
-            self.notify_user(f"Playing '{title}' offline from disk.")
+            self.notify_user(f"Playing '{title}' (offline from disk).")
             self.player.load_and_play(str(cached), track)
             return
 
-        self.notify_user(f"Connecting '{title}'...")
+        self.notify_user(f"Connecting stream for '{title}'...")
 
         res = search_and_resolve_stream(title, artist)
         if req_id != self._play_request_id:
             return
 
         if not res or not res.get("stream_url"):
-            self.notify_user(f"Failed to stream '{title}'.")
+            self.notify_user(f"Could not stream '{title}'. Track may be unavailable.")
             return
 
         stream_url = res["stream_url"]
-        self.notify_user(f"Streaming '{title}' (caching to disk)...")
+        self.notify_user(f"Streaming '{title}' (caching for offline listening)...")
         self.player.load_and_play(stream_url, track)
 
         def on_cached(path):
-            self.notify_user(f"Cached '{title}' to offline library.")
+            self.notify_user(f"Saved '{title}' to offline library.")
             if self.active_tab == "offline":
                 def _refresh():
                     self.render_tracks(list(load_offline_index().values()))

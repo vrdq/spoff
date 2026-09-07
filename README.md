@@ -81,7 +81,7 @@ uv run python3 -m spoff
 | `Up` / `Down` | Adjust volume |
 | `Delete` / `d` / `x` | Remove playlist (with confirmation) or delete track |
 | `1` | View 1: Search |
-| `2` | View 2: Current Playlist |
+| `2` | View 2: Playlist |
 | `3` | View 3: Offline Library |
 | `Escape` | Unfocus input / return from scrub bar to tracks / dismiss modal |
 | `q` | Quit |
