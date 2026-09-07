@@ -66,34 +66,35 @@ class MPVController:
         self._listener_thread = threading.Thread(target=self._ipc_listener, daemon=True)
         self._listener_thread.start()
 
-    def _send_command(self, cmd: list) -> Optional[Any]:
+    def _send_command(self, cmd: list) -> bool:
         if not os.path.exists(self.socket_path):
-            return None
+            return False
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
-                s.settimeout(0.5)
+                s.settimeout(0.1)
                 s.connect(self.socket_path)
                 msg = json.dumps({"command": cmd}) + "\n"
                 s.sendall(msg.encode("utf-8"))
-                resp_bytes = s.recv(4096)
-                if resp_bytes:
-                    res = json.loads(resp_bytes.decode("utf-8").split("\n")[0])
-                    return res.get("data")
+                return True
         except Exception:
-            return None
+            return False
 
     def _ipc_listener(self):
-        """Listens for MPV IPC events like playback finish or position change."""
+        """Listens for MPV IPC events and property updates in the background."""
         while not self._stop_listener:
             if not os.path.exists(self.socket_path):
-                time.sleep(0.1)
+                time.sleep(0.05)
                 continue
             try:
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
                     s.connect(self.socket_path)
+                    s.sendall(json.dumps({"command": ["observe_property", 1, "time-pos"]}).encode("utf-8") + b"\n")
+                    s.sendall(json.dumps({"command": ["observe_property", 2, "duration"]}).encode("utf-8") + b"\n")
+                    s.sendall(json.dumps({"command": ["observe_property", 3, "pause"]}).encode("utf-8") + b"\n")
+
                     buffer = ""
                     while not self._stop_listener:
-                        data = s.recv(1024).decode("utf-8")
+                        data = s.recv(1024).decode("utf-8", errors="ignore")
                         if not data:
                             break
                         buffer += data
@@ -103,14 +104,24 @@ class MPVController:
                                 continue
                             try:
                                 event = json.loads(line)
-                                if event.get("event") == "end-file":
+                                ev_type = event.get("event")
+                                if ev_type == "property-change":
+                                    name = event.get("name")
+                                    val = event.get("data")
+                                    if name == "time-pos" and val is not None:
+                                        self._last_pos = float(val)
+                                    elif name == "duration" and val is not None:
+                                        self._duration = float(val)
+                                    elif name == "pause" and val is not None:
+                                        self.is_paused = bool(val)
+                                elif ev_type == "end-file":
                                     reason = event.get("reason")
                                     if reason == "eof" and self.playback_finished_callback:
                                         self.playback_finished_callback()
                             except Exception:
                                 pass
             except Exception:
-                time.sleep(0.2)
+                time.sleep(0.1)
 
     def load_and_play(self, source_path_or_url: str, track_meta: Dict[str, Any]):
         self.start_mpv()
@@ -141,18 +152,6 @@ class MPVController:
     def get_progress(self) -> tuple[float, float]:
         if not self.current_track:
             return 0.0, 0.0
-        pos = self._send_command(["get_property", "time-pos"])
-        dur = self._send_command(["get_property", "duration"])
-        if pos is not None:
-            try:
-                self._last_pos = float(pos)
-            except (ValueError, TypeError):
-                pass
-        if dur is not None:
-            try:
-                self._duration = float(dur)
-            except (ValueError, TypeError):
-                pass
         return self._last_pos, self._duration
 
     def stop(self):

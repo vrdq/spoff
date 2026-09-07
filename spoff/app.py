@@ -64,10 +64,10 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
         with Vertical(id="modal-dialog"):
             yield Static("ADD TO PLAYLIST", id="modal-title")
             yield Static(f"Track: [bold #ffffff]{escape(title)}[/]  -  [#767676]{escape(artist)}[/]", id="modal-track-info")
-            yield Input(placeholder="Type new playlist name & Enter...", id="modal-input")
+            yield Input(placeholder="New playlist name...", id="modal-input")
             yield Static("OR CHOOSE EXISTING PLAYLIST", id="modal-subtitle")
             yield DataTable(id="modal-table", cursor_type="row", show_header=False)
-            yield Static("[dim]Enter: Select  |  Tab/Down: Switch  |  Esc: Cancel[/dim]", id="modal-hint")
+            yield Static("[dim]Enter: select / create  |  Tab: switch  |  Esc: cancel[/dim]", id="modal-hint")
 
     def on_mount(self) -> None:
         table = self.query_one("#modal-table", DataTable)
@@ -79,7 +79,7 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
                 table.add_row(f"{p_name}  [dim]({tracks_count} tracks)[/dim]")
         else:
             table.display = False
-            self.query_one("#modal-subtitle", Static).update("[dim]No existing playlists yet - type a name above to create one[/dim]")
+            self.query_one("#modal-subtitle", Static).update("[dim]No existing playlists yet — type a name above to create one[/dim]")
         self.query_one("#modal-input", Input).focus()
 
     def action_dismiss_modal(self) -> None:
@@ -161,8 +161,10 @@ class HelpModal(ModalScreen[None]):
         left_table.add_row("1", "Search songs & artists")
         left_table.add_row("2", "Playlists & favorites")
         left_table.add_row("3", "Offline library (cached)")
-        left_table.add_row("h / l, Tab", "Sidebar / Tracks focus")
+        left_table.add_row("h / l", "Sidebar / Tracks pane")
         left_table.add_row("j / k, Arrows", "Navigate table rows")
+        left_table.add_row("k (at top row)", "Jump into search/import bar")
+        left_table.add_row("Tab", "Cycle input, table, seek bar")
         left_table.add_row("Enter", "Play track / Open playlist")
         left_table.add_row("", "")
         left_table.add_row("[bold #569f68]PLAYBACK[/]", "")
@@ -741,7 +743,7 @@ class SpoffTUI(App):
             st.add_row(p.get("name", "Untitled"), key=str(idx))
 
         tt = self.query_one("#track-table", DataTable)
-        tt.add_columns("Type", "Title", "Artist", "Duration")
+        tt.add_columns("Source", "Title", "Artist", "Duration")
 
         self.set_interval(0.5, self.update_player_hud)
         logger.info("Spoff engine active.")
@@ -770,7 +772,20 @@ class SpoffTUI(App):
         except Exception:
             _update()
 
+    def on_click(self, event) -> None:
+        if self.focused is None or not getattr(self.focused, "can_focus", False):
+            if self.active_tab == "search" and not self.search_results:
+                self.query_one("#search-box", Input).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
+
     def on_key(self, event) -> None:
+        if self.focused is None:
+            if self.active_tab == "search" and not self.search_results:
+                self.query_one("#search-box", Input).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
+
         if event.key in ("f1", "audio_mute"):
             self.action_vol_mute()
             event.prevent_default()
@@ -810,15 +825,34 @@ class SpoffTUI(App):
             if self.focused.id == "search-box":
                 self.query_one("#track-table", DataTable).focus()
                 event.prevent_default()
+                event.stop()
+                return
             elif self.focused.id == "sidebar-import-input":
                 self.query_one("#side-table", DataTable).focus()
                 event.prevent_default()
+                event.stop()
+                return
+        elif event.key in ("up", "k") and self.focused and self.focused.id == "track-table":
+            table = self.query_one("#track-table", DataTable)
+            if (table.row_count == 0 or table.cursor_row == 0) and self.active_tab == "search":
+                self.query_one("#search-box", Input).focus()
+                event.prevent_default()
+                event.stop()
+                return
+        elif event.key in ("up", "k") and self.focused and self.focused.id == "side-table":
+            table = self.query_one("#side-table", DataTable)
+            if table.row_count == 0 or table.cursor_row == 0:
+                self.query_one("#sidebar-import-input", Input).focus()
+                event.prevent_default()
+                event.stop()
+                return
         elif event.key in ("down", "j") and self.focused and self.focused.id == "track-table":
             table = self.query_one("#track-table", DataTable)
             if table.row_count == 0 or (table.cursor_row is not None and table.cursor_row >= table.row_count - 1):
                 self.query_one("#playback-bar", ScrubBar).focus()
                 event.prevent_default()
                 event.stop()
+                return
 
     def action_nav_search(self): self.switch_view("search")
     def action_nav_playlist(self): self.switch_view("playlist")
@@ -847,11 +881,14 @@ class SpoffTUI(App):
         if view == "search":
             self.render_tracks(self.search_results)
             if not self.search_results:
+                search_box.focus()
                 self.notify_user("Search mode: Press / to search songs or artists")
             else:
+                track_table.focus()
                 self.notify_user("View: Search")
         elif view == "playlist":
             self.render_tracks(self.current_playlist_tracks)
+            track_table.focus()
             if not self.playlists:
                 self.notify_user("No playlists yet. Type a name or Spotify link in the sidebar to create one.")
             elif not self.current_playlist_tracks:
@@ -861,6 +898,7 @@ class SpoffTUI(App):
         elif view == "offline":
             offline_tracks = list(load_offline_index().values())
             self.render_tracks(offline_tracks)
+            track_table.focus()
             if not offline_tracks:
                 self.notify_user("Offline library is empty. Cached or downloaded tracks will appear here.")
             else:
@@ -876,6 +914,11 @@ class SpoffTUI(App):
             dur_ms = t.get("duration_ms") or 0
             dur = format_time(dur_ms / 1000)
             table.add_row(type_tag, escape(t.get("title", "")), escape(t.get("artist", "")), dur, key=str(idx))
+        if tracks:
+            try:
+                table.move_cursor(row=0)
+            except Exception:
+                pass
 
     def action_focus_search(self):
         self.switch_view("search")
@@ -886,42 +929,104 @@ class SpoffTUI(App):
 
     def action_focus_sidebar(self):
         if not isinstance(self.focused, Input):
-            self.query_one("#side-table", DataTable).focus()
+            st = self.query_one("#side-table", DataTable)
+            if self.playlists:
+                st.focus()
+            else:
+                self.query_one("#sidebar-import-input", Input).focus()
 
     def action_focus_tracks(self):
         if not isinstance(self.focused, Input):
-            self.query_one("#track-table", DataTable).focus()
+            tt = self.query_one("#track-table", DataTable)
+            if self.active_tab == "search" and not self.search_results:
+                self.query_one("#search-box", Input).focus()
+            else:
+                tt.focus()
 
     def action_clear_or_unfocus(self):
         f = self.focused
         if isinstance(f, Input):
-            self.query_one("#track-table", DataTable).focus()
+            if f.id == "sidebar-import-input":
+                self.query_one("#side-table", DataTable).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
         elif f and f.id == "playback-bar":
+            self.query_one("#track-table", DataTable).focus()
+        else:
             self.query_one("#track-table", DataTable).focus()
 
     def action_toggle_focus(self):
         f = self.focused
-        if f and f.id in ("sidebar-import-input", "playback-bar"):
-            self.query_one("#side-table", DataTable).focus()
-        elif f and f.id in ("side-table", "search-box"):
+        if f is None:
             self.query_one("#track-table", DataTable).focus()
-        elif f and f.id == "track-table":
+            return
+        if f.id == "sidebar-import-input":
+            if self.playlists:
+                self.query_one("#side-table", DataTable).focus()
+            elif self.active_tab == "search":
+                self.query_one("#search-box", Input).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
+        elif f.id == "side-table":
+            if self.active_tab == "search":
+                self.query_one("#search-box", Input).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
+        elif f.id == "search-box":
+            self.query_one("#track-table", DataTable).focus()
+        elif f.id == "track-table":
             self.query_one("#playback-bar", ScrubBar).focus()
+        elif f.id == "playback-bar":
+            self.query_one("#side-table", DataTable).focus()
         else:
             self.query_one("#track-table", DataTable).focus()
 
     def action_cursor_down(self):
         f = self.focused
+        if f is None:
+            if self.active_tab == "search" and not self.search_results:
+                self.query_one("#search-box", Input).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
+            return
+
         if isinstance(f, DataTable):
-            if f.id == "track-table" and (f.row_count == 0 or (f.cursor_row is not None and f.cursor_row >= f.row_count - 1)):
-                self.query_one("#playback-bar", ScrubBar).focus()
-                return
+            if f.id == "track-table":
+                if f.row_count == 0 or (f.cursor_row is not None and f.cursor_row >= f.row_count - 1):
+                    self.query_one("#playback-bar", ScrubBar).focus()
+                    return
+            elif f.id == "side-table":
+                if f.row_count == 0 or (f.cursor_row is not None and f.cursor_row >= f.row_count - 1):
+                    self.query_one("#playback-bar", ScrubBar).focus()
+                    return
             f.action_cursor_down()
+        elif isinstance(f, Input):
+            if f.id == "search-box":
+                self.query_one("#track-table", DataTable).focus()
+            elif f.id == "sidebar-import-input":
+                self.query_one("#side-table", DataTable).focus()
 
     def action_cursor_up(self):
         f = self.focused
+        if f is None:
+            if self.active_tab == "search" and not self.search_results:
+                self.query_one("#search-box", Input).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
+            return
+
         if isinstance(f, DataTable):
+            if f.id == "track-table":
+                if (f.row_count == 0 or f.cursor_row == 0) and self.active_tab == "search":
+                    self.query_one("#search-box", Input).focus()
+                    return
+            elif f.id == "side-table":
+                if f.row_count == 0 or f.cursor_row == 0:
+                    self.query_one("#sidebar-import-input", Input).focus()
+                    return
             f.action_cursor_up()
+        elif isinstance(f, ScrubBar):
+            self.query_one("#track-table", DataTable).focus()
 
     def action_focus_bar(self):
         self.query_one("#playback-bar", ScrubBar).focus()
@@ -1272,8 +1377,14 @@ class SpoffTUI(App):
         def _update_ui():
             if self.active_tab == "search":
                 self.render_tracks(results)
-                self.query_one("#track-table", DataTable).focus()
-            self.notify_user(f"Found {len(results)} tracks for '{query}'. Press Enter to play.")
+                if results:
+                    self.query_one("#track-table", DataTable).focus()
+                else:
+                    self.query_one("#search-box", Input).focus()
+            if results:
+                self.notify_user(f"Found {len(results)} tracks for '{query}'. Press Enter to play.")
+            else:
+                self.notify_user(f"No tracks found for '{query}'. Try different keywords.")
 
         self.call_from_thread(_update_ui)
 
