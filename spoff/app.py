@@ -749,9 +749,14 @@ class SpoffTUI(App):
         if self.playlists:
             st.move_cursor(row=0)
             self.load_playlist_by_index(0)
-        else:
             tt.focus()
-        tt.focus()
+        else:
+            self.switch_view("search")
+            self.query_one("#search-box", Input).focus()
+            try:
+                self.query_one("#sidebar-hint", Static).update("[dim]Enter name or link above to create[/dim]")
+            except Exception:
+                pass
 
     def notify_user(self, text: str):
         def _update():
@@ -841,13 +846,25 @@ class SpoffTUI(App):
 
         if view == "search":
             self.render_tracks(self.search_results)
-            self.notify_user("View: Search")
+            if not self.search_results:
+                self.notify_user("Search mode: Press / to search songs or artists")
+            else:
+                self.notify_user("View: Search")
         elif view == "playlist":
             self.render_tracks(self.current_playlist_tracks)
-            self.notify_user("View: Playlist")
+            if not self.playlists:
+                self.notify_user("No playlists yet. Type a name or Spotify link in the sidebar to create one.")
+            elif not self.current_playlist_tracks:
+                self.notify_user("Playlist is empty. Add songs from Search with 'a'.")
+            else:
+                self.notify_user("View: Playlist")
         elif view == "offline":
-            self.render_tracks(list(load_offline_index().values()))
-            self.notify_user("View: Offline Library")
+            offline_tracks = list(load_offline_index().values())
+            self.render_tracks(offline_tracks)
+            if not offline_tracks:
+                self.notify_user("Offline library is empty. Cached or downloaded tracks will appear here.")
+            else:
+                self.notify_user("View: Offline Library")
 
     def render_tracks(self, tracks: List[Dict[str, Any]]):
         table = self.query_one("#track-table", DataTable)
@@ -1002,6 +1019,14 @@ class SpoffTUI(App):
                 st.move_cursor(row=selected_idx)
             except Exception:
                 pass
+        try:
+            hint = self.query_one("#sidebar-hint", Static)
+            if self.playlists:
+                hint.update("[dim]Enter: open  |  Del: delete[/dim]")
+            else:
+                hint.update("[dim]Enter name or link above to create[/dim]")
+        except Exception:
+            pass
 
     def load_playlist_by_index(self, idx: int):
         if 0 <= idx < len(self.playlists):

@@ -35,31 +35,11 @@ def _init_storage_once():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     if not PLAYLISTS_FILE.exists():
-        default_playlists = [
-            {
-                "id": "37i9dQZF1DXcBWIGoYBM5M",
-                "name": "Today's Top Hits",
-                "description": "The hottest tracks right now.",
-                "url": "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
-            },
-            {
-                "id": "37i9dQZF1DX0XUsuxWHRQd",
-                "name": "RapCaviar",
-                "description": "Hip-hop heavyweights.",
-                "url": "https://open.spotify.com/playlist/37i9dQZF1DX0XUsuxWHRQd"
-            },
-            {
-                "id": "37i9dQZF1DX4WYpdgoIcn6",
-                "name": "Chill Hits",
-                "description": "Kick back to the best chill tunes.",
-                "url": "https://open.spotify.com/playlist/37i9dQZF1DX4WYpdgoIcn6"
-            }
-        ]
         try:
             with open(PLAYLISTS_FILE, "w", encoding="utf-8") as f:
-                json.dump(default_playlists, f, indent=2, ensure_ascii=False)
+                json.dump([], f, indent=2, ensure_ascii=False)
         except Exception as e:
-            logger.error(f"Failed to create default playlists: {e}")
+            logger.error(f"Failed to create empty playlists file: {e}")
 
     if not INDEX_FILE.exists():
         try:
