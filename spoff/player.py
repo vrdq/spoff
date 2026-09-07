@@ -11,7 +11,7 @@ from typing import Optional, Callable, Dict, Any
 class MPVController:
     def __init__(self, socket_path: Optional[str] = None):
         if socket_path is None:
-            self.socket_path = f"/tmp/spot_tui_mpv_{os.getpid()}.sock"
+            self.socket_path = f"/tmp/spoff_mpv_{os.getpid()}.sock"
         else:
             self.socket_path = socket_path
         self.process: Optional[subprocess.Popen] = None
@@ -127,6 +127,12 @@ class MPVController:
 
     def seek(self, seconds_relative: float):
         self._send_command(["seek", seconds_relative, "relative"])
+        self._last_pos = max(0.0, self._last_pos + seconds_relative)
+
+    def seek_absolute(self, seconds_absolute: float):
+        seconds_absolute = max(0.0, float(seconds_absolute))
+        self._send_command(["seek", seconds_absolute, "absolute"])
+        self._last_pos = seconds_absolute
 
     def set_volume(self, volume: int):
         self._volume = max(0, min(100, volume))

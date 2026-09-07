@@ -8,12 +8,12 @@ from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
 from rich.markup import escape
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.screen import ModalScreen
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Static, Input, DataTable, ProgressBar
 from textual.binding import Binding
-from textual import work
 
 try:
     from .spotify import fetch_spotify_playlist, fetch_spotify_album, parse_spotify_url
@@ -139,6 +139,59 @@ class ConfirmModal(ModalScreen[bool]):
 
     def action_cancel(self) -> None:
         self.dismiss(False)
+
+class ScrubBar(ProgressBar):
+    can_focus = True
+
+    BINDINGS = [
+        Binding("h", "scrub_bwd", "Seek -5s", show=False),
+        Binding("l", "scrub_fwd", "Seek +5s", show=False),
+        Binding("left", "scrub_bwd", "Seek -5s", show=False),
+        Binding("right", "scrub_fwd", "Seek +5s", show=False),
+        Binding("H", "scrub_bwd_fast", "Seek -15s", show=False),
+        Binding("L", "scrub_fwd_fast", "Seek +15s", show=False),
+        Binding("shift+left", "scrub_bwd_fast", "Seek -15s", show=False),
+        Binding("shift+right", "scrub_fwd_fast", "Seek +15s", show=False),
+        Binding("up", "return_to_table", "Return", show=False),
+        Binding("k", "return_to_table", "Return", show=False),
+        Binding("escape", "return_to_table", "Return", show=False),
+        Binding("space", "toggle_play", "Play/Pause", show=False),
+    ]
+
+    def action_scrub_bwd(self) -> None:
+        self.app.action_seek_bwd()
+
+    def action_scrub_fwd(self) -> None:
+        self.app.action_seek_fwd()
+
+    def action_scrub_bwd_fast(self) -> None:
+        self.app.player.seek(-15)
+        self.app.update_player_hud()
+
+    def action_scrub_fwd_fast(self) -> None:
+        self.app.player.seek(15)
+        self.app.update_player_hud()
+
+    def action_return_to_table(self) -> None:
+        self.app.query_one("#track-table", DataTable).focus()
+
+    def action_toggle_play(self) -> None:
+        self.app.action_toggle_play()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key in "0123456789":
+            pct = int(event.key) / 10.0
+            self.app.seek_to_percent(pct)
+            event.prevent_default()
+            event.stop()
+
+    def on_click(self, event: events.Click) -> None:
+        self.focus()
+        if self.total and self.total > 0 and self.size.width > 0:
+            pct = max(0.0, min(1.0, event.x / float(self.size.width)))
+            self.app.seek_to_percent(pct)
+            event.prevent_default()
+            event.stop()
 
 class SpoffTUI(App):
     CSS = """
@@ -311,6 +364,10 @@ class SpoffTUI(App):
         padding: 0 2;
     }
 
+    #player-deck:focus-within {
+        border-top: solid #569f68;
+    }
+
     /* MODAL: ADD TO PLAYLIST */
     AddToPlaylistModal {
         align: center middle;
@@ -455,6 +512,16 @@ class SpoffTUI(App):
         background: #2e2e2e;
     }
 
+    #playback-bar:focus > Bar > .bar--bar {
+        color: #569f68;
+        background: #383838;
+    }
+
+    #playback-bar:focus > Bar > .bar--complete {
+        color: #569f68;
+        background: #383838;
+    }
+
     #deck-line-3 {
         height: 1;
         color: #767676;
@@ -482,6 +549,7 @@ class SpoffTUI(App):
         Binding("audio_pause", "toggle_play", "Play/Pause", show=False),
         Binding("audio_next", "next_track", "Next", show=False),
         Binding("slash", "focus_search", "Search"),
+        Binding("b", "focus_bar", "Seek Bar"),
         Binding("i", "focus_import", "Import"),
         Binding("a", "add_to_playlist", "Add to Playlist"),
         Binding("+", "add_to_playlist", "Add to Playlist", show=False),
@@ -492,7 +560,7 @@ class SpoffTUI(App):
         Binding("k", "cursor_up", "Up", show=False),
         Binding("h", "focus_sidebar", "Sidebar", show=False),
         Binding("l", "focus_tracks", "Tracks", show=False),
-        Binding("tab", "toggle_focus", "Switch Pane", show=False),
+        Binding("tab", "toggle_focus", "Switch Pane", show=False, priority=True),
     ]
 
     def __init__(self):
@@ -543,9 +611,9 @@ class SpoffTUI(App):
                 yield Static("[dim]IDLE[/dim]", id="deck-source")
             with Horizontal(id="deck-line-2"):
                 yield Static("00:00", id="time-elapsed")
-                yield ProgressBar(total=100, show_eta=False, id="playback-bar")
+                yield ScrubBar(total=100, show_eta=False, id="playback-bar")
                 yield Static("00:00", id="time-total")
-            yield Static("Enter: Play  |  Space: Pause  |  a: Add to Playlist  |  /: Search  |  Tab: Switch Pane  |  Del: Remove  |  q: Quit", id="deck-line-3")
+            yield Static("Enter: Play  |  Space: Pause  |  a: Add to Playlist  |  /: Search  |  b: Seek Bar  |  Tab: Switch Pane  |  Del: Remove  |  q: Quit", id="deck-line-3")
 
     def on_mount(self) -> None:
         self.player.start_mpv()
@@ -560,10 +628,13 @@ class SpoffTUI(App):
         tt.add_columns("Type", "Title", "Artist", "Duration")
 
         self.set_interval(0.5, self.update_player_hud)
-        logger.info("Spotato engine active.")
+        logger.info("Spoff engine active.")
 
         if self.playlists:
             self.load_playlist_by_index(0)
+        else:
+            tt.focus()
+        tt.focus()
 
     def notify_user(self, text: str):
         def _update():
@@ -594,6 +665,12 @@ class SpoffTUI(App):
             elif self.focused.id == "sidebar-import-input":
                 self.query_one("#side-table", DataTable).focus()
                 event.prevent_default()
+        elif event.key in ("down", "j") and self.focused and self.focused.id == "track-table":
+            table = self.query_one("#track-table", DataTable)
+            if table.row_count == 0 or (table.cursor_row is not None and table.cursor_row >= table.row_count - 1):
+                self.query_one("#playback-bar", ScrubBar).focus()
+                event.prevent_default()
+                event.stop()
 
     def action_nav_search(self): self.switch_view("search")
     def action_nav_playlist(self): self.switch_view("playlist")
@@ -654,17 +731,26 @@ class SpoffTUI(App):
         f = self.focused
         if isinstance(f, Input):
             self.query_one("#track-table", DataTable).focus()
+        elif f and f.id == "playback-bar":
+            self.query_one("#track-table", DataTable).focus()
 
     def action_toggle_focus(self):
         f = self.focused
-        if f and f.id == "side-table":
-            self.query_one("#track-table", DataTable).focus()
-        else:
+        if f and f.id in ("sidebar-import-input", "playback-bar"):
             self.query_one("#side-table", DataTable).focus()
+        elif f and f.id in ("side-table", "search-box"):
+            self.query_one("#track-table", DataTable).focus()
+        elif f and f.id == "track-table":
+            self.query_one("#playback-bar", ScrubBar).focus()
+        else:
+            self.query_one("#track-table", DataTable).focus()
 
     def action_cursor_down(self):
         f = self.focused
         if isinstance(f, DataTable):
+            if f.id == "track-table" and (f.row_count == 0 or (f.cursor_row is not None and f.cursor_row >= f.row_count - 1)):
+                self.query_one("#playback-bar", ScrubBar).focus()
+                return
             f.action_cursor_down()
 
     def action_cursor_up(self):
@@ -672,12 +758,28 @@ class SpoffTUI(App):
         if isinstance(f, DataTable):
             f.action_cursor_up()
 
+    def action_focus_bar(self):
+        self.query_one("#playback-bar", ScrubBar).focus()
+
+    def seek_to_percent(self, pct: float):
+        pos, dur = self.player.get_progress()
+        if dur > 0:
+            target_sec = max(0.0, min(dur, pct * dur))
+            self.player.seek_absolute(target_sec)
+            self.notify_user(f"Seek to {int(pct * 100)}% ({format_time(target_sec)})")
+            self.update_player_hud()
+
     def action_toggle_play(self):
         self.player.toggle_pause()
         self.update_player_hud()
 
-    def action_seek_fwd(self): self.player.seek(5)
-    def action_seek_bwd(self): self.player.seek(-5)
+    def action_seek_fwd(self):
+        self.player.seek(5)
+        self.update_player_hud()
+
+    def action_seek_bwd(self):
+        self.player.seek(-5)
+        self.update_player_hud()
 
     def action_vol_up(self):
         self.volume = min(100, self.volume + 5)
@@ -902,14 +1004,17 @@ class SpoffTUI(App):
         self.query_one("#time-elapsed", Static).update(format_time(pos))
         self.query_one("#time-total", Static).update(format_time(dur) if dur > 0 else "--:--")
 
-        bar = self.query_one("#playback-bar", ProgressBar)
+        bar = self.query_one("#playback-bar", ScrubBar)
         if dur > 0:
             bar.total = dur
             bar.progress = pos
 
         curr = self.player.current_track
+        is_scrubbing = (self.focused and self.focused.id == "playback-bar")
         if curr:
-            if self.player.is_paused:
+            if is_scrubbing:
+                state_pill = "[bold #569f68][SEEKING][/]"
+            elif self.player.is_paused:
                 state_pill = "[bold #c4a768][PAUSED][/]"
             else:
                 state_pill = "[bold #569f68][PLAYING][/]"
@@ -925,13 +1030,19 @@ class SpoffTUI(App):
             safe_artist = escape(str(curr.get("artist", "")))
             self.query_one("#deck-track", Static).update(f"{safe_title}  -  {safe_artist}")
         else:
-            self.query_one("#status-pill", Static).update("[dim]STANDBY[/dim]")
+            if is_scrubbing:
+                self.query_one("#status-pill", Static).update("[bold #569f68][SEEKING][/]")
+            else:
+                self.query_one("#status-pill", Static).update("[dim]STANDBY[/dim]")
             self.query_one("#deck-source", Static).update("[dim]IDLE[/dim]")
             self.query_one("#deck-track", Static).update("No track playing")
 
-        queue_len = len(self.queue)
-        queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "Empty"
-        hints = f"Vol: {self.volume}%  |  Queue: {queue_pos}  |  Enter: Play  |  Space/F8: Pause  |  F7/F9: Prev/Next  |  a: Add  |  /: Search  |  Tab: Pane  |  Del: Remove  |  q: Quit"
+        if is_scrubbing:
+            hints = "SEEK MODE: h/l: -/+5s  |  H/L: -/+15s  |  0-9: %  |  Space: Pause  |  k/Up/Esc: Return to tracks"
+        else:
+            queue_len = len(self.queue)
+            queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "Empty"
+            hints = f"Vol: {self.volume}%  |  Queue: {queue_pos}  |  Enter: Play  |  Space/F8: Pause  |  F7/F9: Prev/Next  |  b: Seek Bar  |  a: Add  |  /: Search  |  Tab: Pane  |  Del: Remove  |  q: Quit"
         self.query_one("#deck-line-3", Static).update(escape(hints))
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
