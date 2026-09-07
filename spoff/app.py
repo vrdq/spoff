@@ -222,6 +222,21 @@ class SpoffTUI(App):
         layout: vertical;
     }
 
+    /* TOP BAR */
+    #top-bar {
+        height: 3;
+        dock: top;
+        background: transparent;
+        border-bottom: solid #262626;
+        padding: 0 2;
+        align: left middle;
+    }
+
+    #nav-bar {
+        width: 1fr;
+        color: #555555;
+    }
+
     #status-pill {
         width: auto;
         text-style: bold;
@@ -277,12 +292,23 @@ class SpoffTUI(App):
 
     DataTable > .datatable--cursor {
         background: #252525;
-        color: #888888;
+        color: #e2e2e2;
     }
 
     DataTable:focus > .datatable--cursor {
-        background: #e2e2e2;
-        color: #131313;
+        background: #2e2e2e;
+        color: #ffffff;
+        text-style: bold;
+    }
+
+    #side-table > .datatable--cursor {
+        background: #252525;
+        color: #e2e2e2;
+    }
+
+    #side-table:focus > .datatable--cursor {
+        background: #2e2e2e;
+        color: #ffffff;
         text-style: bold;
     }
 
@@ -409,8 +435,8 @@ class SpoffTUI(App):
     }
 
     #modal-table > .datatable--cursor {
-        background: #e2e2e2;
-        color: #131313;
+        background: #2e2e2e;
+        color: #ffffff;
         text-style: bold;
     }
 
@@ -612,6 +638,10 @@ class SpoffTUI(App):
         self._cleanup_on_exit()
 
     def compose(self) -> ComposeResult:
+        with Horizontal(id="top-bar"):
+            yield Static(r"[bold #ffffff]\[1][/]    [#555555]\[2][/]    [#555555]\[3][/]", id="nav-bar")
+            yield Static("[dim]STANDBY[/dim]", id="status-pill")
+
         with Horizontal(id="main-layout"):
             with Vertical(id="sidebar"):
                 yield Static("PLAYLISTS", classes="pane-title")
@@ -628,7 +658,6 @@ class SpoffTUI(App):
             with Horizontal(id="deck-line-1"):
                 yield Static("No track playing", id="deck-track")
                 yield Static("[dim]IDLE[/dim]", id="deck-source")
-                yield Static("[dim]STANDBY[/dim]", id="status-pill")
             with Horizontal(id="deck-line-2"):
                 yield Static("00:00", id="time-elapsed")
                 yield ScrubBar(total=100, show_eta=False, id="playback-bar")
@@ -643,9 +672,9 @@ class SpoffTUI(App):
         self.playlists = load_saved_playlists()
 
         st = self.query_one("#side-table", DataTable)
-        st.add_columns("Playlist")
-        for p in self.playlists:
-            st.add_row(p.get("name", "Untitled"))
+        st.add_column("Playlist", width=38)
+        for idx, p in enumerate(self.playlists):
+            st.add_row(p.get("name", "Untitled"), key=str(idx))
 
         tt = self.query_one("#track-table", DataTable)
         tt.add_columns("Type", "Title", "Artist", "Duration")
@@ -654,6 +683,7 @@ class SpoffTUI(App):
         logger.info("Spoff engine active.")
 
         if self.playlists:
+            st.move_cursor(row=0)
             self.load_playlist_by_index(0)
         else:
             tt.focus()
@@ -738,6 +768,18 @@ class SpoffTUI(App):
 
         search_box.display = (view == "search")
         track_table.display = True
+
+        tabs = [("search", "1"), ("playlist", "2"), ("offline", "3")]
+        parts = []
+        for mode, num in tabs:
+            if mode == view:
+                parts.append(f"[bold #ffffff]\\[{num}][/]")
+            else:
+                parts.append(f"[#555555]\\[{num}][/]")
+        try:
+            self.query_one("#nav-bar", Static).update("    ".join(parts))
+        except Exception:
+            pass
 
         if view == "search":
             self.render_tracks(self.search_results)
@@ -963,14 +1005,28 @@ class SpoffTUI(App):
     def refresh_side_table(self):
         st = self.query_one("#side-table", DataTable)
         st.clear()
-        for p in self.playlists:
-            st.add_row(p.get("name", "Untitled"))
+        selected_idx = 0
+        for idx, p in enumerate(self.playlists):
+            st.add_row(p.get("name", "Untitled"), key=str(idx))
+            if self.current_playlist_id and p.get("id") == self.current_playlist_id:
+                selected_idx = idx
+        if self.playlists:
+            try:
+                st.move_cursor(row=selected_idx)
+            except Exception:
+                pass
 
     def load_playlist_by_index(self, idx: int):
         if 0 <= idx < len(self.playlists):
             pl = self.playlists[idx]
             self.current_playlist_id = pl.get("id")
             name = pl.get("name", "Playlist")
+
+            st = self.query_one("#side-table", DataTable)
+            try:
+                st.move_cursor(row=idx)
+            except Exception:
+                pass
 
             if pl.get("tracks"):
                 self.current_playlist_tracks = list(pl["tracks"])
