@@ -28,3 +28,6 @@ venv.bak/
 .temp/
 *.log
 .DS_Store
+src/
+pkg/
+*.pkg.tar.*

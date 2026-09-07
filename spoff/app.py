@@ -8,6 +8,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
 from rich.markup import escape
+from rich.table import Table
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.screen import ModalScreen
@@ -139,6 +140,69 @@ class ConfirmModal(ModalScreen[bool]):
 
     def action_cancel(self) -> None:
         self.dismiss(False)
+
+class HelpModal(ModalScreen[None]):
+    BINDINGS = [
+        Binding("escape", "dismiss_modal", "Close"),
+        Binding("enter", "dismiss_modal", "Close"),
+        Binding("space", "dismiss_modal", "Close", show=False),
+        Binding("colon", "dismiss_modal", "Close", show=False),
+        Binding("shift+semicolon", "dismiss_modal", "Close", show=False),
+        Binding("question_mark", "dismiss_modal", "Close", show=False),
+        Binding("q", "dismiss_modal", "Close", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        left_table = Table.grid(padding=(0, 2))
+        left_table.add_column(style="bold #ffffff", width=16)
+        left_table.add_column(style="#cccccc", width=26)
+
+        left_table.add_row("[bold #569f68]VIEWS & NAV[/]", "")
+        left_table.add_row("1", "Search songs & artists")
+        left_table.add_row("2", "Playlists & favorites")
+        left_table.add_row("3", "Offline library (cached)")
+        left_table.add_row("h / l, Tab", "Sidebar / Tracks focus")
+        left_table.add_row("j / k, Arrows", "Navigate table rows")
+        left_table.add_row("Enter", "Play track / Open playlist")
+        left_table.add_row("", "")
+        left_table.add_row("[bold #569f68]PLAYBACK[/]", "")
+        left_table.add_row("Space, F8", "Play / Pause toggle")
+        left_table.add_row("F1", "Mute / Unmute audio")
+        left_table.add_row("F2 / F3", "Volume -/+ 5%")
+        left_table.add_row("p / n, F7/F9", "Previous / Next track")
+        left_table.add_row("Left / Right", "Seek -/+ 5 seconds")
+
+        right_table = Table.grid(padding=(0, 2))
+        right_table.add_column(style="bold #ffffff", width=16)
+        right_table.add_column(style="#cccccc", width=26)
+
+        right_table.add_row("[bold #569f68]SEEK / PROGRESS[/]", "")
+        right_table.add_row("b", "Focus song seek bar")
+        right_table.add_row("h / l", "Seek -5s / +5s on bar")
+        right_table.add_row("H / L", "Fast seek -15s / +15s")
+        right_table.add_row("0 – 9", "Jump to 0% – 90% of song")
+        right_table.add_row("Esc, k, Up", "Return to tracks table")
+        right_table.add_row("", "")
+        right_table.add_row("[bold #569f68]PLAYLISTS & ACTIONS[/]", "")
+        right_table.add_row("a, +", "Add track to playlist")
+        right_table.add_row("i", "New playlist / import link")
+        right_table.add_row("/", "Focus search box")
+        right_table.add_row("Del, d, x", "Delete track / playlist")
+        right_table.add_row(": / Shift+;", "Show keybindings guide")
+        right_table.add_row("q", "Quit Spoff")
+
+        main_table = Table.grid(padding=(0, 2))
+        main_table.add_column()
+        main_table.add_column()
+        main_table.add_row(left_table, right_table)
+
+        with Vertical(id="help-dialog"):
+            yield Static("KEYBINDINGS & USAGE GUIDE", id="help-title")
+            yield Static(main_table, id="help-text")
+            yield Static("[dim]Press Esc, Enter, or : to close[/dim]", id="help-hint")
+
+    def action_dismiss_modal(self) -> None:
+        self.dismiss(None)
 
 class ScrubBar(ProgressBar):
     can_focus = True
@@ -545,31 +609,33 @@ class SpoffTUI(App):
         color: #767676;
     }
 
-    #vim-command-line {
-        height: 1;
-        display: none;
-        align: left middle;
+    /* MODAL: HELP */
+    HelpModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.75);
     }
 
-    #vim-prompt {
-        width: 2;
-        color: #569f68;
+    #help-dialog {
+        width: 90;
+        height: auto;
+        background: #181818;
+        border: solid #2a2a2a;
+        padding: 1 2;
+    }
+
+    #help-title {
         text-style: bold;
+        color: #ffffff;
+        margin-bottom: 1;
     }
 
-    #vim-input {
-        width: 1fr;
-        height: 1;
-        border: none;
-        background: transparent;
-        padding: 0;
-        color: #e2e2e2;
-        scrollbar-size-horizontal: 0 !important;
-        scrollbar-size-vertical: 0 !important;
+    #help-text {
+        color: #cccccc;
     }
 
-    #vim-input:focus {
-        border: none;
+    #help-hint {
+        color: #555555;
+        margin-top: 1;
     }
     """
 
@@ -601,8 +667,9 @@ class SpoffTUI(App):
         Binding("i", "focus_import", "Import"),
         Binding("a", "add_to_playlist", "Add to Playlist"),
         Binding("+", "add_to_playlist", "Add to Playlist", show=False),
-        Binding("colon", "open_vim_command", "Command Mode", show=False),
-        Binding("shift+semicolon", "open_vim_command", "Command Mode", show=False),
+        Binding("colon", "show_help", "Help", show=False),
+        Binding("shift+semicolon", "show_help", "Help", show=False),
+        Binding("question_mark", "show_help", "Help", show=False),
         Binding("1", "nav_search", "Search"),
         Binding("2", "nav_playlist", "Playlist"),
         Binding("3", "nav_offline", "Offline"),
@@ -639,7 +706,7 @@ class SpoffTUI(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-bar"):
-            yield Static(r"[bold #ffffff]\[1][/]    [#555555]\[2][/]    [#555555]\[3][/]", id="nav-bar")
+            yield Static(r"[bold #ffffff]\[1] Search[/]    [#555555]\[2] Playlists    \[3] Offline[/]", id="nav-bar")
             yield Static("[dim]STANDBY[/dim]", id="status-pill")
 
         with Horizontal(id="main-layout"):
@@ -662,10 +729,7 @@ class SpoffTUI(App):
                 yield Static("00:00", id="time-elapsed")
                 yield ScrubBar(total=100, show_eta=False, id="playback-bar")
                 yield Static("00:00", id="time-total")
-            yield Static("Enter: play  |  Space: pause  |  b: seek  |  :: cmd  |  q: quit", id="deck-line-3")
-            with Horizontal(id="vim-command-line"):
-                yield Static(" :", id="vim-prompt")
-                yield Input(placeholder="[1] Search  [2] Playlist  [3] Offline  |  :q to quit", id="vim-input")
+            yield Static("Enter: play  |  Space: pause  |  b: seek  |  : help  |  q: quit", id="deck-line-3")
 
     def on_mount(self) -> None:
         self.player.start_mpv()
@@ -732,14 +796,8 @@ class SpoffTUI(App):
             event.prevent_default()
             event.stop()
             return
-        elif self.focused and self.focused.id == "vim-input":
-            if event.key == "escape":
-                self.close_vim_command()
-                event.prevent_default()
-                event.stop()
-                return
-        elif (event.key in ("colon", ":", "shift+semicolon") or event.character == ":") and not isinstance(self.focused, Input):
-            self.action_open_vim_command()
+        elif (event.key in ("colon", ":", "shift+semicolon", "question_mark") or event.character in (":", "?")) and not isinstance(self.focused, Input):
+            self.action_show_help()
             event.prevent_default()
             event.stop()
             return
@@ -769,13 +827,13 @@ class SpoffTUI(App):
         search_box.display = (view == "search")
         track_table.display = True
 
-        tabs = [("search", "1"), ("playlist", "2"), ("offline", "3")]
+        tabs = [("search", "1", "Search"), ("playlist", "2", "Playlists"), ("offline", "3", "Offline")]
         parts = []
-        for mode, num in tabs:
+        for mode, num, label in tabs:
             if mode == view:
-                parts.append(f"[bold #ffffff]\\[{num}][/]")
+                parts.append(f"[bold #ffffff]\\[{num}] {label}[/]")
             else:
-                parts.append(f"[#555555]\\[{num}][/]")
+                parts.append(f"[#555555]\\[{num}] {label}[/]")
         try:
             self.query_one("#nav-bar", Static).update("    ".join(parts))
         except Exception:
@@ -819,9 +877,7 @@ class SpoffTUI(App):
 
     def action_clear_or_unfocus(self):
         f = self.focused
-        if f and f.id == "vim-input":
-            self.close_vim_command()
-        elif isinstance(f, Input):
+        if isinstance(f, Input):
             self.query_one("#track-table", DataTable).focus()
         elif f and f.id == "playback-bar":
             self.query_one("#track-table", DataTable).focus()
@@ -897,77 +953,8 @@ class SpoffTUI(App):
         self.notify_user(f"Volume: {self.volume}%")
         self.update_player_hud()
 
-    def action_open_vim_command(self):
-        cmd_line = self.query_one("#vim-command-line", Horizontal)
-        hint_line = self.query_one("#deck-line-3", Static)
-        inp = self.query_one("#vim-input", Input)
-
-        self._prev_focus_before_vim = self.focused
-        hint_line.display = False
-        cmd_line.display = True
-        inp.value = ""
-        inp.focus()
-
-    def close_vim_command(self, refocus: bool = True):
-        cmd_line = self.query_one("#vim-command-line", Horizontal)
-        hint_line = self.query_one("#deck-line-3", Static)
-        cmd_line.display = False
-        hint_line.display = True
-        if refocus:
-            prev = getattr(self, "_prev_focus_before_vim", None)
-            if prev and prev.is_attached and prev.visible:
-                prev.focus()
-            else:
-                self.query_one("#track-table", DataTable).focus()
-
-    def handle_vim_command(self, cmd: str) -> None:
-        if not cmd:
-            return
-        parts = cmd.split()
-        op = parts[0]
-        arg = parts[1] if len(parts) > 1 else ""
-
-        if op in ("1", "s", "search"):
-            self.switch_view("search")
-            self.query_one("#search-box", Input).focus()
-        elif op in ("2", "p", "playlist"):
-            self.switch_view("playlist")
-            self.query_one("#track-table", DataTable).focus()
-        elif op in ("3", "o", "offline"):
-            self.switch_view("offline")
-            self.query_one("#track-table", DataTable).focus()
-        elif op in ("q", "quit", "exit", "qa", "wq", "q!"):
-            self.action_quit_app()
-        elif op in ("m", "mute"):
-            self.action_vol_mute()
-        elif op in ("vol+", "v+"):
-            self.action_vol_up()
-        elif op in ("vol-", "v-"):
-            self.action_vol_down()
-        elif op in ("vol", "volume", "v"):
-            if arg.isdigit():
-                self.volume = max(0, min(100, int(arg)))
-                self.player.set_volume(self.volume)
-                self.notify_user(f"Volume: {self.volume}%")
-                self.update_player_hud()
-            elif arg in ("+", "up"):
-                self.action_vol_up()
-            elif arg in ("-", "down"):
-                self.action_vol_down()
-            else:
-                self.notify_user(f"Current volume: {self.volume}%")
-        elif op in ("play", "pause", "toggle"):
-            self.action_toggle_play()
-        elif op in ("next", "n"):
-            self.action_next_track()
-        elif op in ("prev", "previous"):
-            self.action_prev_track()
-        elif op in ("b", "bar", "seek"):
-            self.action_focus_bar()
-        elif op in ("help", "h", "?"):
-            self.notify_user("Vim: :1 (Search) | :2 (Playlist) | :3 (Offline) | :q | :mute | :vol <0-100>")
-        else:
-            self.notify_user(f"Unknown command: :{cmd}")
+    def action_show_help(self):
+        self.push_screen(HelpModal())
 
     def action_next_track(self):
         if self.current_index + 1 < len(self.queue):
@@ -1230,34 +1217,11 @@ class SpoffTUI(App):
             queue_len = len(self.queue)
             queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "empty"
             vol_str = "Muted" if self.volume == 0 else f"{self.volume}%"
-            hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  Enter: play  |  Space: pause  |  b: seek  |  :: cmd  |  q: quit"
+            hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  Enter: play  |  Space: pause  |  b: seek  |  : help  |  q: quit"
         self.query_one("#deck-line-3", Static).update(escape(hints))
 
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "vim-input":
-            val = event.value.strip()
-            if val in ("1", "2", "3", ":1", ":2", ":3"):
-                event.input.value = ""
-                self.close_vim_command(refocus=False)
-                if val.endswith("1"):
-                    self.switch_view("search")
-                    self.query_one("#search-box", Input).focus()
-                elif val.endswith("2"):
-                    self.switch_view("playlist")
-                    self.query_one("#track-table", DataTable).focus()
-                elif val.endswith("3"):
-                    self.switch_view("offline")
-                    self.query_one("#track-table", DataTable).focus()
-
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "vim-input":
-            val = event.value.strip().lower()
-            if val.startswith(":"):
-                val = val[1:].strip()
-            self.handle_vim_command(val)
-            self.close_vim_command()
-            return
-        elif event.input.id == "search-box":
+        if event.input.id == "search-box":
             q = event.value.strip()
             if q:
                 self.do_search(q)

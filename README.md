@@ -85,7 +85,7 @@ uv run python3 -m spoff
 | `H` / `L` | Fast seek -/+ 15s on scrub bar |
 | `0` – `9` | Jump directly to 0% – 90% of song on scrub bar |
 | `/` | Focus live YouTube search bar |
-| `:` (or `Shift`+`;`) | Vim command line (`:1`, `:2`, `:3`, `:q`, `:mute`, `:vol`) |
+| `:` (or `Shift`+`;`) | Open Keybindings & Usage Guide cheat sheet |
 | `i` | Focus playlist import / create input |
 | `a` / `+` | Add highlighted or playing track to playlist |
 | `Tab` | Cycle active focus (Sidebar $\rightarrow$ Tracks $\rightarrow$ Scrub Bar) |
