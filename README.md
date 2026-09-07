@@ -66,6 +66,9 @@ uv run python3 -m spoff
 | :--- | :--- |
 | `Enter` | Play highlighted track / Open highlighted playlist |
 | `Space` / `F8` | Toggle Play / Pause |
+| `F1` | Mute / Unmute audio |
+| `F2` | Lower volume (-5%) |
+| `F3` | Raise volume (+5%) |
 | `F7` / `p` | Previous track in queue |
 | `F9` / `n` | Next track in queue |
 | `b` | Focus song scrub / seek bar |
@@ -73,6 +76,7 @@ uv run python3 -m spoff
 | `H` / `L` | Fast seek -/+ 15s on scrub bar |
 | `0` – `9` | Jump directly to 0% – 90% of song on scrub bar |
 | `/` | Focus live YouTube search bar |
+| `:` (or `Shift`+`;`) | Vim command line (`:1`, `:2`, `:3`, `:q`, `:mute`, `:vol`) |
 | `i` | Focus playlist import / create input |
 | `a` / `+` | Add highlighted or playing track to playlist |
 | `Tab` | Cycle active focus (Sidebar $\rightarrow$ Tracks $\rightarrow$ Scrub Bar) |
