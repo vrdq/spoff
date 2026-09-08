@@ -33,7 +33,9 @@ try:
         create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
         delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done,
-        get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width
+        get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
+        get_saved_advanced_mode, save_advanced_mode, get_custom_keybindings,
+        save_custom_keybindings, reset_custom_keybindings
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache
     from .search import live_search_tracks
@@ -56,7 +58,9 @@ except ImportError:
         create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
         delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done,
-        get_saved_volume, save_volume
+        get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
+        get_saved_advanced_mode, save_advanced_mode, get_custom_keybindings,
+        save_custom_keybindings, reset_custom_keybindings
     )
     from streamer import search_and_resolve_stream, download_track_to_cache
     from search import live_search_tracks
@@ -79,6 +83,426 @@ def format_time(seconds: float) -> str:
     m = int(seconds) // 60
     s = int(seconds) % 60
     return f"{m:02d}:{s:02d}"
+
+DEFAULT_KEYBINDINGS: Dict[str, str] = {
+    "toggle_play": "space",
+    "next_track": "n",
+    "prev_track": "p",
+    "seek_fwd": "right",
+    "seek_bwd": "left",
+    "vol_up": "up",
+    "vol_down": "down",
+    "vol_mute": "f1",
+    "toggle_shuffle": "s",
+    "toggle_repeat": "r",
+    "focus_search": "slash",
+    "focus_bar": "b",
+    "focus_import": "i",
+    "add_to_playlist": "a",
+    "delete_item": "d",
+    "delete_playlist": "D",
+    "open_spotify_auth": "L",
+    "nav_search": "1",
+    "nav_playlist": "2",
+    "nav_offline": "3",
+    "nav_lyrics": "4",
+    "open_settings": "comma",
+    "show_help": "colon",
+    "check_update": "u",
+    "quit_app": "q",
+    "focus_sidebar": "h",
+    "focus_tracks": "l",
+    "toggle_focus": "tab",
+    "move_item_up": "K",
+    "move_item_down": "J",
+}
+
+ACTION_INFO: Dict[str, Tuple[str, str]] = {
+    "toggle_play": ("Playback", "Play / Pause Toggle"),
+    "next_track": ("Playback", "Next Track"),
+    "prev_track": ("Playback", "Previous Track"),
+    "seek_fwd": ("Playback", "Seek Forward (+5s)"),
+    "seek_bwd": ("Playback", "Seek Backward (-5s)"),
+    "vol_up": ("Volume", "Volume Up (+5%)"),
+    "vol_down": ("Volume", "Volume Down (-5%)"),
+    "vol_mute": ("Volume", "Mute / Unmute"),
+    "toggle_shuffle": ("Playback", "Toggle Shuffle"),
+    "toggle_repeat": ("Playback", "Cycle Repeat Mode"),
+    "focus_search": ("Navigation", "Focus Search Bar"),
+    "focus_bar": ("Playback", "Focus Seek Bar"),
+    "focus_import": ("Playlists", "New Playlist / Import"),
+    "add_to_playlist": ("Playlists", "Add Song to Playlist"),
+    "delete_item": ("Playlists", "Delete Selected Item"),
+    "delete_playlist": ("Playlists", "Delete Entire Playlist"),
+    "open_spotify_auth": ("Integrations", "Spotify Menu & Login"),
+    "nav_search": ("Navigation", "Switch to Search"),
+    "nav_playlist": ("Navigation", "Switch to Playlists"),
+    "nav_offline": ("Navigation", "Switch to Offline"),
+    "nav_lyrics": ("Navigation", "Synchronized Lyrics"),
+    "open_settings": ("General", "Settings & Keybinds"),
+    "show_help": ("General", "Help & Reference"),
+    "check_update": ("General", "Check for Updates"),
+    "quit_app": ("General", "Quit Spoff"),
+    "focus_sidebar": ("Navigation", "Focus Sidebar"),
+    "focus_tracks": ("Navigation", "Focus Main Table"),
+    "toggle_focus": ("Navigation", "Cycle Sidebar / Main"),
+    "move_item_up": ("Playlists", "Reorder Song Up"),
+    "move_item_down": ("Playlists", "Reorder Song Down"),
+}
+
+def format_key_display(k: str) -> str:
+    if not k:
+        return "[dim]None[/dim]"
+    special_labels = {
+        "space": "Space",
+        "slash": "/",
+        "comma": ",",
+        "colon": ":",
+        "semicolon": ";",
+        "question_mark": "?",
+        "plus": "+",
+        "minus": "-",
+        "escape": "Esc",
+        "delete": "Delete",
+        "backspace": "Backspace",
+        "enter": "Enter",
+        "tab": "Tab",
+        "up": "↑ Up",
+        "down": "↓ Down",
+        "left": "← Left",
+        "right": "→ Right",
+    }
+    parts = k.split("+")
+    res = []
+    for p in parts:
+        lower = p.lower()
+        if lower in special_labels:
+            res.append(special_labels[lower])
+        elif len(p) == 1:
+            res.append(p)
+        elif lower.startswith("f") and lower[1:].isdigit():
+            res.append(lower.upper())
+        else:
+            res.append(p.capitalize())
+    return "+".join(res)
+
+def normalize_captured_key(event_key: str, event_char: Optional[str]) -> str:
+    named_keys = {
+        "space", "enter", "tab", "escape", "backspace", "delete",
+        "up", "down", "left", "right",
+        "home", "end", "pageup", "pagedown",
+    }
+    ek_lower = str(event_key or "").lower()
+    if ek_lower in named_keys:
+        return ek_lower
+    if ek_lower.startswith("f") and ek_lower[1:].isdigit():
+        return ek_lower
+
+    ec = str(event_char or "")
+    if ec and len(ec) == 1:
+        if ec in (",", "/", ":", ";", "?", "+", "-"):
+            return ec
+        if ec.isupper():
+            return ec
+        return ec
+    return str(event_key or "")
+
+def key_matches(event_key: str, event_char: Optional[str], bound_key: str) -> bool:
+    if not bound_key:
+        return False
+    bound = bound_key.strip()
+    ek = str(event_key or "").strip()
+    ec = str(event_char or "")
+
+    if ek == bound:
+        return True
+
+    punct_map = {
+        "comma": ",",
+        ",": "comma",
+        "slash": "/",
+        "/": "slash",
+        "colon": ":",
+        ":": "colon",
+        "semicolon": ";",
+        ";": "semicolon",
+        "question_mark": "?",
+        "?": "question_mark",
+        "plus": "+",
+        "+": "plus",
+        "minus": "-",
+        "-": "minus",
+    }
+    if bound in punct_map:
+        target = punct_map[bound]
+        if ek == target or ec == target or ec == bound:
+            return True
+    if ek == "colon" and bound in (":", "colon"):
+        return True
+    if ek == "shift+semicolon" and bound in (":", "colon"):
+        return True
+
+    if bound in ("space", " ") and (ek == "space" or ec == " "):
+        return True
+
+    if len(bound) == 1 and bound.isupper():
+        if ec == bound or ek == f"shift+{bound.lower()}" or ek == bound:
+            return True
+    elif len(bound) == 1 and bound.islower():
+        if (ec == bound or ek == bound) and (not ec or not ec.isupper()):
+            return True
+
+    return False
+
+class AdvModeToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_advanced_mode()
+
+class SettingsModal(ModalScreen[None]):
+    BINDINGS = [
+        Binding("escape", "dismiss_or_cancel", "Close", priority=True),
+        Binding("q", "dismiss_or_cancel", "Close", show=False),
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("down", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+        Binding("up", "cursor_up", "Up", show=False),
+        Binding("enter", "select_or_toggle", "Select", show=False),
+        Binding("space", "select_or_toggle", "Toggle", show=False),
+        Binding("backspace", "reset_selected_key", "Reset Key", show=False),
+        Binding("r", "reset_selected_key", "Reset Key", show=False),
+        Binding("R", "reset_all_keys", "Reset All", show=False),
+        Binding("tab", "switch_focus", "Switch Focus", show=False),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.is_rebinding: bool = False
+        self.rebinding_action: Optional[str] = None
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="settings-dialog"):
+            with Horizontal(id="settings-header"):
+                yield Static("SETTINGS & KEYBINDS", id="settings-title")
+                yield Static("[dim]Esc / q to close[/dim]", id="settings-close-hint")
+
+            with Vertical(id="adv-mode-container"):
+                yield AdvModeToggle(id="adv-mode-toggle")
+
+            yield Static("REBINDABLE ACTIONS", id="settings-table-title")
+            yield DataTable(id="settings-table", cursor_type="row", show_header=True)
+            yield Static("", id="settings-status-line")
+            yield Static("[dim]Enter: rebind  |  Backspace / r: reset key  |  R: reset all  |  j/k: navigate[/dim]", id="settings-footer")
+
+    def on_mount(self) -> None:
+        self.update_toggle_ui()
+        table = self.query_one("#settings-table", DataTable)
+        table.cursor_foreground_priority = "renderable"
+        table.add_column("Category", key="cat", width=14)
+        table.add_column("Action", key="act", width=28)
+        table.add_column("Keybind", key="key", width=18)
+        table.add_column("Status", key="stat", width=12)
+
+        for act_id in ACTION_INFO.keys():
+            cat, title = ACTION_INFO[act_id]
+            cur_key = self.app.keybindings.get(act_id, "")
+            is_default = (cur_key == DEFAULT_KEYBINDINGS.get(act_id))
+            status_str = "[dim]Default[/dim]" if is_default else "[bold #569f68]Custom[/]"
+            table.add_row(cat, title, format_key_display(cur_key), status_str, key=act_id)
+
+        table.focus()
+
+    def update_toggle_ui(self) -> None:
+        try:
+            toggle = self.query_one("#adv-mode-toggle", AdvModeToggle)
+            if getattr(self.app, "advanced_mode", False):
+                toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]Advanced Mode[/]  [dim]— All shortcut strings & HUD hints hidden[/dim]")
+                self.query_one("#settings-footer", Static).update("")
+                self.query_one("#settings-close-hint", Static).update("")
+            else:
+                toggle.update("[#767676]○ DISABLED[/]  [#cccccc]Advanced Mode[/]  [dim]— Press Space/Enter to hide keybind indicators[/dim]")
+                self.query_one("#settings-footer", Static).update("[dim]Enter: rebind  |  Backspace / r: reset key  |  R: reset all  |  j/k: navigate[/dim]")
+                self.query_one("#settings-close-hint", Static).update("[dim]Esc / q to close[/dim]")
+        except Exception:
+            pass
+
+    def toggle_advanced_mode(self) -> None:
+        new_state = self.app.toggle_advanced_mode()
+        self.update_toggle_ui()
+        state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
+        self.query_one("#settings-status-line", Static).update(f"Advanced Mode {state_text}.")
+
+    def start_rebinding(self, act_id: str) -> None:
+        self.is_rebinding = True
+        self.rebinding_action = act_id
+        _, act_title = ACTION_INFO.get(act_id, ("General", act_id))
+        self.query_one("#settings-status-line", Static).update(
+            f"[bold #569f68]► Press any key to bind to '{act_title}' (Esc to cancel)...[/]"
+        )
+        self._refresh_row(act_id, key_override="[bold #569f68]PRESS KEY...[/]")
+
+    def apply_rebound_key(self, new_key: str) -> None:
+        act_id = self.rebinding_action
+        self.is_rebinding = False
+        self.rebinding_action = None
+
+        if not act_id:
+            return
+
+        _, act_title = ACTION_INFO.get(act_id, ("General", act_id))
+
+        conflicting_act = None
+        for other_id, bound in self.app.keybindings.items():
+            if other_id != act_id and bound == new_key:
+                conflicting_act = other_id
+                break
+
+        status_msg = f"Bound [bold #ffffff]'{act_title}'[/] to [bold #569f68]{format_key_display(new_key)}[/]."
+        if conflicting_act:
+            _, conf_title = ACTION_INFO.get(conflicting_act, ("General", conflicting_act))
+            self.app.set_custom_keybinding(conflicting_act, "")
+            status_msg += f" [dim](Unbound conflicting '{conf_title}')[/dim]"
+            self._refresh_row(conflicting_act)
+
+        self.app.set_custom_keybinding(act_id, new_key)
+        self._refresh_row(act_id)
+        self.query_one("#settings-status-line", Static).update(status_msg)
+
+    def cancel_rebinding(self) -> None:
+        act_id = self.rebinding_action
+        self.is_rebinding = False
+        self.rebinding_action = None
+        if act_id:
+            self._refresh_row(act_id)
+        self.query_one("#settings-status-line", Static).update("[dim]Rebinding cancelled.[/dim]")
+
+    def _refresh_row(self, act_id: str, key_override: Optional[str] = None) -> None:
+        table = self.query_one("#settings-table", DataTable)
+        cat, title = ACTION_INFO.get(act_id, ("General", act_id))
+        cur_key = self.app.keybindings.get(act_id, "")
+        is_default = (cur_key == DEFAULT_KEYBINDINGS.get(act_id))
+
+        if key_override:
+            disp_key = key_override
+            disp_status = "[bold #569f68]Capturing[/]"
+        else:
+            disp_key = format_key_display(cur_key)
+            disp_status = "[dim]Default[/dim]" if is_default else "[bold #569f68]Custom[/]"
+
+        try:
+            table.update_cell(act_id, "cat", cat)
+            table.update_cell(act_id, "act", title)
+            table.update_cell(act_id, "key", disp_key)
+            table.update_cell(act_id, "stat", disp_status)
+        except Exception:
+            pass
+
+    def action_reset_selected_key(self) -> None:
+        if self.is_rebinding:
+            return
+        table = self.query_one("#settings-table", DataTable)
+        if table.cursor_row is not None and table.row_count > 0:
+            act_id = list(ACTION_INFO.keys())[table.cursor_row]
+            self.app.reset_keybinding(act_id)
+            self._refresh_row(act_id)
+            _, title = ACTION_INFO.get(act_id, ("General", act_id))
+            def_key = DEFAULT_KEYBINDINGS.get(act_id, "")
+            self.query_one("#settings-status-line", Static).update(
+                f"Reset '{title}' to default ({format_key_display(def_key)})."
+            )
+
+    def action_reset_all_keys(self) -> None:
+        if self.is_rebinding:
+            return
+        self.app.reset_all_keybindings()
+        for act_id in ACTION_INFO.keys():
+            self._refresh_row(act_id)
+        self.query_one("#settings-status-line", Static).update("All keybindings reset to factory defaults.")
+
+    def action_dismiss_or_cancel(self) -> None:
+        if self.is_rebinding:
+            self.cancel_rebinding()
+        else:
+            self.dismiss(None)
+
+    def action_switch_focus(self) -> None:
+        if self.is_rebinding:
+            return
+        if self.focused and self.focused.id == "adv-mode-toggle":
+            self.query_one("#settings-table", DataTable).focus()
+        else:
+            self.query_one("#adv-mode-toggle", AdvModeToggle).focus()
+
+    def action_select_or_toggle(self) -> None:
+        if self.is_rebinding:
+            return
+        if self.focused and self.focused.id == "adv-mode-toggle":
+            self.toggle_advanced_mode()
+        elif self.focused and self.focused.id == "settings-table":
+            table = self.query_one("#settings-table", DataTable)
+            if table.cursor_row is not None and table.row_count > 0:
+                act_id = list(ACTION_INFO.keys())[table.cursor_row]
+                self.start_rebinding(act_id)
+
+    def on_key(self, event: events.Key) -> None:
+        if self.is_rebinding:
+            event.prevent_default()
+            event.stop()
+            if event.key in ("escape",):
+                self.cancel_rebinding()
+            else:
+                new_key = normalize_captured_key(event.key, event.character)
+                self.apply_rebound_key(new_key)
+            return
+
+        table = self.query_one("#settings-table", DataTable)
+        toggle = self.query_one("#adv-mode-toggle", AdvModeToggle)
+
+        if self.focused and self.focused.id == "adv-mode-toggle":
+            if event.key in ("j", "down"):
+                table.focus()
+                event.prevent_default()
+                event.stop()
+                return
+            elif event.key in ("enter", "space") or event.character in (" ",):
+                self.toggle_advanced_mode()
+                event.prevent_default()
+                event.stop()
+                return
+            elif event.key in ("escape", "q"):
+                self.dismiss(None)
+                event.prevent_default()
+                event.stop()
+                return
+        elif self.focused and self.focused.id == "settings-table":
+            if event.key in ("k", "up"):
+                if table.row_count == 0 or table.cursor_row == 0:
+                    toggle.focus()
+                    event.prevent_default()
+                    event.stop()
+                    return
+            elif event.key in ("r", "backspace"):
+                self.action_reset_selected_key()
+                event.prevent_default()
+                event.stop()
+                return
+            elif event.key in ("R", "shift+r") or event.character == "R":
+                self.action_reset_all_keys()
+                event.prevent_default()
+                event.stop()
+                return
+            elif event.key in ("escape", "q"):
+                self.dismiss(None)
+                event.prevent_default()
+                event.stop()
+                return
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        if not self.is_rebinding:
+            act_id = str(event.row_key.value)
+            self.start_rebinding(act_id)
 
 class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
     BINDINGS = [
@@ -106,7 +530,8 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
             yield Input(placeholder="Create new playlist: type name...", id="modal-input")
             yield Static("OR CHOOSE EXISTING PLAYLIST", id="modal-subtitle")
             yield DataTable(id="modal-table", cursor_type="row", show_header=False)
-            yield Static("[dim]j/k: select playlist  |  i/Tab: new name  |  Enter: confirm  |  Esc: cancel[/dim]", id="modal-hint")
+            hint_text = "" if getattr(self.app, "advanced_mode", False) else "[dim]j/k: select playlist  |  i/Tab: new name  |  Enter: confirm  |  Esc: cancel[/dim]"
+            yield Static(hint_text, id="modal-hint")
 
     def on_mount(self) -> None:
         table = self.query_one("#modal-table", DataTable)
@@ -238,7 +663,8 @@ class ConfirmModal(ModalScreen[bool]):
         with Vertical(id="confirm-dialog"):
             yield Static(self.modal_title, id="confirm-title")
             yield Static(self.modal_message, id="confirm-message")
-            yield Static(f"[bold #ffffff][Y / Enter][/] {self.confirm_label}    [#767676][N / Esc] Cancel[/]", id="confirm-hint")
+            c_hint = f"[bold #ffffff]{self.confirm_label}[/]    [#767676]Cancel[/]" if getattr(self.app, "advanced_mode", False) else f"[bold #ffffff][Y / Enter][/] {self.confirm_label}    [#767676][N / Esc] Cancel[/]"
+            yield Static(c_hint, id="confirm-hint")
 
     def action_confirm(self) -> None:
         self.dismiss(True)
@@ -294,19 +720,22 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
                 else:
                     yield Static("[bold #c4a768]▲ Permissions update available[/]  [dim](re-link once to enable two-way sync)[/dim]", id="spotify-status")
 
+                is_adv = getattr(self.app, "advanced_mode", False)
                 with Horizontal(id="spotify-actions"):
-                    yield Button(r"\[S] Sync", variant="primary", id="btn-sync")
+                    yield Button("Sync" if is_adv else r"\[S] Sync", variant="primary", id="btn-sync")
+                    relink_label = "Re-link" if is_adv else r"\[R] Re-link"
                     if not can_modify:
-                        yield Button(r"\[R] Re-link", variant="warning", id="btn-relink")
+                        yield Button(relink_label, variant="warning", id="btn-relink")
                     else:
-                        yield Button(r"\[R] Re-link", id="btn-relink")
-                    yield Button(r"\[O] Log Out", variant="error", id="btn-logout")
-                    yield Button(r"\[Esc] Close", id="btn-close")
+                        yield Button(relink_label, id="btn-relink")
+                    yield Button("Log Out" if is_adv else r"\[O] Log Out", variant="error", id="btn-logout")
+                    yield Button("Close" if is_adv else r"\[Esc] Close", id="btn-close")
 
                 yield Static("", id="spotify-instruction")
                 yield Static("", id="spotify-hint")
 
             else:
+                is_adv = getattr(self.app, "advanced_mode", False)
                 if self.first_run:
                     yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff, and enable two-way synchronization. You can also skip and use local offline playback anytime.", id="spotify-desc")
                 else:
@@ -314,8 +743,12 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
                 yield Static("[dim]Status: Not connected[/dim]", id="spotify-status")
 
                 with Horizontal(id="spotify-actions"):
-                    yield Button(r"\[Enter] Browser Login", variant="primary", id="btn-login")
-                    yield Button(r"\[Esc] Skip" if self.first_run else r"\[Esc] Cancel", id="btn-close")
+                    yield Button("Browser Login" if is_adv else r"\[Enter] Browser Login", variant="primary", id="btn-login")
+                    if is_adv:
+                        close_label = "Skip" if self.first_run else "Cancel"
+                    else:
+                        close_label = r"\[Esc] Skip" if self.first_run else r"\[Esc] Cancel"
+                    yield Button(close_label, id="btn-close")
 
                 yield Static("", id="spotify-instruction")
                 yield Static("", id="spotify-hint")
@@ -556,7 +989,8 @@ class UpdateModal(ModalScreen[bool]):
             yield Static(f"Commit: [bold #ffffff]{escape(msg)}[/]  [dim]by {escape(author)} ({escape(date)})[/]", id="update-commit")
             yield Static("Pull latest updates and sync dependencies from github.com/vrdq/spoff?", id="update-prompt")
             yield Static("", id="update-status")
-            yield Static("[bold #569f68][Enter / Y][/] Update Now    [#767676][Esc / N][/] Later", id="update-hint")
+            u_hint = "[bold #569f68]Update Now[/]    [#767676]Later[/]" if getattr(self.app, "advanced_mode", False) else "[bold #569f68][Enter / Y][/] Update Now    [#767676][Esc / N][/] Later"
+            yield Static(u_hint, id="update-hint")
 
     def action_confirm(self) -> None:
         if self.is_updating:
@@ -644,6 +1078,7 @@ class HelpModal(ModalScreen[None]):
             ("a, +", "Add track to playlist"),
             ("i", "New playlist / import link"),
             ("Shift+L, S", "Spotify login & sync"),
+            (",", "Settings & Rebind keys"),
             ("/", "Focus search box"),
             ("Del, d, x", "Remove track / playlist"),
             ("D, Shift+Del", "Delete whole playlist"),
@@ -654,7 +1089,8 @@ class HelpModal(ModalScreen[None]):
         with Vertical(id="help-dialog"):
             with Horizontal(id="help-header-bar"):
                 yield Static("KEYBINDINGS & USAGE GUIDE", id="help-title")
-                yield Static("[dim]Esc / Enter / : to close[/dim]", id="help-close-hint")
+                h_close = "" if getattr(self.app, "advanced_mode", False) else "[dim]Esc / Enter / : to close[/dim]"
+                yield Static(h_close, id="help-close-hint")
 
             with Horizontal(id="help-body"):
                 with Vertical(classes="help-col"):
@@ -1388,6 +1824,16 @@ class SpoffTUI(App):
         color: #555555;
     }
 
+    #settings-pill {
+        width: auto;
+        margin-right: 2;
+        color: #555555;
+    }
+
+    #settings-pill:hover {
+        color: #ffffff;
+    }
+
     #update-pill {
         width: auto;
         margin-right: 2;
@@ -1399,6 +1845,92 @@ class SpoffTUI(App):
         width: 14;
         height: 1;
         margin-right: 2;
+    }
+
+    /* MODAL: SETTINGS & KEYBINDS */
+    SettingsModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.75);
+    }
+
+    #settings-dialog {
+        width: 88;
+        max-width: 96%;
+        height: auto;
+        max-height: 27;
+        background: #141414;
+        border: solid #2a2a2a;
+        padding: 1 2;
+    }
+
+    #settings-header {
+        height: 2;
+        width: 100%;
+        border-bottom: solid #222222;
+        margin-bottom: 1;
+    }
+
+    #settings-title {
+        width: 1fr;
+        text-style: bold;
+        color: #ffffff;
+    }
+
+    #settings-close-hint {
+        width: auto;
+        color: #555555;
+    }
+
+    #adv-mode-container {
+        height: 3;
+        width: 100%;
+        margin-bottom: 1;
+    }
+
+    #adv-mode-toggle {
+        height: 3;
+        width: 100%;
+        background: #1a1a1a;
+        border: solid #282828;
+        padding: 0 1;
+        content-align: left middle;
+    }
+
+    #adv-mode-toggle:focus {
+        border: solid #569f68;
+        background: #1c261e;
+    }
+
+    #settings-table-title {
+        height: 1;
+        text-style: bold;
+        color: #767676;
+        margin-bottom: 0;
+    }
+
+    #settings-table {
+        height: 12;
+        border: solid #222222;
+        background: transparent;
+    }
+
+    #settings-table > .datatable--cursor {
+        background: #252525;
+    }
+
+    #settings-table:focus > .datatable--cursor {
+        background: #2e2e2e;
+    }
+
+    #settings-status-line {
+        height: 1;
+        margin-top: 1;
+        color: #569f68;
+    }
+
+    #settings-footer {
+        height: 1;
+        color: #555555;
     }
 
     /* MODAL: UPDATE */
@@ -1487,6 +2019,7 @@ class SpoffTUI(App):
         Binding("colon", "show_help", "Help", show=False),
         Binding("shift+semicolon", "show_help", "Help", show=False),
         Binding("question_mark", "show_help", "Help", show=False),
+        Binding("comma", "open_settings", "Settings", show=False),
         Binding("1", "nav_search", "Search"),
         Binding("2", "nav_playlist", "Playlist"),
         Binding("3", "nav_offline", "Offline"),
@@ -1505,6 +2038,9 @@ class SpoffTUI(App):
     def __init__(self):
         super().__init__()
         self.volume: int = get_saved_volume()
+        self.advanced_mode: bool = get_saved_advanced_mode()
+        self.custom_keybindings: Dict[str, str] = get_custom_keybindings()
+        self.keybindings: Dict[str, str] = {**DEFAULT_KEYBINDINGS, **self.custom_keybindings}
         self.player = MPVController(initial_volume=self.volume)
         self.visualizer = CavaVisualizer(bars=14)
         mpris_callbacks = {
@@ -1538,6 +2074,65 @@ class SpoffTUI(App):
         self.player.playback_finished_callback = self.on_track_finished
         atexit.register(self._cleanup_on_exit)
 
+    def set_advanced_mode(self, enabled: bool) -> None:
+        self.advanced_mode = bool(enabled)
+        save_advanced_mode(self.advanced_mode)
+        self.apply_advanced_mode()
+
+    def toggle_advanced_mode(self) -> bool:
+        self.advanced_mode = not self.advanced_mode
+        save_advanced_mode(self.advanced_mode)
+        self.apply_advanced_mode()
+        return self.advanced_mode
+
+    def apply_advanced_mode(self) -> None:
+        self._update_nav_bar()
+        self.update_spotify_pill()
+        self.update_settings_pill()
+        try:
+            sb_hint = self.query_one("#sidebar-hint", Static)
+            sb_hint.update("" if self.advanced_mode else "[dim]Enter: open  |  Del: delete[/dim]")
+        except Exception:
+            pass
+        self.update_player_hud()
+
+    def set_custom_keybinding(self, action_id: str, new_key: str) -> None:
+        if not new_key or new_key == DEFAULT_KEYBINDINGS.get(action_id):
+            self.custom_keybindings.pop(action_id, None)
+        else:
+            self.custom_keybindings[action_id] = new_key
+        save_custom_keybindings(self.custom_keybindings)
+        self.apply_keybindings()
+
+    def reset_keybinding(self, action_id: str) -> None:
+        self.custom_keybindings.pop(action_id, None)
+        save_custom_keybindings(self.custom_keybindings)
+        self.apply_keybindings()
+
+    def reset_all_keybindings(self) -> None:
+        self.custom_keybindings.clear()
+        reset_custom_keybindings()
+        self.apply_keybindings()
+
+    def apply_keybindings(self) -> None:
+        self.keybindings = {**DEFAULT_KEYBINDINGS, **self.custom_keybindings}
+        try:
+            system_bindings = {k: v for k, v in self._bindings.key_to_bindings.items() if any(getattr(b, "system", False) for b in v)}
+            self._bindings.key_to_bindings.clear()
+            self._bindings.key_to_bindings.update(system_bindings)
+            for act_id, key in self.keybindings.items():
+                if key:
+                    self._bindings.bind(key, act_id, show=False)
+        except Exception:
+            pass
+        self._update_nav_bar()
+        self.update_spotify_pill()
+        self.update_settings_pill()
+        self.update_player_hud()
+
+    def action_open_settings(self) -> None:
+        self.push_screen(SettingsModal())
+
     def _cleanup_on_exit(self):
         try:
             vol_to_save = self.volume if self.volume > 0 else (getattr(self, "_prev_volume", 80) or 80)
@@ -1566,6 +2161,7 @@ class SpoffTUI(App):
             yield Static(r"[bold #ffffff]\[1] Search[/]    [#555555]\[2] Playlists    \[3] Offline    \[4] Lyrics[/]", id="nav-bar")
             yield Static("", id="update-pill")
             yield Static("[#555555]L: Spotify[/]", id="spotify-pill")
+            yield Static("[#555555],: Settings[/]", id="settings-pill")
             yield Static("[dim]STANDBY[/dim]", id="status-pill")
 
         with Horizontal(id="main-layout"):
@@ -1573,7 +2169,7 @@ class SpoffTUI(App):
                 yield Static("PLAYLISTS", classes="pane-title")
                 yield Input(placeholder="New playlist name or Spotify link", id="sidebar-import-input", classes="action-input")
                 yield DataTable(id="side-table", cursor_type="row", show_header=False)
-                yield Static("[dim]Enter: open  |  Del: delete[/dim]", id="sidebar-hint")
+                yield Static("" if self.advanced_mode else "[dim]Enter: open  |  Del: delete[/dim]", id="sidebar-hint")
 
             yield SidebarSplitter(id="sidebar-splitter")
 
@@ -1604,7 +2200,8 @@ class SpoffTUI(App):
         saved_sidebar_w = get_saved_sidebar_width()
         self.query_one("#sidebar").styles.width = saved_sidebar_w
         self.playlists = load_saved_playlists()
-        self.update_spotify_pill()
+        self.apply_advanced_mode()
+        self.apply_keybindings()
         self.mpris.start()
         if self.mpris:
             self.mpris.update_volume(self.volume)
@@ -1663,6 +2260,9 @@ class SpoffTUI(App):
             if event.widget.id == "spotify-pill":
                 self.action_open_spotify_auth()
                 return
+            elif event.widget.id == "settings-pill":
+                self.action_open_settings()
+                return
             elif event.widget.id == "update-pill":
                 self.action_check_update()
                 return
@@ -1685,25 +2285,10 @@ class SpoffTUI(App):
             else:
                 self.query_one("#track-table", DataTable).focus()
 
+        # 1. Hardware media keys
         k = str(getattr(event, "key", "")).lower()
         name = str(getattr(event, "name", "")).lower()
-
-        if k in ("f1", "audio_mute") or name in ("f1", "audio_mute"):
-            self.action_vol_mute()
-            event.prevent_default()
-            event.stop()
-            return
-        elif k in ("f2", "audio_lower_volume") or name in ("f2", "audio_lower_volume"):
-            self.action_vol_down()
-            event.prevent_default()
-            event.stop()
-            return
-        elif k in ("f3", "audio_raise_volume") or name in ("f3", "audio_raise_volume"):
-            self.action_vol_up()
-            event.prevent_default()
-            event.stop()
-            return
-        elif k in ("audio_prev", "mediaprevioustrack") or name in ("audio_prev", "mediaprevioustrack"):
+        if k in ("audio_prev", "mediaprevioustrack") or name in ("audio_prev", "mediaprevioustrack"):
             self.action_prev_track()
             event.prevent_default()
             event.stop()
@@ -1718,66 +2303,110 @@ class SpoffTUI(App):
             event.prevent_default()
             event.stop()
             return
-        elif (event.key in ("colon", ":", "shift+semicolon", "question_mark") or event.character in (":", "?")) and not isinstance(self.focused, Input):
-            self.action_show_help()
+        elif k in ("audio_mute",) or name in ("audio_mute",):
+            self.action_vol_mute()
             event.prevent_default()
             event.stop()
             return
-        elif (event.key in ("s",) or event.character == "s") and not isinstance(self.focused, Input):
-            self.action_toggle_shuffle()
+        elif k in ("audio_lower_volume",) or name in ("audio_lower_volume",):
+            self.action_vol_down()
             event.prevent_default()
             event.stop()
             return
-        elif (event.key in ("r",) or event.character == "r") and not isinstance(self.focused, Input):
-            self.action_toggle_repeat()
+        elif k in ("audio_raise_volume",) or name in ("audio_raise_volume",):
+            self.action_vol_up()
             event.prevent_default()
             event.stop()
             return
-        elif (event.key in ("L", "shift+l", "S", "shift+s") or event.character in ("L", "S")) and not isinstance(self.focused, Input) and not (isinstance(self.focused, ScrubBar) and event.character == "L"):
-            self.action_open_spotify_auth()
-            event.prevent_default()
-            event.stop()
-            return
-        elif (event.key in ("u", "U") or event.character in ("u", "U")) and not isinstance(self.focused, Input):
-            self.action_check_update()
-            event.prevent_default()
-            event.stop()
-            return
-        elif (event.key in ("J", "K", "shift+down", "shift+up") or event.character in ("J", "K")) and not isinstance(self.focused, Input):
-            if event.key in ("J", "shift+down") or event.character == "J":
-                self.action_move_item_down()
-            else:
-                self.action_move_item_up()
-            event.prevent_default()
-            event.stop()
-            return
-        elif (event.key in ("D", "shift+d", "shift+delete") or event.character == "D") and not isinstance(self.focused, Input):
-            self.action_delete_playlist()
-            event.prevent_default()
-            event.stop()
-            return
-        elif event.key == "down" and isinstance(self.focused, Input):
-            if self.focused.id == "search-box":
-                self.query_one("#track-table", DataTable).focus()
+
+        # 2. Input widget handling: type text, leave on down, unfocus on escape
+        if isinstance(self.focused, Input):
+            if event.key == "down":
+                if self.focused.id == "search-box":
+                    self.query_one("#track-table", DataTable).focus()
+                    event.prevent_default()
+                    event.stop()
+                    return
+                elif self.focused.id == "sidebar-import-input":
+                    self.query_one("#side-table", DataTable).focus()
+                    event.prevent_default()
+                    event.stop()
+                    return
+            elif event.key == "escape":
+                self.action_clear_or_unfocus()
                 event.prevent_default()
                 event.stop()
                 return
-            elif self.focused.id == "sidebar-import-input":
-                self.query_one("#side-table", DataTable).focus()
+            return
+
+        # 3. ScrubBar mode handling
+        if isinstance(self.focused, ScrubBar):
+            if event.key in ("b", "escape"):
+                self.action_clear_or_unfocus()
                 event.prevent_default()
                 event.stop()
                 return
-        elif event.key in ("up", "k") and self.focused and self.focused.id == "track-table":
+            elif event.key == "q":
+                self.action_quit_app()
+                event.prevent_default()
+                event.stop()
+                return
+            return
+
+        # 4. Jump up into Input from row 0 of DataTable
+        if (event.key in ("up", "k") or event.character == "k") and self.focused and self.focused.id == "track-table":
             table = self.query_one("#track-table", DataTable)
             if (table.row_count == 0 or table.cursor_row == 0) and self.active_tab == "search":
                 self.query_one("#search-box", Input).focus()
                 event.prevent_default()
                 event.stop()
                 return
-        elif event.key in ("up", "k") and self.focused and self.focused.id == "side-table":
+        elif (event.key in ("up", "k") or event.character == "k") and self.focused and self.focused.id == "side-table":
             table = self.query_one("#side-table", DataTable)
             if table.row_count == 0 or table.cursor_row == 0:
                 self.query_one("#sidebar-import-input", Input).focus()
+                event.prevent_default()
+                event.stop()
+                return
+
+        # 5. Dynamic match against self.keybindings
+        matched_action = None
+        for act_id, bound_key in self.keybindings.items():
+            if bound_key and key_matches(event.key, event.character, bound_key):
+                matched_action = act_id
+                break
+
+        # Fallback secondary aliases
+        if not matched_action:
+            if event.key in ("colon", ":", "shift+semicolon", "question_mark") or event.character in (":", "?"):
+                matched_action = "show_help"
+            elif event.key in ("ctrl+comma",):
+                matched_action = "open_settings"
+            elif (event.key in ("S", "shift+s") or event.character == "S") and self.keybindings.get("open_spotify_auth") == "L":
+                matched_action = "open_spotify_auth"
+            elif event.key in ("shift+down",) and self.keybindings.get("move_item_down") == "J":
+                matched_action = "move_item_down"
+            elif event.key in ("shift+up",) and self.keybindings.get("move_item_up") == "K":
+                matched_action = "move_item_up"
+            elif event.key in ("shift+delete",) and self.keybindings.get("delete_playlist") == "D":
+                matched_action = "delete_playlist"
+            elif event.key in ("x", "delete") and self.keybindings.get("delete_item") == "d":
+                matched_action = "delete_item"
+            elif event.key == "+" and self.keybindings.get("add_to_playlist") == "a":
+                matched_action = "add_to_playlist"
+            elif event.key in ("U",) and self.keybindings.get("check_update") == "u":
+                matched_action = "check_update"
+            elif event.key in ("f1",):
+                matched_action = "vol_mute"
+            elif event.key in ("f2",):
+                matched_action = "vol_down"
+            elif event.key in ("f3",):
+                matched_action = "vol_up"
+
+        if matched_action:
+            act_method = getattr(self, f"action_{matched_action}", None)
+            if callable(act_method):
+                act_method()
                 event.prevent_default()
                 event.stop()
                 return
@@ -1829,29 +2458,14 @@ class SpoffTUI(App):
         track_table.display = (view != "lyrics")
         lyrics_pane.display = (view == "lyrics")
 
-        tabs = [
-            ("search", "1", "Search"),
-            ("playlist", "2", "Playlists"),
-            ("offline", "3", "Offline"),
-            ("lyrics", "4", "Lyrics"),
-        ]
-        parts = []
-        for mode, num, label in tabs:
-            if mode == view:
-                parts.append(f"[bold #ffffff]\\[{num}] {label}[/]")
-            else:
-                parts.append(f"[#555555]\\[{num}] {label}[/]")
-        try:
-            self.query_one("#nav-bar", Static).update("    ".join(parts))
-        except Exception:
-            pass
+        self._update_nav_bar()
 
         if view == "search":
             self.render_tracks(self.search_results)
             if not (self.focused and self.focused.id == "side-table"):
                 track_table.focus()
             if not self.search_results:
-                self.notify_user("Search: Press / or Up arrow to type query")
+                self.notify_user("" if self.advanced_mode else "Search: Press / or Up arrow to type query")
             else:
                 self.notify_user("")
         elif view == "playlist":
@@ -1861,7 +2475,7 @@ class SpoffTUI(App):
             if not self.playlists:
                 self.notify_user("No playlists yet — enter name in sidebar to create")
             elif not self.current_playlist_tracks:
-                self.notify_user("Playlist is empty — add songs from search with 'a'")
+                self.notify_user("Playlist is empty" if self.advanced_mode else "Playlist is empty — add songs from search with 'a'")
             else:
                 self.notify_user("")
         elif view == "offline":
@@ -1877,7 +2491,30 @@ class SpoffTUI(App):
             self.render_lyrics()
             if not (self.focused and self.focused.id == "side-table"):
                 lyrics_table.focus()
-            self.notify_user("Lyrics: Enter or Click any line to jump to that moment")
+            self.notify_user("" if self.advanced_mode else "Lyrics: Enter or Click any line to jump to that moment")
+
+    def _update_nav_bar(self) -> None:
+        tabs = [
+            ("search", "nav_search", "Search"),
+            ("playlist", "nav_playlist", "Playlists"),
+            ("offline", "nav_offline", "Offline"),
+            ("lyrics", "nav_lyrics", "Lyrics"),
+        ]
+        parts = []
+        for mode, act_id, label in tabs:
+            if self.advanced_mode:
+                display_label = label
+            else:
+                k = format_key_display(self.keybindings.get(act_id, ""))
+                display_label = f"\\[{k}] {label}"
+            if mode == self.active_tab:
+                parts.append(f"[bold #ffffff]{display_label}[/]")
+            else:
+                parts.append(f"[#555555]{display_label}[/]")
+        try:
+            self.query_one("#nav-bar", Static).update("    ".join(parts))
+        except Exception:
+            pass
 
     def render_lyrics(self):
         lh = self.query_one("#lyrics-header", Static)
@@ -2318,7 +2955,16 @@ class SpoffTUI(App):
                 name = user.get("display_name") or user.get("id") or "Connected"
                 pill.update(f"[bold #569f68]● {escape(str(name))}[/]")
             else:
-                pill.update("[#555555]L: Spotify[/]")
+                k = format_key_display(self.keybindings.get("open_spotify_auth", "L"))
+                pill.update("[#555555]Spotify[/]" if self.advanced_mode else f"[#555555]{k}: Spotify[/]")
+        except Exception:
+            pass
+
+    def update_settings_pill(self):
+        try:
+            pill = self.query_one("#settings-pill", Static)
+            k = format_key_display(self.keybindings.get("open_settings", ","))
+            pill.update("[#555555]Settings[/]" if self.advanced_mode else f"[#555555]{k}: Settings[/]")
         except Exception:
             pass
 
@@ -2410,12 +3056,13 @@ class SpoffTUI(App):
                 self.update_info = info
                 def _notify():
                     try:
-                        self.query_one("#update-pill", Static).update("[bold #c4a768]▲ Update (u)[/]")
+                        pill_text = "[bold #c4a768]▲ Update[/]" if self.advanced_mode else "[bold #c4a768]▲ Update (u)[/]"
+                        self.query_one("#update-pill", Static).update(pill_text)
                     except Exception:
                         pass
                     msg = info.get("message", "")
                     sha = info.get("remote_sha", "")
-                    self.notify_user(f"Update available: {sha} ({msg}) — Press 'u' to update")
+                    self.notify_user(f"Update available: {sha} ({msg})" if self.advanced_mode else f"Update available: {sha} ({msg}) — Press 'u' to update")
                 self.call_from_thread(_notify)
         except Exception as e:
             logger.debug(f"Background update check failed: {e}")
@@ -2595,7 +3242,7 @@ class SpoffTUI(App):
             else:
                 self.current_playlist_tracks = []
                 self.render_tracks([])
-                self.notify_user(f"Opened empty playlist '{name}'. Press 'a' on any song to add it.")
+                self.notify_user(f"Opened empty playlist '{name}'." if self.advanced_mode else f"Opened empty playlist '{name}'. Press 'a' on any song to add it.")
                 self.switch_view("playlist")
                 if focus_tracks:
                     self.query_one("#track-table", DataTable).focus()
@@ -2910,15 +3557,35 @@ class SpoffTUI(App):
             self.query_one("#deck-source", Static).update("[dim]IDLE[/dim]")
             self.query_one("#deck-track", Static).update("No track playing")
 
-        if is_scrubbing:
-            hints = "Seek: h/l (-/+5s)  |  H/L (-/+15s)  |  0-9: jump %  |  Space: pause  |  Esc: back"
-        elif self.active_tab == "lyrics":
-            hints = "Enter/Click: seek to line  |  Space: pause  |  s: shuf  |  r: rep  |  Esc/4: back  |  q: quit"
+        if self.advanced_mode:
+            if is_scrubbing:
+                hints = "Seeking Playback"
+            elif self.active_tab == "lyrics":
+                hints = ""
+            else:
+                queue_len = len(self.queue)
+                queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "empty"
+                vol_str = "Muted" if self.volume == 0 else f"{self.volume}%"
+                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}"
         else:
-            queue_len = len(self.queue)
-            queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "empty"
-            vol_str = "Muted" if self.volume == 0 else f"{self.volume}%"
-            hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  s: shuf  |  r: rep  |  4: lyrics  |  b: seek  |  : help  |  q: quit"
+            if is_scrubbing:
+                hints = "Seek: h/l (-/+5s)  |  H/L (-/+15s)  |  0-9: jump %  |  Space: pause  |  Esc: back"
+            elif self.active_tab == "lyrics":
+                lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
+                hints = f"Enter/Click: seek to line  |  Space: pause  |  s: shuf  |  r: rep  |  Esc/{lyr_k}: back  |  q: quit"
+            else:
+                queue_len = len(self.queue)
+                queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "empty"
+                vol_str = "Muted" if self.volume == 0 else f"{self.volume}%"
+                shuf_k = format_key_display(self.keybindings.get("toggle_shuffle", "s"))
+                rep_k = format_key_display(self.keybindings.get("toggle_repeat", "r"))
+                lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
+                seek_k = format_key_display(self.keybindings.get("focus_bar", "b"))
+                sett_k = format_key_display(self.keybindings.get("open_settings", ","))
+                help_k = format_key_display(self.keybindings.get("show_help", ":"))
+                help_label = ": help" if help_k in (":", "colon") else f"{help_k}: help"
+                quit_k = format_key_display(self.keybindings.get("quit_app", "q"))
+                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {seek_k}: seek  |  {sett_k}: set  |  {help_label}  |  {quit_k}: quit"
         self.query_one("#deck-line-3", Static).update(escape(hints))
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -2937,7 +3604,7 @@ class SpoffTUI(App):
                     self.playlists = load_saved_playlists()
                     self.refresh_side_table()
                     self.load_playlist_by_index(0, focus_tracks=True)
-                    self.notify_user(f"Created playlist '{u}'. Press 'a' on any song to add it.")
+                    self.notify_user(f"Created playlist '{u}'." if self.advanced_mode else f"Created playlist '{u}'. Press 'a' on any song to add it.")
 
     @work(thread=True)
     def do_search(self, query: str):

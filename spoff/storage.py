@@ -148,6 +148,53 @@ def save_sidebar_width(width: int):
     except Exception as e:
         logger.error(f"Error saving sidebar width: {e}")
 
+def get_saved_advanced_mode() -> bool:
+    """Retrieves whether advanced mode (no keybind hints) is enabled, defaulting to False."""
+    try:
+        cfg = load_config()
+        return bool(cfg.get("advanced_mode", False))
+    except Exception as e:
+        logger.error(f"Error reading advanced mode: {e}")
+        return False
+
+def save_advanced_mode(enabled: bool):
+    """Persists advanced mode setting to config."""
+    try:
+        cfg = load_config()
+        cfg["advanced_mode"] = bool(enabled)
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving advanced mode: {e}")
+
+def get_custom_keybindings() -> Dict[str, str]:
+    """Retrieves custom keybindings mapping action_name -> key_string."""
+    try:
+        cfg = load_config()
+        kb = cfg.get("keybindings")
+        if isinstance(kb, dict):
+            return {str(k): str(v) for k, v in kb.items() if v}
+    except Exception as e:
+        logger.error(f"Error reading custom keybindings: {e}")
+    return {}
+
+def save_custom_keybindings(keybindings: Dict[str, str]):
+    """Persists custom keybindings mapping to config."""
+    try:
+        cfg = load_config()
+        cfg["keybindings"] = keybindings
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving custom keybindings: {e}")
+
+def reset_custom_keybindings():
+    """Removes custom keybindings from config, reverting to defaults."""
+    try:
+        cfg = load_config()
+        cfg.pop("keybindings", None)
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error resetting custom keybindings: {e}")
+
 def load_saved_playlists() -> List[Dict[str, Any]]:
     try:
         if PLAYLISTS_FILE.exists() and PLAYLISTS_FILE.stat().st_size > 0:
