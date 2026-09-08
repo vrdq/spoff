@@ -386,10 +386,14 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
 
         try:
             self.query_one("#spotify-status", Static).update("[bold #c4a768]Waiting for authorization in browser...[/]")
-            self.query_one("#spotify-instruction", Static).update(
+            inst = self.query_one("#spotify-instruction", Static)
+            inst.update(
                 f"[dim]If your browser did not open, visit:[/dim]\n[#569f68]{auth_url}[/]"
             )
-            self.query_one("#spotify-hint", Static).update("[dim]Listening on 127.0.0.1:8989/login  |  Esc: Cancel[/dim]")
+            inst.display = True
+            hint = self.query_one("#spotify-hint", Static)
+            hint.update("[dim]Listening on 127.0.0.1:8989/login  |  Esc: Cancel[/dim]")
+            hint.display = True
         except Exception:
             pass
 
@@ -1050,15 +1054,17 @@ class SpoffTUI(App):
     }
 
     #spotify-instruction {
+        display: none;
         color: #888888;
-        margin-bottom: 1;
+        margin-top: 1;
+        margin-bottom: 0;
     }
 
     #spotify-actions {
         width: 100%;
         height: auto;
         margin-top: 1;
-        margin-bottom: 1;
+        margin-bottom: 0;
         align: left middle;
     }
 
@@ -1153,8 +1159,8 @@ class SpoffTUI(App):
         border: solid #2a2a2a;
         color: #e2e2e2;
         height: 3;
-        margin-top: 0;
-        margin-bottom: 1;
+        margin-top: 1;
+        margin-bottom: 0;
         padding: 0 1;
         scrollbar-size-horizontal: 0 !important;
         scrollbar-size-vertical: 0 !important;
@@ -1165,8 +1171,10 @@ class SpoffTUI(App):
     }
 
     #spotify-hint {
+        display: none;
         color: #767676;
         margin-top: 1;
+        margin-bottom: 0;
     }
 
     #spotify-pill {
