@@ -50,6 +50,46 @@ def _init_storage_once():
 
 _init_storage_once()
 
+def load_config() -> Dict[str, Any]:
+    try:
+        if CONFIG_FILE.exists():
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.error(f"Error reading config: {e}")
+    return {}
+
+def save_config(config: Dict[str, Any]):
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error saving config: {e}")
+
+def is_first_launch() -> bool:
+    """Returns True if Spoff is running for the first time without configured onboarding."""
+    try:
+        cfg = load_config()
+        if "first_launch_prompted" in cfg:
+            return not bool(cfg.get("first_launch_prompted"))
+        auth_file = DATA_DIR / "spotify_auth.json"
+        if auth_file.exists():
+            mark_first_launch_done()
+            return False
+        return True
+    except Exception as e:
+        logger.error(f"Error checking first launch: {e}")
+        return False
+
+def mark_first_launch_done():
+    """Records that first-launch onboarding has been completed."""
+    try:
+        cfg = load_config()
+        cfg["first_launch_prompted"] = True
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error marking first launch done: {e}")
+
 def load_saved_playlists() -> List[Dict[str, Any]]:
     try:
         if PLAYLISTS_FILE.exists():

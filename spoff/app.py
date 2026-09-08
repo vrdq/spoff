@@ -28,7 +28,7 @@ try:
         load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
         create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
-        delete_cached_track, CACHE_DIR, LOG_FILE
+        delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache
     from .search import live_search_tracks
@@ -49,7 +49,7 @@ except ImportError:
         load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
         create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
-        delete_cached_track, CACHE_DIR, LOG_FILE
+        delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done
     )
     from streamer import search_and_resolve_stream, download_track_to_cache
     from search import live_search_tracks
@@ -183,8 +183,9 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
         Binding("q", "dismiss_modal", "Close", show=False),
     ]
 
-    def __init__(self):
+    def __init__(self, first_run: bool = False):
         super().__init__()
+        self.first_run = first_run
         self.auth_session = load_spotify_auth()
         self.server: Optional[OAuthCallbackServer] = None
         self.pkce_verifier: Optional[str] = None
@@ -192,7 +193,10 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="spotify-dialog"):
-            yield Static("SPOTIFY ACCOUNT", id="spotify-title")
+            if self.first_run and not (self.auth_session and get_valid_token()):
+                yield Static("WELCOME TO SPOFF · SPOTIFY SETUP", id="spotify-title")
+            else:
+                yield Static("SPOTIFY ACCOUNT", id="spotify-title")
             if self.auth_session and get_valid_token():
                 user = self.auth_session.get("user", {})
                 name = user.get("display_name") or user.get("id") or "Spotify User"
@@ -228,12 +232,15 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
                 yield Static("", id="spotify-hint")
 
             else:
-                yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff, and enable two-way synchronization.", id="spotify-desc")
+                if self.first_run:
+                    yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff, and enable two-way synchronization. You can also skip and use local offline playback anytime.", id="spotify-desc")
+                else:
+                    yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff, and enable two-way synchronization.", id="spotify-desc")
                 yield Static("[dim]Status: Not connected[/dim]", id="spotify-status")
 
                 with Horizontal(id="spotify-actions"):
                     yield Button(r"\[Enter] Browser Login", variant="primary", id="btn-login")
-                    yield Button(r"\[Esc] Cancel", id="btn-close")
+                    yield Button(r"\[Esc] Skip" if self.first_run else r"\[Esc] Cancel", id="btn-close")
 
                 yield Input(placeholder="Or paste redirect URL / auth code here...", id="spotify-input")
                 yield Static("", id="spotify-instruction")
@@ -1403,6 +1410,11 @@ class SpoffTUI(App):
             except Exception:
                 pass
 
+        if is_first_launch():
+            mark_first_launch_done()
+            if not load_spotify_auth():
+                self.call_after_refresh(lambda: self.action_open_spotify_auth(first_run=True))
+
     def notify_user(self, text: str):
         def _update():
             try:
@@ -1875,7 +1887,7 @@ class SpoffTUI(App):
         except Exception:
             pass
 
-    def action_open_spotify_auth(self):
+    def action_open_spotify_auth(self, first_run: bool = False):
         def _handle_result(res: Optional[str]):
             self.update_spotify_pill()
             if res == "sync_now":
@@ -1886,7 +1898,7 @@ class SpoffTUI(App):
             elif res == "logged_out":
                 self.notify_user("Logged out of Spotify.")
 
-        self.push_screen(SpotifyAuthModal(), _handle_result)
+        self.push_screen(SpotifyAuthModal(first_run=first_run), _handle_result)
 
     @work(thread=True)
     def do_spotify_sync(self):
