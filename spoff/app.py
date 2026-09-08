@@ -1,5 +1,6 @@
 import sys
 import os
+import signal
 
 if "TEXTUAL_FPS" not in os.environ:
     os.environ["TEXTUAL_FPS"] = "60"
@@ -1302,7 +1303,8 @@ class SpoffTUI(App):
 
     def _cleanup_on_exit(self):
         try:
-            save_volume(self.volume)
+            vol_to_save = self.volume if self.volume > 0 else (getattr(self, "_prev_volume", 80) or 80)
+            save_volume(vol_to_save)
         except Exception:
             pass
         try:
@@ -1567,6 +1569,7 @@ class SpoffTUI(App):
 
     def render_tracks(self, tracks: List[Dict[str, Any]], select_row: Optional[int] = None):
         table = self.query_one("#track-table", DataTable)
+        old_cursor = table.cursor_row
         table.clear()
         for idx, t in enumerate(tracks):
             t_id = t.get("id") or str(hash(t.get("title", "") + t.get("artist", "")))
@@ -1576,7 +1579,12 @@ class SpoffTUI(App):
             dur = format_time(dur_ms / 1000)
             table.add_row(type_tag, escape(t.get("title", "")), escape(t.get("artist", "")), dur, key=str(idx))
         if tracks:
-            target = 0 if select_row is None else max(0, min(select_row, len(tracks) - 1))
+            if select_row is not None:
+                target = max(0, min(select_row, len(tracks) - 1))
+            elif old_cursor is not None and 0 <= old_cursor < len(tracks):
+                target = old_cursor
+            else:
+                target = 0
             try:
                 table.move_cursor(row=target)
             except Exception:
@@ -2533,6 +2541,16 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] in ("--update", "-u", "update"):
         run_cli_update()
         return
+
+    def _signal_handler(sig, frame):
+        sys.exit(0)
+
+    try:
+        signal.signal(signal.SIGTERM, _signal_handler)
+        signal.signal(signal.SIGHUP, _signal_handler)
+    except Exception:
+        pass
+
     app = SpoffTUI()
     app.run()
 

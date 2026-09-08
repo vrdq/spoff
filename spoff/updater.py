@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import shutil
 import logging
 import subprocess
 import urllib.request
@@ -51,6 +52,16 @@ def check_for_updates() -> Optional[Dict[str, Any]]:
         if not remote_sha or remote_sha.lower() == local_sha.lower():
             return None
 
+        repo_root = Path(__file__).resolve().parent.parent
+        is_already_contained = subprocess.call(
+            ["git", "merge-base", "--is-ancestor", remote_sha, "HEAD"],
+            cwd=str(repo_root),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        ) == 0
+        if is_already_contained:
+            return None
+
         commit = data.get("commit", {})
         message = commit.get("message", "").split("\n")[0]
         author = commit.get("author", {}).get("name", "vrdq")
@@ -96,10 +107,15 @@ def perform_update() -> Tuple[bool, str]:
         if pull_res.returncode != 0:
             return False, f"Git pull failed: {pull_res.stderr.strip()}"
 
-        # Reinstall package in virtualenv if uv is present
+        # Reinstall package in virtualenv if uv is present, else pip
         python_bin = sys.executable
+        uv_bin = shutil.which("uv")
+        if uv_bin:
+            install_cmd = [uv_bin, "pip", "install", "-e", "."]
+        else:
+            install_cmd = [python_bin, "-m", "pip", "install", "-e", "."]
         subprocess.run(
-            [python_bin, "-m", "pip", "install", "-e", "."],
+            install_cmd,
             cwd=str(repo_root),
             capture_output=True,
             text=True

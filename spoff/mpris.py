@@ -81,8 +81,7 @@ class SpoffMPRISDbus:
         self.LoopStatus = "None"
         self.Rate = 1.0
         self.Shuffle = False
-        self.Metadata: Dict[str, Any] = {}
-        self.Volume = 0.8
+        self._volume = 0.8
         self.Position = 0
         self.CanControl = True
         self.CanPlay = True
@@ -90,6 +89,17 @@ class SpoffMPRISDbus:
         self.CanSeek = True
         self.CanGoNext = True
         self.CanGoPrevious = True
+
+    @property
+    def Volume(self) -> float:
+        return self._volume
+
+    @Volume.setter
+    def Volume(self, val: float) -> None:
+        self._volume = max(0.0, min(1.0, float(val)))
+        fn = self.callbacks.get("set_volume")
+        if fn:
+            fn(int(round(self._volume * 100)))
 
     # Root Methods
     def Raise(self) -> None:
@@ -213,8 +223,8 @@ class MPRISService:
             return
 
         raw_id = str(track.get("id") or hash(track.get("title", "") + track.get("artist", "")))
-        clean_id = "".join(c for c in raw_id if c.isalnum() or c == "_") or "1"
-        track_obj_path = f"/org/spoff/track/{clean_id}"
+        clean_id = "".join(c for c in raw_id if c.isalnum() or c == "_") or "track"
+        track_obj_path = f"/org/spoff/track/t_{clean_id}"
 
         title = track.get("title", "Unknown Title")
         artist = track.get("artist", "Unknown Artist")
@@ -281,7 +291,7 @@ class MPRISService:
         if not self.dbus_obj:
             return
         vol_float = max(0.0, min(1.0, float(vol_int) / 100.0))
-        self.dbus_obj.Volume = vol_float
+        self.dbus_obj._volume = vol_float
         try:
             self.dbus_obj.PropertiesChanged(
                 "org.mpris.MediaPlayer2.Player",

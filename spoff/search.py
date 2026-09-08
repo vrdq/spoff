@@ -49,8 +49,17 @@ def live_search_tracks(query: str, limit: int = 15) -> List[Dict[str, Any]]:
                 t_id = e.get("id")
                 title = e.get("title") or "Unknown Track"
                 uploader = e.get("uploader") or e.get("channel") or "Unknown Artist"
+                uploader = re.sub(r'(?i)\s*-\s*topic$', '', uploader).strip()
                 # Strip common redundant suffixes
-                cleaned_title = re.sub(r'(?i)\s*[\(\[](official\s*(video|audio|lyric|music\s*video)|lyrics|audio)[\)\]]', '', title).strip()
+                cleaned_title = re.sub(r'(?i)\s*[\(\[](official\s*(video|audio|lyric|music\s*video)|lyrics|audio|hd|4k)[\)\]]', '', title).strip()
+                if " - " in cleaned_title:
+                    parts = cleaned_title.split(" - ", 1)
+                    artist_part = parts[0].strip()
+                    title_part = parts[1].strip()
+                    if uploader.lower() in ("unknown artist", "unknown", "") or artist_part.lower() in uploader.lower() or uploader.lower() in artist_part.lower():
+                        cleaned_title = title_part
+                        if uploader.lower() in ("unknown artist", "unknown", ""):
+                            uploader = artist_part
                 
                 tracks.append({
                     "id": t_id,

@@ -237,10 +237,12 @@ def refresh_spotify_token(refresh_token: str, client_id: str = SPOTIFY_CLIENT_ID
 
 def load_spotify_auth() -> Optional[Dict[str, Any]]:
     """Loads saved Spotify auth session from disk."""
-    if AUTH_FILE.exists():
+    if AUTH_FILE.exists() and AUTH_FILE.stat().st_size > 0:
         try:
             with open(AUTH_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
         except Exception as e:
             logger.error(f"Error reading {AUTH_FILE}: {e}")
     return None
@@ -249,8 +251,12 @@ def save_spotify_auth(data: Dict[str, Any]):
     """Persists Spotify auth session to disk."""
     try:
         AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(AUTH_FILE, "w", encoding="utf-8") as f:
+        tmp_file = AUTH_FILE.with_suffix(f".tmp.{os.getpid()}")
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_file, AUTH_FILE)
     except Exception as e:
         logger.error(f"Error saving {AUTH_FILE}: {e}")
 

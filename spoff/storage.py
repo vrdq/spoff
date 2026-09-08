@@ -1,3 +1,4 @@
+import os
 import json
 import logging
 import uuid
@@ -31,20 +32,36 @@ logging.basicConfig(
 )
 logger = logging.getLogger("spoff")
 
+def _atomic_json_dump(filepath: Path, data: Any) -> None:
+    """Safely writes JSON data via an fsynced temporary file replaced atomically."""
+    tmp_path = filepath.with_suffix(f".tmp.{os.getpid()}")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, filepath)
+    except Exception as e:
+        logger.error(f"Atomic write failed for {filepath}: {e}")
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+        raise
+
 def _init_storage_once():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not PLAYLISTS_FILE.exists():
+    if not PLAYLISTS_FILE.exists() or PLAYLISTS_FILE.stat().st_size == 0:
         try:
-            with open(PLAYLISTS_FILE, "w", encoding="utf-8") as f:
-                json.dump([], f, indent=2, ensure_ascii=False)
+            _atomic_json_dump(PLAYLISTS_FILE, [])
         except Exception as e:
             logger.error(f"Failed to create empty playlists file: {e}")
 
-    if not INDEX_FILE.exists():
+    if not INDEX_FILE.exists() or INDEX_FILE.stat().st_size == 0:
         try:
-            with open(INDEX_FILE, "w", encoding="utf-8") as f:
-                json.dump({}, f, indent=2, ensure_ascii=False)
+            _atomic_json_dump(INDEX_FILE, {})
         except Exception as e:
             logger.error(f"Failed to create offline index: {e}")
 
@@ -52,17 +69,18 @@ _init_storage_once()
 
 def load_config() -> Dict[str, Any]:
     try:
-        if CONFIG_FILE.exists():
+        if CONFIG_FILE.exists() and CONFIG_FILE.stat().st_size > 0:
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
     except Exception as e:
         logger.error(f"Error reading config: {e}")
     return {}
 
 def save_config(config: Dict[str, Any]):
     try:
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
+        _atomic_json_dump(CONFIG_FILE, config)
     except Exception as e:
         logger.error(f"Error saving config: {e}")
 
@@ -112,17 +130,25 @@ def save_volume(volume: int):
 
 def load_saved_playlists() -> List[Dict[str, Any]]:
     try:
-        if PLAYLISTS_FILE.exists():
+        if PLAYLISTS_FILE.exists() and PLAYLISTS_FILE.stat().st_size > 0:
             with open(PLAYLISTS_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
     except Exception as e:
         logger.error(f"Error reading playlists: {e}")
+        try:
+            if PLAYLISTS_FILE.exists() and PLAYLISTS_FILE.stat().st_size > 0:
+                corrupted = PLAYLISTS_FILE.with_suffix(".json.corrupted")
+                shutil.copy2(PLAYLISTS_FILE, corrupted)
+                logger.warning(f"Corrupted playlists backed up to {corrupted}")
+        except Exception:
+            pass
     return []
 
 def save_saved_playlists(playlists: List[Dict[str, Any]]):
     try:
-        with open(PLAYLISTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(playlists, f, indent=2, ensure_ascii=False)
+        _atomic_json_dump(PLAYLISTS_FILE, playlists)
     except Exception as e:
         logger.error(f"Error saving playlists: {e}")
 
@@ -196,17 +222,25 @@ def remove_saved_playlist(playlist_id: str) -> bool:
 
 def load_offline_index() -> Dict[str, Dict[str, Any]]:
     try:
-        if INDEX_FILE.exists():
+        if INDEX_FILE.exists() and INDEX_FILE.stat().st_size > 0:
             with open(INDEX_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
     except Exception as e:
         logger.error(f"Error reading offline index: {e}")
+        try:
+            if INDEX_FILE.exists() and INDEX_FILE.stat().st_size > 0:
+                corrupted = INDEX_FILE.with_suffix(".json.corrupted")
+                shutil.copy2(INDEX_FILE, corrupted)
+                logger.warning(f"Corrupted offline index backed up to {corrupted}")
+        except Exception:
+            pass
     return {}
 
 def save_offline_index(index: Dict[str, Dict[str, Any]]):
     try:
-        with open(INDEX_FILE, "w", encoding="utf-8") as f:
-            json.dump(index, f, indent=2, ensure_ascii=False)
+        _atomic_json_dump(INDEX_FILE, index)
     except Exception as e:
         logger.error(f"Error saving offline index: {e}")
 

@@ -38,10 +38,22 @@ def search_and_resolve_stream(track_title: str, artist: str) -> Optional[Dict[st
     if cache_key in _stream_cache:
         return _stream_cache[cache_key]
 
-    queries = [
-        f"{track_title} {artist} audio",
-        f"{track_title} {artist}",
-    ]
+    if track_title.startswith("http://") or track_title.startswith("https://"):
+        queries = [track_title]
+    elif len(track_title) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', track_title):
+        queries = [f"https://www.youtube.com/watch?v={track_title}"]
+    else:
+        clean_artist = "" if artist.lower() in ("unknown artist", "unknown", "none", "") else artist.strip()
+        if clean_artist:
+            queries = [
+                f"{track_title} {clean_artist} audio",
+                f"{track_title} {clean_artist}",
+            ]
+        else:
+            queries = [
+                f"{track_title} audio",
+                track_title,
+            ]
     ydl_opts = get_base_ydl_opts()
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -107,7 +119,13 @@ def download_track_to_cache(track_id: str, title: str, artist: str, on_complete=
                 return
 
             temp_path = CACHE_DIR / f"{track_id}_dl"
-            query = f"{title} {artist} audio"
+            if title.startswith("http://") or title.startswith("https://"):
+                query = title
+            elif len(title) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', title):
+                query = f"https://www.youtube.com/watch?v={title}"
+            else:
+                clean_artist = "" if artist.lower() in ("unknown artist", "unknown", "none", "") else artist.strip()
+                query = f"{title} {clean_artist} audio" if clean_artist else f"{title} audio"
             ydl_opts = get_base_ydl_opts({
                 "format": "bestaudio[ext=m4a]/bestaudio/best",
                 "outtmpl": f"{str(temp_path)}.%(ext)s",
