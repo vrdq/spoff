@@ -94,8 +94,10 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "prev_track": "p",
     "seek_fwd": "right",
     "seek_bwd": "left",
-    "vol_up": "up",
-    "vol_down": "down",
+    "cursor_up": "k",
+    "cursor_down": "j",
+    "vol_up": "f3",
+    "vol_down": "f2",
     "vol_mute": "f1",
     "toggle_shuffle": "s",
     "toggle_repeat": "r",
@@ -128,9 +130,11 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "prev_track": ("Playback", "Previous Track"),
     "seek_fwd": ("Playback", "Seek Forward (+5s)"),
     "seek_bwd": ("Playback", "Seek Backward (-5s)"),
-    "vol_up": ("Volume", "Volume Up (+5%)"),
-    "vol_down": ("Volume", "Volume Down (-5%)"),
-    "vol_mute": ("Volume", "Mute / Unmute"),
+    "cursor_up": ("Navigation", "Move Cursor Up (k)"),
+    "cursor_down": ("Navigation", "Move Cursor Down (j)"),
+    "vol_up": ("Volume", "Volume Up (F3)"),
+    "vol_down": ("Volume", "Volume Down (F2)"),
+    "vol_mute": ("Volume", "Mute / Unmute (F1)"),
     "toggle_shuffle": ("Playback", "Toggle Shuffle"),
     "toggle_repeat": ("Playback", "Cycle Repeat Mode"),
     "focus_search": ("Navigation", "Focus Search Bar"),
@@ -149,11 +153,11 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "show_help": ("General", "Help & Reference"),
     "check_update": ("General", "Check for Updates"),
     "quit_app": ("General", "Quit Spoff"),
-    "focus_sidebar": ("Navigation", "Focus Sidebar"),
-    "focus_tracks": ("Navigation", "Focus Main Table"),
+    "focus_sidebar": ("Navigation", "Focus Sidebar (h)"),
+    "focus_tracks": ("Navigation", "Focus Main Table (l)"),
     "toggle_focus": ("Navigation", "Cycle Sidebar / Main"),
-    "move_item_up": ("Playlists", "Reorder Song Up"),
-    "move_item_down": ("Playlists", "Reorder Song Down"),
+    "move_item_up": ("Playlists", "Reorder Song Up (K)"),
+    "move_item_down": ("Playlists", "Reorder Song Down (J)"),
 }
 
 def format_key_display(k: str) -> str:
@@ -503,6 +507,17 @@ class SettingsModal(ModalScreen[None]):
                 act_id = list(ACTION_INFO.keys())[table.cursor_row]
                 self.start_rebinding(act_id)
 
+    def action_cursor_down(self) -> None:
+        table = self.query_one("#settings-table", DataTable)
+        table.action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        table = self.query_one("#settings-table", DataTable)
+        if table.row_count == 0 or table.cursor_row == 0:
+            self.query_one("#engine-toggle", SearchEngineToggle).focus()
+        else:
+            table.action_cursor_up()
+
     def on_key(self, event: events.Key) -> None:
         if self.is_rebinding:
             event.prevent_default()
@@ -520,7 +535,7 @@ class SettingsModal(ModalScreen[None]):
 
         if focused_id in toggle_ids:
             idx = toggle_ids.index(focused_id)
-            if event.key in ("j", "down"):
+            if event.key in ("j", "down") or event.character == "j":
                 if idx < len(toggle_ids) - 1:
                     self.query_one(f"#{toggle_ids[idx + 1]}", Static).focus()
                 else:
@@ -528,7 +543,7 @@ class SettingsModal(ModalScreen[None]):
                 event.prevent_default()
                 event.stop()
                 return
-            elif event.key in ("k", "up"):
+            elif event.key in ("k", "up") or event.character == "k":
                 if idx > 0:
                     self.query_one(f"#{toggle_ids[idx - 1]}", Static).focus()
                 event.prevent_default()
@@ -550,12 +565,29 @@ class SettingsModal(ModalScreen[None]):
                 event.stop()
                 return
         elif self.focused and self.focused.id == "settings-table":
-            if event.key in ("k", "up"):
+            if event.key in ("j", "down") or event.character == "j":
+                table.action_cursor_down()
+                event.prevent_default()
+                event.stop()
+                return
+            elif event.key in ("k", "up") or event.character == "k":
                 if table.row_count == 0 or table.cursor_row == 0:
                     self.query_one("#engine-toggle", SearchEngineToggle).focus()
-                    event.prevent_default()
-                    event.stop()
-                    return
+                else:
+                    table.action_cursor_up()
+                event.prevent_default()
+                event.stop()
+                return
+            elif (event.key in ("G", "shift+g") or event.character == "G") and table.row_count > 0:
+                table.move_cursor(row=table.row_count - 1)
+                event.prevent_default()
+                event.stop()
+                return
+            elif event.key in ("home",) and table.row_count > 0:
+                table.move_cursor(row=0)
+                event.prevent_default()
+                event.stop()
+                return
             elif event.key in ("r", "backspace"):
                 self.action_reset_selected_key()
                 event.prevent_default()
@@ -661,15 +693,23 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
         inp = self.query_one("#modal-input", Input)
 
         if self.focused and self.focused.id == "modal-table":
-            if event.key in ("j", "down"):
+            if event.key in ("j", "down") or event.character == "j":
                 table.action_cursor_down()
                 event.prevent_default()
                 event.stop()
-            elif event.key in ("k", "up"):
+            elif event.key in ("k", "up") or event.character == "k":
                 if table.row_count == 0 or table.cursor_row == 0:
                     inp.focus()
                 else:
                     table.action_cursor_up()
+                event.prevent_default()
+                event.stop()
+            elif (event.key in ("G", "shift+g") or event.character == "G") and table.row_count > 0:
+                table.move_cursor(row=table.row_count - 1)
+                event.prevent_default()
+                event.stop()
+            elif event.key in ("home",) and table.row_count > 0:
+                table.move_cursor(row=0)
                 event.prevent_default()
                 event.stop()
             elif event.key in ("i", "a") and event.character in ("i", "a"):
@@ -912,11 +952,11 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
             self.action_dismiss_modal()
             event.prevent_default()
             event.stop()
-        elif event.key == "left" or event.character == "h":
+        elif event.key in ("left", "up") or event.character in ("h", "k"):
             self.action_focus_prev_button()
             event.prevent_default()
             event.stop()
-        elif event.key == "right" or event.character == "l":
+        elif event.key in ("right", "down") or event.character in ("l", "j"):
             self.action_focus_next_button()
             event.prevent_default()
             event.stop()
@@ -1121,6 +1161,9 @@ class HelpModal(ModalScreen[None]):
             ("4", "Synchronized lyrics view"),
             ("h / l", "Switch Sidebar / Main pane"),
             ("j / k, Arrows", "Navigate table rows"),
+            ("gg / Home", "Jump to top row"),
+            ("G / End", "Jump to bottom row"),
+            ("Ctrl+d / Ctrl+u", "Scroll page down / up"),
             ("Tab", "Cycle Sidebar / Table"),
             ("Enter", "Play track / Open playlist"),
             ("k (at top row)", "Jump up into input box"),
@@ -2105,8 +2148,8 @@ class SpoffTUI(App):
         Binding("shift+delete", "delete_playlist", "Delete Playlist", show=False),
         Binding("right", "seek_fwd", "+5s"),
         Binding("left", "seek_bwd", "-5s"),
-        Binding("up", "vol_up", "Vol+"),
-        Binding("down", "vol_down", "Vol-"),
+        Binding("up", "cursor_up", "Up", show=False),
+        Binding("down", "cursor_down", "Down", show=False),
         Binding("f1", "vol_mute", "Mute", show=False),
         Binding("f2", "vol_down", "Vol-", show=False),
         Binding("f3", "vol_up", "Vol+", show=False),
@@ -2310,6 +2353,16 @@ class SpoffTUI(App):
             for act_id, key in self.keybindings.items():
                 if key:
                     self._bindings.bind(key, act_id, show=False)
+            # Secondary navigational and helper bindings
+            self._bindings.bind("down", "cursor_down", show=False)
+            self._bindings.bind("up", "cursor_up", show=False)
+            self._bindings.bind("shift+down", "move_item_down", show=False)
+            self._bindings.bind("shift+up", "move_item_up", show=False)
+            self._bindings.bind("shift+delete", "delete_playlist", show=False)
+            self._bindings.bind("x", "delete_item", show=False)
+            self._bindings.bind("+", "add_to_playlist", show=False)
+            self._bindings.bind("shift+l", "open_spotify_auth", show=False)
+            self._bindings.bind("S", "open_spotify_auth", show=False)
         except Exception:
             pass
         self._update_nav_bar()
@@ -2518,9 +2571,9 @@ class SpoffTUI(App):
             event.stop()
             return
 
-        # 2. Input widget handling: type text, leave on down, unfocus on escape
+        # 2. Input widget handling: type text, leave on down/tab, unfocus on escape
         if isinstance(self.focused, Input):
-            if event.key == "down":
+            if event.key in ("down", "tab"):
                 if self.focused.id == "search-box":
                     self.query_one("#track-table", DataTable).focus()
                     event.prevent_default()
@@ -2552,15 +2605,58 @@ class SpoffTUI(App):
                 return
             return
 
-        # 4. Jump up into Input from row 0 of DataTable
-        if (event.key in ("up", "k") or event.character == "k") and self.focused and self.focused.id == "track-table":
+        # Vim G (jump to bottom of table)
+        if (event.key in ("G", "shift+g") or event.character == "G") and not isinstance(self.focused, (Input, ScrubBar)):
+            if isinstance(self.focused, DataTable) and self.focused.row_count > 0:
+                self.focused.move_cursor(row=self.focused.row_count - 1)
+                event.prevent_default()
+                event.stop()
+                return
+
+        # Vim gg / Home (jump to top of table)
+        if event.key == "home" and isinstance(self.focused, DataTable) and self.focused.row_count > 0:
+            self.focused.move_cursor(row=0)
+            event.prevent_default()
+            event.stop()
+            return
+        if (event.key == "g" or event.character == "g") and isinstance(self.focused, DataTable) and not isinstance(self.focused, Input):
+            now = time.time()
+            if getattr(self, "_last_g_time", 0) and (now - self._last_g_time) < 0.5:
+                self._last_g_time = 0
+                if self.focused.row_count > 0:
+                    self.focused.move_cursor(row=0)
+                    event.prevent_default()
+                    event.stop()
+                    return
+            else:
+                self._last_g_time = now
+
+        # Vim Ctrl+D / Ctrl+U (page scrolling)
+        if key_matches(event.key, getattr(event, "character", None), "ctrl+d") and isinstance(self.focused, DataTable):
+            self.focused.action_page_down()
+            event.prevent_default()
+            event.stop()
+            return
+        elif key_matches(event.key, getattr(event, "character", None), "ctrl+u") and isinstance(self.focused, DataTable):
+            self.focused.action_page_up()
+            event.prevent_default()
+            event.stop()
+            return
+
+        # 4. Jump up into Input from row 0 of DataTable on k / Up
+        is_up_key = (
+            event.key in ("up", "k")
+            or event.character == "k"
+            or key_matches(event.key, getattr(event, "character", None), self.keybindings.get("cursor_up", "k"))
+        )
+        if is_up_key and self.focused and self.focused.id == "track-table":
             table = self.query_one("#track-table", DataTable)
             if (table.row_count == 0 or table.cursor_row == 0) and self.active_tab == "search":
                 self.query_one("#search-box", Input).focus()
                 event.prevent_default()
                 event.stop()
                 return
-        elif (event.key in ("up", "k") or event.character == "k") and self.focused and self.focused.id == "side-table":
+        elif is_up_key and self.focused and self.focused.id == "side-table":
             table = self.query_one("#side-table", DataTable)
             if table.row_count == 0 or table.cursor_row == 0:
                 self.query_one("#sidebar-import-input", Input).focus()
@@ -2571,29 +2667,37 @@ class SpoffTUI(App):
         # 5. Dynamic match against self.keybindings
         matched_action = None
         for act_id, bound_key in self.keybindings.items():
-            if bound_key and key_matches(event.key, event.character, bound_key):
+            if bound_key and key_matches(event.key, getattr(event, "character", None), bound_key):
                 matched_action = act_id
                 break
 
         # Fallback secondary aliases
         if not matched_action:
-            if event.key in ("colon", ":", "shift+semicolon", "question_mark") or event.character in (":", "?"):
+            if event.key in ("j", "down") or event.character == "j":
+                matched_action = "cursor_down"
+            elif event.key in ("k", "up") or event.character == "k":
+                matched_action = "cursor_up"
+            elif (event.key == "h" or event.character == "h") and not isinstance(self.focused, Input):
+                matched_action = "focus_sidebar"
+            elif (event.key == "l" or event.character == "l") and not isinstance(self.focused, Input):
+                matched_action = "focus_tracks"
+            elif (event.key in ("J", "shift+down") or event.character == "J") and not isinstance(self.focused, Input):
+                matched_action = "move_item_down"
+            elif (event.key in ("K", "shift+up") or event.character == "K") and not isinstance(self.focused, Input):
+                matched_action = "move_item_up"
+            elif (event.key in ("colon", ":", "shift+semicolon", "question_mark") or event.character in (":", "?")) and not isinstance(self.focused, Input):
                 matched_action = "show_help"
-            elif event.key in ("ctrl+comma",):
+            elif event.key in ("ctrl+comma",) and not isinstance(self.focused, Input):
                 matched_action = "open_settings"
             elif (event.key in ("S", "shift+s") or event.character == "S") and self.keybindings.get("open_spotify_auth") == "L":
                 matched_action = "open_spotify_auth"
-            elif event.key in ("shift+down",) and self.keybindings.get("move_item_down") == "J":
-                matched_action = "move_item_down"
-            elif event.key in ("shift+up",) and self.keybindings.get("move_item_up") == "K":
-                matched_action = "move_item_up"
-            elif event.key in ("shift+delete",) and self.keybindings.get("delete_playlist") == "D":
+            elif (event.key in ("shift+delete",) or event.character == "D") and self.keybindings.get("delete_playlist") == "D":
                 matched_action = "delete_playlist"
-            elif event.key in ("x", "delete") and self.keybindings.get("delete_item") == "d":
+            elif (event.key in ("x", "delete") or event.character in ("x", "d")) and self.keybindings.get("delete_item") == "d":
                 matched_action = "delete_item"
-            elif event.key == "+" and self.keybindings.get("add_to_playlist") == "a":
+            elif (event.key == "+" or event.character in ("+", "a")) and self.keybindings.get("add_to_playlist") == "a":
                 matched_action = "add_to_playlist"
-            elif event.key in ("U",) and self.keybindings.get("check_update") == "u":
+            elif (event.key in ("U",) or event.character in ("u", "U")) and self.keybindings.get("check_update") == "u":
                 matched_action = "check_update"
             elif event.key in ("f1",):
                 matched_action = "vol_mute"
