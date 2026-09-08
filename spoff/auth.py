@@ -767,4 +767,49 @@ def reorder_spotify_playlist_track(
         return True, "Reordered on Spotify"
     return False, err
 
+def delete_spotify_playlist(
+    playlist_id: str,
+    playlist_name: str,
+    token: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Syncs the deletion / unfollowing of a playlist from the user's Spotify account.
+    """
+    if not token:
+        token = get_valid_token()
+    if not token:
+        return False, "Not logged in to Spotify"
+
+    if not has_modify_scopes():
+        return False, "Spotify permission required"
+
+    if playlist_id == "spotify_liked_songs" or playlist_name.strip().lower() == "liked songs":
+        return False, "Cannot delete Liked Songs collection"
+
+    target_spotify_pl_id = None
+    if len(playlist_id) == 22 and playlist_id.isalnum() and not playlist_id.startswith("local_"):
+        target_spotify_pl_id = playlist_id
+    else:
+        local_playlists = load_saved_playlists()
+        for pl in local_playlists:
+            if pl.get("id") == playlist_id and pl.get("spotify_id"):
+                target_spotify_pl_id = pl["spotify_id"]
+                break
+
+    if not target_spotify_pl_id:
+        user_pls = fetch_user_playlists(token)
+        for pl in user_pls:
+            if pl.get("name", "").strip().lower() == playlist_name.strip().lower():
+                target_spotify_pl_id = pl["id"]
+                break
+
+    if not target_spotify_pl_id:
+        return False, "Playlist not found on Spotify"
+
+    ok, _, err = spotify_api_request(f"/playlists/{target_spotify_pl_id}/followers", method="DELETE", token=token)
+    if ok:
+        return True, f"Deleted playlist '{playlist_name}' from Spotify"
+    return False, err
+
+
 

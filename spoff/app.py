@@ -40,7 +40,7 @@ try:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        reorder_spotify_playlist_track, has_modify_scopes
+        reorder_spotify_playlist_track, delete_spotify_playlist, has_modify_scopes
     )
     from .mpris import MPRISService
     from .visualizer import VisualizerWidget, CavaVisualizer
@@ -62,7 +62,7 @@ except ImportError:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        reorder_spotify_playlist_track, has_modify_scopes
+        reorder_spotify_playlist_track, delete_spotify_playlist, has_modify_scopes
     )
     from mpris import MPRISService
     from visualizer import VisualizerWidget, CavaVisualizer
@@ -568,7 +568,8 @@ class HelpModal(ModalScreen[None]):
         right_table.add_row("L / S", "Spotify login & sync")
         right_table.add_row("u / U", "Check / pull GitHub update")
         right_table.add_row("/", "Focus search box")
-        right_table.add_row("Del, d, x", "Delete track / playlist")
+        right_table.add_row("Del, d, x", "Remove track / playlist")
+        right_table.add_row("D, Shift+Del", "Delete whole playlist")
         right_table.add_row(": / Shift+;", "Show keybindings guide")
         right_table.add_row("q", "Quit Spoff")
 
@@ -1228,6 +1229,8 @@ class SpoffTUI(App):
         Binding("delete", "delete_item", "Delete"),
         Binding("d", "delete_item", "Delete", show=False),
         Binding("x", "delete_item", "Delete", show=False),
+        Binding("D", "delete_playlist", "Delete Playlist", show=False),
+        Binding("shift+delete", "delete_playlist", "Delete Playlist", show=False),
         Binding("right", "seek_fwd", "+5s"),
         Binding("left", "seek_bwd", "-5s"),
         Binding("up", "vol_up", "Vol+"),
@@ -1380,11 +1383,11 @@ class SpoffTUI(App):
 
         if self.playlists:
             st.move_cursor(row=0)
-            self.load_playlist_by_index(0)
+            self.load_playlist_by_index(0, focus_tracks=True)
             tt.focus()
         else:
             self.switch_view("search")
-            self.query_one("#search-box", Input).focus()
+            tt.focus()
             try:
                 self.query_one("#sidebar-hint", Static).update("[dim]Enter name or link above to create[/dim]")
             except Exception:
@@ -1416,17 +1419,11 @@ class SpoffTUI(App):
                 self.action_check_update()
                 return
         if self.focused is None or not getattr(self.focused, "can_focus", False):
-            if self.active_tab == "search" and not self.search_results:
-                self.query_one("#search-box", Input).focus()
-            else:
-                self.query_one("#track-table", DataTable).focus()
+            self.query_one("#track-table", DataTable).focus()
 
     def on_key(self, event) -> None:
         if self.focused is None:
-            if self.active_tab == "search" and not self.search_results:
-                self.query_one("#search-box", Input).focus()
-            else:
-                self.query_one("#track-table", DataTable).focus()
+            self.query_one("#track-table", DataTable).focus()
 
         k = str(getattr(event, "key", "")).lower()
         name = str(getattr(event, "name", "")).lower()
@@ -1481,6 +1478,11 @@ class SpoffTUI(App):
                 self.action_move_item_down()
             else:
                 self.action_move_item_up()
+            event.prevent_default()
+            event.stop()
+            return
+        elif (event.key in ("D", "shift+d", "shift+delete") or event.character == "D") and not isinstance(self.focused, Input):
+            self.action_delete_playlist()
             event.prevent_default()
             event.stop()
             return
@@ -1543,15 +1545,16 @@ class SpoffTUI(App):
 
         if view == "search":
             self.render_tracks(self.search_results)
-            if not self.search_results:
-                search_box.focus()
-                self.notify_user("Search: Press / to enter keywords")
-            else:
+            if not (self.focused and self.focused.id == "side-table"):
                 track_table.focus()
+            if not self.search_results:
+                self.notify_user("Search: Press / or Up arrow to type query")
+            else:
                 self.notify_user("")
         elif view == "playlist":
             self.render_tracks(self.current_playlist_tracks)
-            track_table.focus()
+            if not (self.focused and self.focused.id == "side-table"):
+                track_table.focus()
             if not self.playlists:
                 self.notify_user("No playlists yet — enter name in sidebar to create")
             elif not self.current_playlist_tracks:
@@ -1561,7 +1564,8 @@ class SpoffTUI(App):
         elif view == "offline":
             offline_tracks = list(load_offline_index().values())
             self.render_tracks(offline_tracks)
-            track_table.focus()
+            if not (self.focused and self.focused.id == "side-table"):
+                track_table.focus()
             if not offline_tracks:
                 self.notify_user("Offline library is empty — cached tracks appear here")
             else:
@@ -1607,11 +1611,7 @@ class SpoffTUI(App):
 
     def action_focus_tracks(self):
         if not isinstance(self.focused, Input):
-            tt = self.query_one("#track-table", DataTable)
-            if self.active_tab == "search" and not self.search_results:
-                self.query_one("#search-box", Input).focus()
-            else:
-                tt.focus()
+            self.query_one("#track-table", DataTable).focus()
 
     def action_clear_or_unfocus(self):
         f = self.focused
@@ -1633,15 +1633,10 @@ class SpoffTUI(App):
         if f.id == "sidebar-import-input":
             if self.playlists:
                 self.query_one("#side-table", DataTable).focus()
-            elif self.active_tab == "search":
-                self.query_one("#search-box", Input).focus()
             else:
                 self.query_one("#track-table", DataTable).focus()
         elif f.id == "side-table":
-            if self.active_tab == "search":
-                self.query_one("#search-box", Input).focus()
-            else:
-                self.query_one("#track-table", DataTable).focus()
+            self.query_one("#track-table", DataTable).focus()
         elif f.id == "search-box":
             self.query_one("#track-table", DataTable).focus()
         elif f.id == "track-table":
@@ -1654,10 +1649,7 @@ class SpoffTUI(App):
     def action_cursor_down(self):
         f = self.focused
         if f is None:
-            if self.active_tab == "search" and not self.search_results:
-                self.query_one("#search-box", Input).focus()
-            else:
-                self.query_one("#track-table", DataTable).focus()
+            self.query_one("#track-table", DataTable).focus()
             return
 
         if isinstance(f, DataTable):
@@ -1679,10 +1671,7 @@ class SpoffTUI(App):
     def action_cursor_up(self):
         f = self.focused
         if f is None:
-            if self.active_tab == "search" and not self.search_results:
-                self.query_one("#search-box", Input).focus()
-            else:
-                self.query_one("#track-table", DataTable).focus()
+            self.query_one("#track-table", DataTable).focus()
             return
 
         if isinstance(f, DataTable):
@@ -1964,7 +1953,7 @@ class SpoffTUI(App):
                 if synced_count > 0:
                     self.notify_user(f"Synced {synced_count} Spotify playlists/collections into your library!")
                     if self.playlists and self.active_tab == "playlist":
-                        self.load_playlist_by_index(0)
+                        self.load_playlist_by_index(0, focus_tracks=True)
                 else:
                     self.notify_user("Spotify library sync completed.")
 
@@ -2142,7 +2131,7 @@ class SpoffTUI(App):
         except Exception:
             pass
 
-    def load_playlist_by_index(self, idx: int):
+    def load_playlist_by_index(self, idx: int, focus_tracks: bool = False):
         if 0 <= idx < len(self.playlists):
             pl = self.playlists[idx]
             self.current_playlist_id = pl.get("id")
@@ -2161,7 +2150,10 @@ class SpoffTUI(App):
                     self.current_index = -1
                 self.notify_user(f"Loaded playlist '{name}' ({len(self.current_playlist_tracks)} tracks).")
                 self.switch_view("playlist")
-                self.query_one("#track-table", DataTable).focus()
+                if focus_tracks:
+                    self.query_one("#track-table", DataTable).focus()
+                else:
+                    st.focus()
                 return
 
             url = pl.get("url", "")
@@ -2172,7 +2164,10 @@ class SpoffTUI(App):
                 self.render_tracks([])
                 self.notify_user(f"Opened empty playlist '{name}'. Press 'a' on any song to add it.")
                 self.switch_view("playlist")
-                self.query_one("#track-table", DataTable).focus()
+                if focus_tracks:
+                    self.query_one("#track-table", DataTable).focus()
+                else:
+                    st.focus()
 
     def action_add_to_playlist(self):
         f = self.focused
@@ -2258,58 +2253,143 @@ class SpoffTUI(App):
 
         self.push_screen(AddToPlaylistModal(track, self.playlists), handle_modal_result)
 
+    def action_delete_playlist(self):
+        if isinstance(self.focused, Input):
+            return
+
+        target_pl = None
+        target_idx = None
+
+        # 1. If focused on side-table, use sidebar cursor
+        if self.focused and self.focused.id == "side-table":
+            row_idx = self.focused.cursor_row
+            if row_idx is not None and 0 <= row_idx < len(self.playlists):
+                target_idx = row_idx
+                target_pl = self.playlists[row_idx]
+
+        # 2. If viewing playlist tab or we have current_playlist_id
+        if not target_pl and hasattr(self, "current_playlist_id") and self.current_playlist_id:
+            for idx, p in enumerate(self.playlists):
+                if p.get("id") == self.current_playlist_id:
+                    target_idx = idx
+                    target_pl = p
+                    break
+
+        # 3. Fallback to sidebar cursor
+        if not target_pl and self.playlists:
+            st = self.query_one("#side-table", DataTable)
+            idx = st.cursor_row if st.cursor_row is not None else 0
+            if 0 <= idx < len(self.playlists):
+                target_idx = idx
+                target_pl = self.playlists[idx]
+
+        if not target_pl:
+            self.notify_user("No playlist selected to delete.")
+            return
+
+        pname = target_pl.get("name", "Playlist")
+        pl_id = target_pl.get("id")
+
+        def handle_delete_confirm(confirmed: bool) -> None:
+            if not confirmed:
+                return
+            remove_saved_playlist(pl_id)
+            self.playlists = load_saved_playlists()
+            self.refresh_side_table()
+
+            st = self.query_one("#side-table", DataTable)
+            if self.playlists:
+                new_row = max(0, min(target_idx or 0, len(self.playlists) - 1))
+                st.move_cursor(row=new_row)
+            else:
+                st.clear()
+
+            if self.current_playlist_id == pl_id:
+                if self.playlists:
+                    new_row = max(0, min(target_idx or 0, len(self.playlists) - 1))
+                    self.load_playlist_by_index(new_row, focus_tracks=(self.active_tab == "playlist"))
+                else:
+                    self.current_playlist_id = None
+                    self.current_playlist_tracks = []
+                    if self.active_tab == "playlist":
+                        self.render_tracks([])
+
+            # Sync playlist deletion/unfollow with Spotify account in background
+            def _sync_del_pl_bg():
+                ok, msg = delete_spotify_playlist(pl_id, pname)
+                if ok:
+                    self.call_from_thread(self.notify_user, f"Deleted '{pname}' locally and from Spotify.")
+            threading.Thread(target=_sync_del_pl_bg, daemon=True).start()
+
+            self.notify_user(f"Deleted playlist '{pname}'.")
+
+        self.push_screen(
+            ConfirmModal(
+                title="DELETE PLAYLIST",
+                message=f"Permanently delete playlist '[bold #ffffff]{escape(pname)}[/]' from your library?",
+                confirm_label="Delete"
+            ),
+            handle_delete_confirm
+        )
+
     def action_delete_item(self):
         if isinstance(self.focused, Input):
             return
 
         f = self.focused
         if f and f.id == "side-table":
-            row_idx = f.cursor_row
-            if row_idx is not None and 0 <= row_idx < len(self.playlists):
-                target_pl = self.playlists[row_idx]
-                pname = target_pl.get("name", "Playlist")
-
-                def handle_delete_confirm(confirmed: bool) -> None:
-                    if not confirmed:
-                        return
-                    remove_saved_playlist(target_pl["id"])
-                    self.playlists = load_saved_playlists()
-                    self.refresh_side_table()
-
-                    st = self.query_one("#side-table", DataTable)
-                    if self.playlists:
-                        new_row = max(0, min(row_idx, len(self.playlists) - 1))
-                        st.move_cursor(row=new_row)
-
-                    if self.current_playlist_id == target_pl["id"]:
-                        if self.playlists:
-                            new_row = max(0, min(row_idx, len(self.playlists) - 1))
-                            self.load_playlist_by_index(new_row)
-                        else:
-                            self.current_playlist_id = None
-                            self.current_playlist_tracks = []
-                            if self.active_tab == "playlist":
-                                self.render_tracks([])
-
-                    self.notify_user(f"Deleted playlist '{pname}'.")
-
-                self.push_screen(
-                    ConfirmModal(
-                        title="DELETE PLAYLIST",
-                        message=f"Permanently delete playlist '[bold #ffffff]{escape(pname)}[/]' from your library?",
-                        confirm_label="Delete"
-                    ),
-                    handle_delete_confirm
-                )
+            self.action_delete_playlist()
+            return
 
         elif f and f.id == "track-table":
             row_idx = f.cursor_row
-            if row_idx is None:
+            if self.active_tab == "playlist":
+                # If playlist is empty, delete the playlist itself
+                if not self.current_playlist_tracks or row_idx is None or row_idx >= len(self.current_playlist_tracks):
+                    self.action_delete_playlist()
+                    return
+
+                # Otherwise, removing a track from the playlist requires explicit confirmation
+                t = self.current_playlist_tracks[row_idx]
+                t_title = t.get("title", "Track")
+                pl_id = self.current_playlist_id
+                pl_name = next((p.get("name", "Playlist") for p in self.playlists if p.get("id") == pl_id), "Playlist")
+
+                def handle_remove_track_confirm(confirmed: bool) -> None:
+                    if not confirmed:
+                        return
+                    if 0 <= row_idx < len(self.current_playlist_tracks):
+                        removed_track = self.current_playlist_tracks.pop(row_idx)
+                        self.render_tracks(self.current_playlist_tracks)
+                        if self.current_playlist_tracks:
+                            new_row = max(0, min(row_idx, len(self.current_playlist_tracks) - 1))
+                            f.move_cursor(row=new_row)
+                        if pl_id:
+                            update_playlist_tracks(pl_id, self.current_playlist_tracks)
+                            self.playlists = load_saved_playlists()
+                            self.refresh_side_table()
+
+                            def _sync_remove_bg():
+                                ok, msg = remove_track_from_spotify_account(pl_id, pl_name, removed_track)
+                                if ok:
+                                    self.call_from_thread(self.notify_user, f"Removed '{t_title}' from Spotify playlist '{pl_name}'.")
+                            threading.Thread(target=_sync_remove_bg, daemon=True).start()
+
+                        self.notify_user(f"Removed '{t_title}' from playlist '{pl_name}'.")
+
+                self.push_screen(
+                    ConfirmModal(
+                        title="REMOVE TRACK",
+                        message=f"Remove '[bold #ffffff]{escape(t_title)}[/]' from playlist '[bold #ffffff]{escape(pl_name)}[/]'?\n[dim]To delete the entire playlist, press Shift+D[/dim]",
+                        confirm_label="Remove"
+                    ),
+                    handle_remove_track_confirm
+                )
                 return
 
-            if self.active_tab == "offline":
+            elif self.active_tab == "offline":
                 offline_tracks = list(load_offline_index().values())
-                if 0 <= row_idx < len(offline_tracks):
+                if row_idx is not None and 0 <= row_idx < len(offline_tracks):
                     t = offline_tracks[row_idx]
                     t_title = t.get("title", "Track")
                     delete_cached_track(t["id"])
@@ -2320,38 +2400,17 @@ class SpoffTUI(App):
                         f.move_cursor(row=new_row)
                     self.notify_user(f"Removed '{t_title}' from offline disk cache.")
 
-            elif self.active_tab == "playlist":
-                if 0 <= row_idx < len(self.current_playlist_tracks):
-                    t = self.current_playlist_tracks.pop(row_idx)
-                    t_title = t.get("title", "Track")
-                    self.render_tracks(self.current_playlist_tracks)
-                    if self.current_playlist_tracks:
-                        new_row = max(0, min(row_idx, len(self.current_playlist_tracks) - 1))
-                        f.move_cursor(row=new_row)
-                    if hasattr(self, "current_playlist_id") and self.current_playlist_id:
-                        update_playlist_tracks(self.current_playlist_id, self.current_playlist_tracks)
-                        self.playlists = load_saved_playlists()
-                        self.refresh_side_table()
-
-                        # Asynchronous sync removal to Spotify account
-                        pl_id = self.current_playlist_id
-                        pl_name = next((p.get("name", "Playlist") for p in self.playlists if p.get("id") == pl_id), "Playlist")
-                        def _sync_remove_bg():
-                            ok, msg = remove_track_from_spotify_account(pl_id, pl_name, t)
-                            if ok:
-                                self.call_from_thread(self.notify_user, f"Removed '{t_title}' from Spotify playlist '{pl_name}'.")
-                        threading.Thread(target=_sync_remove_bg, daemon=True).start()
-
-                    self.notify_user(f"Removed '{t_title}' from playlist.")
-
             elif self.active_tab == "search":
-                if 0 <= row_idx < len(self.search_results):
+                if row_idx is not None and 0 <= row_idx < len(self.search_results):
                     t = self.search_results.pop(row_idx)
                     self.render_tracks(self.search_results)
                     if self.search_results:
                         new_row = max(0, min(row_idx, len(self.search_results) - 1))
                         f.move_cursor(row=new_row)
                     self.notify_user(f"Removed '{t.get('title')}' from search results.")
+        else:
+            if self.active_tab == "playlist":
+                self.action_delete_playlist()
 
     def on_track_finished(self):
         self.call_from_thread(self.action_next_track)
@@ -2419,7 +2478,7 @@ class SpoffTUI(App):
                     new_pl = create_local_playlist(u)
                     self.playlists = load_saved_playlists()
                     self.refresh_side_table()
-                    self.load_playlist_by_index(0)
+                    self.load_playlist_by_index(0, focus_tracks=True)
                     self.notify_user(f"Created playlist '{u}'. Press 'a' on any song to add it.")
 
     @work(thread=True)
@@ -2480,7 +2539,7 @@ class SpoffTUI(App):
         if table_id == "side-table":
             idx = event.cursor_row
             if idx is not None and 0 <= idx < len(self.playlists):
-                self.load_playlist_by_index(idx)
+                self.load_playlist_by_index(idx, focus_tracks=False)
         elif table_id == "track-table":
             self.play_current_table_row(event.cursor_row)
 
