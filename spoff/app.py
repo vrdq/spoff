@@ -1459,26 +1459,35 @@ class SpoffTUI(App):
     DataTable > .datatable--even-row,
     DataTable > .datatable--odd-row {
         background: transparent;
+        color: #888888;
     }
 
     DataTable > .datatable--cursor {
-        background: #252525;
+        background: transparent;
+        color: #cccccc;
+        text-style: bold;
     }
 
     DataTable:focus > .datatable--cursor {
-        background: #2e2e2e;
+        background: transparent;
+        color: #ffffff;
+        text-style: bold;
     }
 
     #side-table > .datatable--cursor {
-        background: #252525;
+        background: transparent;
+        color: #cccccc;
+        text-style: bold;
     }
 
     #side-table:focus > .datatable--cursor {
-        background: #2e2e2e;
+        background: transparent;
+        color: #ffffff;
+        text-style: bold;
     }
 
     DataTable > .datatable--hover {
-        background: #1f1f1f;
+        background: transparent;
     }
 
     DataTable > .datatable--header-hover {
@@ -1578,11 +1587,15 @@ class SpoffTUI(App):
     }
 
     #lyrics-table > .datatable--cursor {
-        background: #252525;
+        background: transparent;
+        color: #cccccc;
+        text-style: bold;
     }
 
     #lyrics-table:focus > .datatable--cursor {
-        background: #2e2e2e;
+        background: transparent;
+        color: #ffffff;
+        text-style: bold;
     }
 
     #shuf-pill, #rep-pill {
@@ -1660,7 +1673,7 @@ class SpoffTUI(App):
     }
 
     #modal-table > .datatable--cursor {
-        background: #2e2e2e;
+        background: transparent;
         color: #ffffff;
         text-style: bold;
     }
@@ -2073,11 +2086,15 @@ class SpoffTUI(App):
     }
 
     #settings-table > .datatable--cursor {
-        background: #252525;
+        background: transparent;
+        color: #cccccc;
+        text-style: bold;
     }
 
     #settings-table:focus > .datatable--cursor {
-        background: #2e2e2e;
+        background: transparent;
+        color: #ffffff;
+        text-style: bold;
     }
 
     #settings-status-line {
@@ -2912,7 +2929,7 @@ class SpoffTUI(App):
             t_id = t.get("id") or str(hash(t.get("title", "") + t.get("artist", "")))
             is_cached = get_cached_track_path(t_id) is not None if t_id else False
             if is_cached:
-                type_tag = "[bold #2aa198]OFFLINE[/]"
+                type_tag = "[bold #569f68]OFFLINE[/]"
             elif t.get("source") == "spotify":
                 type_tag = "[bold #569f68]SPOT[/]"
             elif t.get("source") in ("ytmusic", "youtube") or self.active_tab == "search":
