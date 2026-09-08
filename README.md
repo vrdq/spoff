@@ -6,7 +6,8 @@ A fast, minimalist, dark-monochrome Spotify and YouTube music TUI with transpare
 
 ## Features
 
-- **No Credentials or Cookies**: No Spotify Premium, API tokens, or web cookies required. Parses public Spotify playlist/album links directly.
+- **No Credentials Required (Default)**: Works out of the box with no Spotify Premium, API tokens, or web cookies required. Parses public Spotify playlist/album links directly.
+- **Seamless Spotify Account Sync**: Optional one-click Spotify login (`L` or `S`) via browser OAuth (PKCE, zero developer portal setup) to sync private playlists and Liked Songs into Spoff.
 - **Instant Streaming + Transparent Caching**: Tracks start streaming in seconds and simultaneously save to local storage (`~/.local/share/spoff/cache/`) for offline playback.
 - **Offline Library**: Browse, search, and play cached tracks with zero internet connection in `[3] Offline Library`.
 - **Local Playlist Management**: Create local playlists, add tracks with `a` or `+`, and manage playlists safely with confirmation dialogs.
@@ -86,6 +87,7 @@ uv run python3 -m spoff
 | `0` – `9` | Jump directly to 0% – 90% of song on scrub bar |
 | `/` | Focus live YouTube search bar |
 | `:` (or `Shift`+`;`) | Open Keybindings & Usage Guide cheat sheet |
+| `L` / `S` | Spotify account login & library sync dialog |
 | `i` | Focus playlist import / create input |
 | `a` / `+` | Add highlighted or playing track to playlist |
 | `Tab` | Cycle active focus (Sidebar $\rightarrow$ Tracks $\rightarrow$ Scrub Bar) |
