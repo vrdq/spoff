@@ -1,3 +1,4 @@
+import re
 import os
 import json
 import time
@@ -33,7 +34,10 @@ SCOPES = [
     "user-read-email",
     "playlist-read-private",
     "playlist-read-collaborative",
-    "user-library-read"
+    "playlist-modify-public",
+    "playlist-modify-private",
+    "user-library-read",
+    "user-library-modify",
 ]
 
 AUTH_FILE = DATA_DIR / "spotify_auth.json"
@@ -445,3 +449,286 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
 
     save_saved_playlists(existing_playlists)
     return synced_count
+
+def has_modify_scopes() -> bool:
+    """Checks if the saved Spotify session has write permissions for playlists and library."""
+    auth = load_spotify_auth()
+    if not auth:
+        return False
+    granted_scopes = set(auth.get("scope", "").split())
+    required = {"playlist-modify-public", "playlist-modify-private", "user-library-modify"}
+    return bool(required.intersection(granted_scopes))
+
+def spotify_api_request(
+    endpoint: str,
+    method: str = "GET",
+    body: Optional[Dict[str, Any]] = None,
+    token: Optional[str] = None,
+    max_retries: int = 2
+) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    """
+    Performs an authorized HTTP request to Spotify Web API with auto-retry on 429 rate limit.
+    Returns (success, response_dict_or_none, error_message).
+    """
+    if not token:
+        token = get_valid_token()
+    if not token:
+        return False, None, "Not authenticated with Spotify"
+
+    url = f"{SPOTIFY_API_BASE}{endpoint}" if endpoint.startswith("/") else endpoint
+    payload = json.dumps(body).encode("utf-8") if body is not None else None
+
+    for attempt in range(max_retries + 1):
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "Spoff/0.1.0",
+                "Content-Type": "application/json"
+            },
+            method=method.upper()
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=14) as resp:
+                content = resp.read().decode("utf-8")
+                data = json.loads(content) if content.strip() else {}
+                return True, data, ""
+        except urllib.error.HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8")
+                err_json = json.loads(err_body)
+                msg = err_json.get("error", {}).get("message", str(e))
+            except Exception:
+                msg = f"HTTP {e.code}: {e.reason}"
+
+            if e.code == 429 and attempt < max_retries:
+                retry_header = e.headers.get("retry-after") or e.headers.get("Retry-After") or "2"
+                try:
+                    retry_sec = min(int(retry_header), 6)
+                except ValueError:
+                    retry_sec = 2
+                logger.warning(f"Spotify 429 rate limit on {endpoint}, waiting {retry_sec}s (attempt {attempt+1}/{max_retries})")
+                time.sleep(retry_sec)
+                continue
+
+            if e.code == 403 and "scope" in msg.lower():
+                return False, None, "Spotify permission required: please re-link account (press 'L') for playlist sync"
+
+            logger.error(f"Spotify API {method} {endpoint} failed ({e.code}): {msg}")
+            return False, None, msg
+        except Exception as e:
+            logger.error(f"Spotify API {method} {endpoint} network error: {e}")
+            return False, None, str(e)
+
+    return False, None, "Spotify request timed out after retries"
+
+def search_spotify_track(title: str, artist: str = "", token: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Searches Spotify for a track by title and artist.
+    Returns the track info dict with 'id' and 'uri', or None.
+    """
+    if not token:
+        token = get_valid_token()
+    if not token:
+        return None
+
+    clean_title = re.sub(r"\(.*?\)|\[.*?\]", "", title).strip()
+    clean_artist = re.sub(r"\(.*?\)|\[.*?\]", "", artist).strip()
+
+    query_parts = []
+    if clean_title:
+        query_parts.append(f'track:"{clean_title}"')
+    if clean_artist and clean_artist.lower() != "unknown":
+        query_parts.append(f'artist:"{clean_artist}"')
+
+    q_str = " ".join(query_parts) if query_parts else title
+    url = f"/search?q={urllib.parse.quote(q_str)}&type=track&limit=1"
+    ok, data, _ = spotify_api_request(url, method="GET", token=token)
+
+    items = []
+    if ok and data and "tracks" in data:
+        items = data["tracks"].get("items", [])
+
+    if not items:
+        plain_q = f"{clean_title} {clean_artist}".strip()
+        url = f"/search?q={urllib.parse.quote(plain_q)}&type=track&limit=1"
+        ok, data, _ = spotify_api_request(url, method="GET", token=token)
+        if ok and data and "tracks" in data:
+            items = data["tracks"].get("items", [])
+
+    if items:
+        item = items[0]
+        return {
+            "id": item.get("id"),
+            "uri": item.get("uri"),
+            "title": item.get("name"),
+            "artist": ", ".join(a.get("name", "Unknown") for a in item.get("artists", [])),
+            "duration_ms": item.get("duration_ms", 0)
+        }
+    return None
+
+def resolve_spotify_track_info(track: Dict[str, Any], token: Optional[str] = None) -> Optional[Tuple[str, str]]:
+    """
+    Resolves a track to its (spotify_track_id, spotify_track_uri).
+    If the track is already from Spotify, returns directly.
+    Otherwise, queries Spotify search to find the matching Spotify track.
+    """
+    uri = track.get("uri", "")
+    t_id = track.get("id", "")
+
+    if uri and uri.startswith("spotify:track:"):
+        spotify_id = uri.split(":")[-1]
+        return spotify_id, uri
+
+    if t_id and len(t_id) == 22 and t_id.isalnum():
+        return t_id, f"spotify:track:{t_id}"
+
+    found = search_spotify_track(track.get("title", ""), track.get("artist", ""), token=token)
+    if found and found.get("id") and found.get("uri"):
+        track["uri"] = found["uri"]
+        track["spotify_id"] = found["id"]
+        return found["id"], found["uri"]
+
+    return None
+
+def add_track_to_spotify_account(
+    playlist_id: str,
+    playlist_name: str,
+    track: Dict[str, Any],
+    token: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Syncs the addition of a track to the user's Spotify account.
+    Handles Liked Songs, existing Spotify playlists, and local playlists (matching or creating them on Spotify).
+    Returns (success, status_message).
+    """
+    if not token:
+        token = get_valid_token()
+    if not token:
+        return False, "Not logged in to Spotify"
+
+    if not has_modify_scopes():
+        return False, "Spotify permission required: please re-link account (press 'L') to grant playlist sync"
+
+    res = resolve_spotify_track_info(track, token=token)
+    if not res:
+        return False, f"Could not find '{track.get('title')}' on Spotify"
+    spotify_track_id, spotify_track_uri = res
+
+    # 1. Liked Songs
+    if playlist_id == "spotify_liked_songs" or playlist_name.strip().lower() == "liked songs":
+        ok, _, err = spotify_api_request(f"/me/tracks?ids={spotify_track_id}", method="PUT", token=token)
+        if ok:
+            return True, "Synced to Spotify Liked Songs"
+        return False, err
+
+    # 2. Existing Spotify playlist ID check
+    target_spotify_pl_id = None
+    if len(playlist_id) == 22 and playlist_id.isalnum() and not playlist_id.startswith("local_"):
+        target_spotify_pl_id = playlist_id
+    else:
+        local_playlists = load_saved_playlists()
+        for pl in local_playlists:
+            if pl.get("id") == playlist_id and pl.get("spotify_id"):
+                target_spotify_pl_id = pl["spotify_id"]
+                break
+
+    # 3. If not found by ID, search user's playlists by name
+    if not target_spotify_pl_id:
+        user_pls = fetch_user_playlists(token)
+        for pl in user_pls:
+            if pl.get("name", "").strip().lower() == playlist_name.strip().lower():
+                target_spotify_pl_id = pl["id"]
+                break
+
+    # 4. If still not found, create the playlist on Spotify
+    if not target_spotify_pl_id:
+        create_body = {
+            "name": playlist_name,
+            "description": "Synced from Spoff",
+            "public": False
+        }
+        ok_create, pl_data, err = spotify_api_request("/me/playlists", method="POST", body=create_body, token=token)
+        if not ok_create or not pl_data or "id" not in pl_data:
+            user_prof = fetch_current_user_profile(token)
+            if user_prof and user_prof.get("id"):
+                ok_create, pl_data, err = spotify_api_request(f"/users/{user_prof['id']}/playlists", method="POST", body=create_body, token=token)
+
+        if ok_create and pl_data and "id" in pl_data:
+            target_spotify_pl_id = pl_data["id"]
+            local_playlists = load_saved_playlists()
+            for pl in local_playlists:
+                if pl.get("id") == playlist_id:
+                    pl["spotify_id"] = target_spotify_pl_id
+                    save_saved_playlists(local_playlists)
+                    break
+        else:
+            return False, f"Failed to create playlist on Spotify: {err}"
+
+    # 5. Add track to Spotify playlist
+    add_body = {
+        "uris": [spotify_track_uri]
+    }
+    ok_add, _, err = spotify_api_request(f"/playlists/{target_spotify_pl_id}/tracks", method="POST", body=add_body, token=token)
+    if ok_add:
+        return True, f"Synced to Spotify playlist '{playlist_name}'"
+    return False, f"Failed to add track to Spotify: {err}"
+
+def remove_track_from_spotify_account(
+    playlist_id: str,
+    playlist_name: str,
+    track: Dict[str, Any],
+    token: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Syncs the removal of a track from the user's Spotify account.
+    """
+    if not token:
+        token = get_valid_token()
+    if not token:
+        return False, "Not logged in to Spotify"
+
+    if not has_modify_scopes():
+        return False, "Spotify permission required: please re-link account (press 'L')"
+
+    res = resolve_spotify_track_info(track, token=token)
+    if not res:
+        return False, "Track not found on Spotify"
+    spotify_track_id, spotify_track_uri = res
+
+    if playlist_id == "spotify_liked_songs" or playlist_name.strip().lower() == "liked songs":
+        ok, _, err = spotify_api_request(f"/me/tracks?ids={spotify_track_id}", method="DELETE", token=token)
+        if ok:
+            return True, "Removed from Spotify Liked Songs"
+        return False, err
+
+    target_spotify_pl_id = None
+    if len(playlist_id) == 22 and playlist_id.isalnum() and not playlist_id.startswith("local_"):
+        target_spotify_pl_id = playlist_id
+    else:
+        local_playlists = load_saved_playlists()
+        for pl in local_playlists:
+            if pl.get("id") == playlist_id and pl.get("spotify_id"):
+                target_spotify_pl_id = pl["spotify_id"]
+                break
+
+    if not target_spotify_pl_id:
+        user_pls = fetch_user_playlists(token)
+        for pl in user_pls:
+            if pl.get("name", "").strip().lower() == playlist_name.strip().lower():
+                target_spotify_pl_id = pl["id"]
+                break
+
+    if not target_spotify_pl_id:
+        return False, "Playlist not found on Spotify"
+
+    del_body = {
+        "tracks": [{"uri": spotify_track_uri}]
+    }
+    ok_del, _, err = spotify_api_request(f"/playlists/{target_spotify_pl_id}/tracks", method="DELETE", body=del_body, token=token)
+    if ok_del:
+        return True, f"Removed from Spotify playlist '{playlist_name}'"
+    return False, err
+

@@ -7,10 +7,12 @@ A fast, minimalist, dark-monochrome Spotify and YouTube music TUI with transpare
 ## Features
 
 - **No Credentials Required (Default)**: Works out of the box with no Spotify Premium, API tokens, or web cookies required. Parses public Spotify playlist/album links directly.
-- **Seamless Spotify Account Sync**: Optional one-click Spotify login (`L` or `S`) via browser OAuth (PKCE, zero developer portal setup) to sync private playlists and Liked Songs into Spoff.
+- **Two-Way Spotify Account Sync**: Connect your Spotify account (`L`) to import your playlists and Liked Songs. Adding or removing songs in Spoff automatically syncs to your Spotify account in real time.
+- **Desktop Media Integration (MPRIS 2)**: Seamlessly integrates with system media tabs, Waybar, lockscreens, and hardware media keys via `playerctl` and standard MPRIS D-Bus.
+- **Integrated CAVA Audio Visualizer**: Real-time PipeWire audio spectrum visualizer embedded directly into the bottom player deck.
 - **Instant Streaming + Transparent Caching**: Tracks start streaming in seconds and simultaneously save to local storage (`~/.local/share/spoff/cache/`) for offline playback.
 - **Offline Library**: Browse, search, and play cached tracks with zero internet connection in `[3] Offline Library`.
-- **Local Playlist Management**: Create local playlists, add tracks with `a` or `+`, and manage playlists safely with confirmation dialogs.
+- **Automatic GitHub Updates**: Built-in update notifications on new GitHub pushes (`u` in-app) or `spoff --update` from the command line.
 - **Monochrome Terminal Aesthetic**: Designed to match dark terminal themes (`#131313`) with subtle sage green indicators, single-line borders, and zero emojis.
 - **Vim Navigation**: Full support for `h`, `j`, `k`, `l`, `Tab`, and arrow keys.
 
@@ -98,6 +100,7 @@ uv run python3 -m spoff
 | `1` | View 1: Search |
 | `2` | View 2: Playlist |
 | `3` | View 3: Offline Library |
+| `u` | Check for updates & install latest commit from GitHub |
 | `Escape` | Unfocus input / return from scrub bar to tracks / dismiss modal |
 | `q` | Quit |
 

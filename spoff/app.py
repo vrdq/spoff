@@ -33,8 +33,12 @@ try:
         load_spotify_auth, save_spotify_auth, logout_spotify, get_valid_token,
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
-        SPOTIFY_PORT
+        SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
+        has_modify_scopes
     )
+    from .mpris import MPRISService
+    from .visualizer import CavaVisualizer
+    from .updater import check_for_updates, perform_update, run_cli_update
 except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, parse_spotify_url
     from storage import (
@@ -50,8 +54,12 @@ except ImportError:
         load_spotify_auth, save_spotify_auth, logout_spotify, get_valid_token,
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
-        SPOTIFY_PORT
+        SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
+        has_modify_scopes
     )
+    from mpris import MPRISService
+    from visualizer import CavaVisualizer
+    from updater import check_for_updates, perform_update, run_cli_update
 
 logger = logging.getLogger("spoff")
 
@@ -89,8 +97,11 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
         if self.playlists:
             for p in self.playlists:
                 p_name = p.get("name", "Untitled")
+                p_id = p.get("id", "")
                 tracks_count = len(p.get("tracks", []))
-                table.add_row(f"{p_name}  [dim]({tracks_count} tracks)[/dim]")
+                is_spotify = p_id == "spotify_liked_songs" or (len(p_id) == 22 and p_id.isalnum()) or bool(p.get("spotify_id"))
+                tag = " [#569f68][Spotify][/]" if is_spotify else ""
+                table.add_row(f"{p_name}{tag}  [dim]({tracks_count} tracks)[/dim]")
         else:
             table.display = False
             self.query_one("#modal-subtitle", Static).update("[dim]No existing playlists yet — type a name above to create one[/dim]")
@@ -160,6 +171,8 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
         Binding("escape", "dismiss_modal", "Close"),
         Binding("s", "sync_library", "Sync", show=False),
         Binding("S", "sync_library", "Sync", show=False),
+        Binding("r", "relink_account", "Re-link", show=False),
+        Binding("R", "relink_account", "Re-link", show=False),
         Binding("o", "logout_account", "Log Out", show=False),
         Binding("O", "logout_account", "Log Out", show=False),
     ]
@@ -183,8 +196,12 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
                 yield Static(f"Logged in as: [bold #ffffff]{escape(str(name))}[/]  [#767676](@{escape(str(u_id))})[/]", id="spotify-user-info")
                 yield Static(f"Account: [bold #569f68]Spotify {escape(str(plan))}[/]", id="spotify-desc")
                 yield Static("Synchronize your Spotify playlists and Liked Songs anytime.", id="spotify-status")
-                yield Static("", id="spotify-instruction")
-                yield Static("[bold #569f68][Enter / S][/] Sync Library    [bold #c47676][O][/] Log Out    [#767676][Esc][/] Close", id="spotify-hint")
+                if not has_modify_scopes():
+                    yield Static("[bold #c4a768]Two-way sync notice:[/] Account permissions need an update for playlist editing.\nPress [bold #569f68][R][/] to re-link Spotify with two-way sync permissions.", id="spotify-instruction")
+                    yield Static("[bold #569f68][S][/] Sync Library    [bold #569f68][R][/] Re-link for Sync    [bold #c47676][O][/] Log Out    [#767676][Esc][/] Close", id="spotify-hint")
+                else:
+                    yield Static("[#569f68]Two-way playlist & Liked Songs synchronization active.[/]", id="spotify-instruction")
+                    yield Static("[bold #569f68][Enter / S][/] Sync Library    [bold #c47676][O][/] Log Out    [#767676][Esc][/] Close", id="spotify-hint")
             else:
                 yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff.", id="spotify-desc")
                 yield Static("[dim]Status: Not connected[/dim]", id="spotify-status")
@@ -208,6 +225,9 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
     def action_sync_library(self) -> None:
         if self.auth_session and get_valid_token():
             self.dismiss("sync_now")
+
+    def action_relink_account(self) -> None:
+        self.start_browser_login()
 
     def action_logout_account(self) -> None:
         if self.auth_session:
@@ -239,6 +259,10 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
             event.stop()
         elif (event.key in ("s", "S") or event.character in ("s", "S")) and not isinstance(self.focused, Input):
             self.action_sync_library()
+            event.prevent_default()
+            event.stop()
+        elif (event.key in ("r", "R") or event.character in ("r", "R")) and not isinstance(self.focused, Input):
+            self.action_relink_account()
             event.prevent_default()
             event.stop()
         elif (event.key in ("o", "O") or event.character in ("o", "O")) and not isinstance(self.focused, Input):
@@ -327,6 +351,66 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
 
         threading.Thread(target=_worker, daemon=True).start()
 
+class UpdateModal(ModalScreen[bool]):
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("n", "cancel", "No", show=False),
+        Binding("enter", "confirm", "Update"),
+        Binding("y", "confirm", "Yes", show=False),
+        Binding("u", "confirm", "Update", show=False),
+    ]
+
+    def __init__(self, update_info: Dict[str, Any]):
+        super().__init__()
+        self.update_info = update_info
+        self.is_updating = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="update-dialog"):
+            yield Static("SPOFF UPDATE AVAILABLE", id="update-title")
+            cur_sha = self.update_info.get("local_sha", "unknown")
+            new_sha = self.update_info.get("remote_sha", "latest")
+            msg = self.update_info.get("message", "")
+            author = self.update_info.get("author", "vrdq")
+            date = self.update_info.get("date", "")[:10]
+
+            yield Static(f"Installed: [dim]{escape(cur_sha)}[/]  →  GitHub push: [bold #569f68]{escape(new_sha)}[/]", id="update-versions")
+            yield Static(f"Commit: [bold #ffffff]{escape(msg)}[/]  [dim]by {escape(author)} ({escape(date)})[/]", id="update-commit")
+            yield Static("Pull latest updates and sync dependencies from github.com/vrdq/spoff?", id="update-prompt")
+            yield Static("", id="update-status")
+            yield Static("[bold #569f68][Enter / Y][/] Update Now    [#767676][Esc / N][/] Later", id="update-hint")
+
+    def action_confirm(self) -> None:
+        if self.is_updating:
+            return
+        self.is_updating = True
+        try:
+            self.query_one("#update-status", Static).update("[bold #c4a768]Pulling latest changes from GitHub...[/]")
+        except Exception:
+            pass
+
+        def _worker():
+            ok, msg = perform_update()
+            def _done():
+                if ok:
+                    try:
+                        self.query_one("#update-status", Static).update(f"[bold #569f68]{escape(msg)} Restart Spoff to apply.[/]")
+                        self.query_one("#update-hint", Static).update("[dim]Press Esc or Enter to close[/dim]")
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        self.query_one("#update-status", Static).update(f"[bold #c47676]{escape(msg)}[/]")
+                    except Exception:
+                        pass
+                self.is_updating = False
+            self.app.call_from_thread(_done)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
 class HelpModal(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "dismiss_modal", "Close"),
@@ -375,6 +459,7 @@ class HelpModal(ModalScreen[None]):
         right_table.add_row("a, +", "Add track to playlist")
         right_table.add_row("i", "New playlist / import link")
         right_table.add_row("L / S", "Spotify login & sync")
+        right_table.add_row("u / U", "Check / pull GitHub update")
         right_table.add_row("/", "Focus search box")
         right_table.add_row("Del, d, x", "Delete track / playlist")
         right_table.add_row(": / Shift+;", "Show keybindings guide")
@@ -892,6 +977,63 @@ class SpoffTUI(App):
         margin-right: 2;
         color: #555555;
     }
+
+    #update-pill {
+        width: auto;
+        margin-right: 2;
+        color: #c4a768;
+        text-style: bold;
+    }
+
+    #deck-visualizer {
+        width: auto;
+        margin-right: 2;
+    }
+
+    /* MODAL: UPDATE */
+    UpdateModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.75);
+    }
+
+    #update-dialog {
+        width: 72;
+        height: auto;
+        background: #181818;
+        border: solid #2a2a2a;
+        padding: 1 2;
+    }
+
+    #update-title {
+        text-style: bold;
+        color: #ffffff;
+        margin-bottom: 1;
+    }
+
+    #update-versions {
+        color: #cccccc;
+        margin-bottom: 1;
+    }
+
+    #update-commit {
+        color: #e2e2e2;
+        margin-bottom: 1;
+    }
+
+    #update-prompt {
+        color: #767676;
+        margin-bottom: 1;
+    }
+
+    #update-status {
+        color: #569f68;
+        margin-bottom: 1;
+    }
+
+    #update-hint {
+        color: #767676;
+        margin-top: 1;
+    }
     """
 
     BINDINGS = [
@@ -925,6 +1067,8 @@ class SpoffTUI(App):
         Binding("L", "open_spotify_auth", "Spotify", show=False),
         Binding("s", "open_spotify_auth", "Spotify", show=False),
         Binding("S", "open_spotify_auth", "Spotify", show=False),
+        Binding("u", "check_update", "Update", show=False),
+        Binding("U", "check_update", "Update", show=False),
         Binding("colon", "show_help", "Help", show=False),
         Binding("shift+semicolon", "show_help", "Help", show=False),
         Binding("question_mark", "show_help", "Help", show=False),
@@ -941,6 +1085,21 @@ class SpoffTUI(App):
     def __init__(self):
         super().__init__()
         self.player = MPVController()
+        self.visualizer = CavaVisualizer(bars=14)
+        mpris_callbacks = {
+            "play_pause": lambda: self.call_from_thread(self.action_toggle_play),
+            "play": lambda: self.call_from_thread(self._mpris_play),
+            "pause": lambda: self.call_from_thread(self._mpris_pause),
+            "next": lambda: self.call_from_thread(self.action_next_track),
+            "prev": lambda: self.call_from_thread(self.action_prev_track),
+            "stop": lambda: self.call_from_thread(self._mpris_stop),
+            "seek": lambda sec: self.call_from_thread(self._mpris_seek, sec),
+            "set_position": lambda sec: self.call_from_thread(self._mpris_set_pos, sec),
+            "set_volume": lambda vol: self.call_from_thread(self._mpris_set_vol, vol),
+            "quit": lambda: self.call_from_thread(self.action_quit_app),
+        }
+        self.mpris = MPRISService(mpris_callbacks)
+        self.update_info: Optional[Dict[str, Any]] = None
         self.queue: List[Dict[str, Any]] = []
         self.current_index: int = -1
         self.playlists: List[Dict[str, Any]] = []
@@ -955,6 +1114,15 @@ class SpoffTUI(App):
 
     def _cleanup_on_exit(self):
         try:
+            self.visualizer.stop()
+        except Exception:
+            pass
+        try:
+            if self.mpris:
+                self.mpris.stop()
+        except Exception:
+            pass
+        try:
             self.player.stop()
         except Exception:
             pass
@@ -965,6 +1133,7 @@ class SpoffTUI(App):
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-bar"):
             yield Static(r"[bold #ffffff]\[1] Search[/]    [#555555]\[2] Playlists    \[3] Offline[/]", id="nav-bar")
+            yield Static("", id="update-pill")
             yield Static("[#555555]L: Spotify[/]", id="spotify-pill")
             yield Static("[dim]STANDBY[/dim]", id="status-pill")
 
@@ -983,6 +1152,7 @@ class SpoffTUI(App):
             yield Static("", id="notification-line")
             with Horizontal(id="deck-line-1"):
                 yield Static("No track playing", id="deck-track")
+                yield Static("", id="deck-visualizer")
                 yield Static("[dim]IDLE[/dim]", id="deck-source")
             with Horizontal(id="deck-line-2"):
                 yield Static("00:00", id="time-elapsed")
@@ -994,6 +1164,9 @@ class SpoffTUI(App):
         self.player.start_mpv()
         self.playlists = load_saved_playlists()
         self.update_spotify_pill()
+        self.mpris.start()
+        self.visualizer.start()
+        self.check_github_updates_bg()
 
         st = self.query_one("#side-table", DataTable)
         st.add_column("Playlist", width=38)
@@ -1031,9 +1204,13 @@ class SpoffTUI(App):
             _update()
 
     def on_click(self, event) -> None:
-        if getattr(event, "widget", None) and getattr(event.widget, "id", None) == "spotify-pill":
-            self.action_open_spotify_auth()
-            return
+        if getattr(event, "widget", None):
+            if event.widget.id == "spotify-pill":
+                self.action_open_spotify_auth()
+                return
+            elif event.widget.id == "update-pill":
+                self.action_check_update()
+                return
         if self.focused is None or not getattr(self.focused, "can_focus", False):
             if self.active_tab == "search" and not self.search_results:
                 self.query_one("#search-box", Input).focus()
@@ -1084,6 +1261,11 @@ class SpoffTUI(App):
             return
         elif (event.key in ("s", "S", "L") or event.character in ("s", "S", "L")) and not isinstance(self.focused, Input) and not (isinstance(self.focused, ScrubBar) and event.character == "L"):
             self.action_open_spotify_auth()
+            event.prevent_default()
+            event.stop()
+            return
+        elif (event.key in ("u", "U") or event.character in ("u", "U")) and not isinstance(self.focused, Input):
+            self.action_check_update()
             event.prevent_default()
             event.stop()
             return
@@ -1405,6 +1587,82 @@ class SpoffTUI(App):
             logger.error(f"Error syncing Spotify library: {e}")
             self.notify_user(f"Sync error: {e}")
 
+    def _mpris_play(self):
+        if self.player.is_paused:
+            self.player.toggle_pause()
+            self.update_player_hud()
+
+    def _mpris_pause(self):
+        if not self.player.is_paused and self.player.current_track:
+            self.player.toggle_pause()
+            self.update_player_hud()
+
+    def _mpris_stop(self):
+        self.player.stop()
+        self.current_index = -1
+        if self.mpris:
+            self.mpris.update_track(None)
+        self.update_player_hud()
+
+    def _mpris_seek(self, sec: float):
+        self.player.seek(sec)
+        self.update_player_hud()
+
+    def _mpris_set_pos(self, sec: float):
+        self.player.seek_absolute(sec)
+        self.update_player_hud()
+
+    def _mpris_set_vol(self, vol: int):
+        self.volume = max(0, min(100, vol))
+        self.player.set_volume(self.volume)
+        self.update_player_hud()
+
+    @work(thread=True)
+    def check_github_updates_bg(self):
+        time.sleep(2.5)
+        try:
+            info = check_for_updates()
+            if info and info.get("has_update"):
+                self.update_info = info
+                def _notify():
+                    try:
+                        self.query_one("#update-pill", Static).update("[bold #c4a768]▲ Update (u)[/]")
+                    except Exception:
+                        pass
+                    msg = info.get("message", "")
+                    sha = info.get("remote_sha", "")
+                    self.notify_user(f"Update available: {sha} ({msg}) — Press 'u' to update")
+                self.call_from_thread(_notify)
+        except Exception as e:
+            logger.debug(f"Background update check failed: {e}")
+
+    def action_check_update(self):
+        if self.update_info:
+            def _handle(confirmed):
+                if confirmed:
+                    self.notify_user("Updated to latest version! Please restart Spoff.")
+                    try:
+                        self.query_one("#update-pill", Static).update("[bold #569f68]✓ Up to date[/]")
+                    except Exception:
+                        pass
+            self.push_screen(UpdateModal(self.update_info), _handle)
+        else:
+            self.notify_user("Checking for updates on GitHub...")
+            def _check():
+                info = check_for_updates()
+                if info and info.get("has_update"):
+                    self.update_info = info
+                    def _show():
+                        try:
+                            self.query_one("#update-pill", Static).update("[bold #c4a768]▲ Update (u)[/]")
+                        except Exception:
+                            pass
+                        self.push_screen(UpdateModal(info))
+                    self.call_from_thread(_show)
+                else:
+                    self.notify_user("Spoff is up to date on the latest GitHub commit.")
+            threading.Thread(target=_check, daemon=True).start()
+
     def action_next_track(self):
         if self.current_index + 1 < len(self.queue):
             self.play_index(self.current_index + 1)
@@ -1530,6 +1788,20 @@ class SpoffTUI(App):
                 self.playlists = load_saved_playlists()
                 self.refresh_side_table()
                 self.notify_user(f"Created playlist '{val}' and added '{t_title}'.")
+
+                # Asynchronous two-way sync to Spotify account
+                def _sync_create_bg():
+                    ok, msg = add_track_to_spotify_account(new_pl["id"], val, track)
+                    if ok:
+                        self.call_from_thread(self.notify_user, f"'{t_title}' synced to Spotify playlist '{val}'.")
+                        self.playlists = load_saved_playlists()
+                        self.call_from_thread(self.refresh_side_table)
+                    elif msg and not msg.startswith("Not logged in"):
+                        logger.info(f"Spotify sync notice: {msg}")
+                        if "permission" in msg.lower() or "re-link" in msg.lower():
+                            self.call_from_thread(self.notify_user, msg)
+                threading.Thread(target=_sync_create_bg, daemon=True).start()
+
             elif mode == "select":
                 added = add_track_to_playlist(val, track)
                 self.playlists = load_saved_playlists()
@@ -1543,6 +1815,16 @@ class SpoffTUI(App):
                         break
                 if added:
                     self.notify_user(f"Added '{t_title}' to '{pl_name}'.")
+                    # Asynchronous two-way sync to Spotify account
+                    def _sync_select_bg():
+                        ok, msg = add_track_to_spotify_account(val, pl_name, track)
+                        if ok:
+                            self.call_from_thread(self.notify_user, f"'{t_title}' synced to Spotify playlist '{pl_name}'.")
+                        elif msg and not msg.startswith("Not logged in"):
+                            logger.info(f"Spotify sync notice: {msg}")
+                            if "permission" in msg.lower() or "re-link" in msg.lower():
+                                self.call_from_thread(self.notify_user, msg)
+                    threading.Thread(target=_sync_select_bg, daemon=True).start()
                 else:
                     self.notify_user(f"'{t_title}' is already in '{pl_name}'.")
                 self.refresh_side_table()
@@ -1623,6 +1905,16 @@ class SpoffTUI(App):
                         update_playlist_tracks(self.current_playlist_id, self.current_playlist_tracks)
                         self.playlists = load_saved_playlists()
                         self.refresh_side_table()
+
+                        # Asynchronous sync removal to Spotify account
+                        pl_id = self.current_playlist_id
+                        pl_name = next((p.get("name", "Playlist") for p in self.playlists if p.get("id") == pl_id), "Playlist")
+                        def _sync_remove_bg():
+                            ok, msg = remove_track_from_spotify_account(pl_id, pl_name, t)
+                            if ok:
+                                self.call_from_thread(self.notify_user, f"Removed '{t_title}' from Spotify playlist '{pl_name}'.")
+                        threading.Thread(target=_sync_remove_bg, daemon=True).start()
+
                     self.notify_user(f"Removed '{t_title}' from playlist.")
 
             elif self.active_tab == "search":
@@ -1649,6 +1941,20 @@ class SpoffTUI(App):
 
         curr = self.player.current_track
         is_scrubbing = (self.focused and self.focused.id == "playback-bar")
+
+        # CAVA Audio Spectrum Visualizer
+        is_paused = self.player.is_paused if curr else False
+        vis_markup = self.visualizer.get_bars_markup(curr is not None, is_paused)
+        try:
+            self.query_one("#deck-visualizer", Static).update(vis_markup)
+        except Exception:
+            pass
+
+        # MPRIS Desktop Media Integration
+        if self.mpris:
+            self.mpris.update_position(pos)
+            self.mpris.update_volume(self.volume)
+            self.mpris.update_status(curr is not None, is_paused)
 
         if curr:
             if self.player.is_paused:
@@ -1772,6 +2078,10 @@ class SpoffTUI(App):
         title = track.get("title", "Unknown")
         artist = track.get("artist", "Unknown")
 
+        if self.mpris:
+            dur_sec = float(track.get("duration_ms", 0)) / 1000.0
+            self.mpris.update_track(track, dur_sec)
+
         cached = get_cached_track_path(t_id)
         if cached:
             if req_id != self._play_request_id:
@@ -1806,6 +2116,9 @@ class SpoffTUI(App):
 SpotatoTUI = SpoffTUI
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in ("--update", "-u", "update"):
+        run_cli_update()
+        return
     app = SpoffTUI()
     app.run()
 
