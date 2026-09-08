@@ -607,6 +607,7 @@ class ScrubBar(ProgressBar):
         Binding("shift+right", "scrub_fwd_fast", "Seek +15s", show=False),
         Binding("up", "return_to_table", "Return", show=False),
         Binding("k", "return_to_table", "Return", show=False),
+        Binding("b", "return_to_table", "Return", show=False),
         Binding("escape", "return_to_table", "Return", show=False),
         Binding("space", "toggle_play", "Play/Pause", show=False),
     ]
@@ -626,7 +627,10 @@ class ScrubBar(ProgressBar):
         self.app.update_player_hud()
 
     def action_return_to_table(self) -> None:
-        self.app.query_one("#track-table", DataTable).focus()
+        if self.app.active_tab == "lyrics":
+            self.app.query_one("#lyrics-table", DataTable).focus()
+        else:
+            self.app.query_one("#track-table", DataTable).focus()
 
     def action_toggle_play(self) -> None:
         self.app.action_toggle_play()
@@ -1593,13 +1597,6 @@ class SpoffTUI(App):
                 event.prevent_default()
                 event.stop()
                 return
-        elif event.key in ("down", "j") and self.focused and self.focused.id == "track-table":
-            table = self.query_one("#track-table", DataTable)
-            if table.row_count == 0 or (table.cursor_row is not None and table.cursor_row >= table.row_count - 1):
-                self.query_one("#playback-bar", ScrubBar).focus()
-                event.prevent_default()
-                event.stop()
-                return
 
     def action_nav_search(self): self.switch_view("search")
     def action_nav_playlist(self): self.switch_view("playlist")
@@ -1866,9 +1863,12 @@ class SpoffTUI(App):
         elif f.id == "search-box":
             self.query_one("#track-table", DataTable).focus()
         elif f.id in ("track-table", "lyrics-table"):
-            self.query_one("#playback-bar", ScrubBar).focus()
-        elif f.id == "playback-bar":
             self.query_one("#side-table", DataTable).focus()
+        elif f.id == "playback-bar":
+            if self.active_tab == "lyrics":
+                self.query_one("#lyrics-table", DataTable).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
         else:
             self.query_one("#track-table", DataTable).focus()
 
@@ -1879,14 +1879,6 @@ class SpoffTUI(App):
             return
 
         if isinstance(f, DataTable):
-            if f.id in ("track-table", "lyrics-table"):
-                if f.row_count == 0 or (f.cursor_row is not None and f.cursor_row >= f.row_count - 1):
-                    self.query_one("#playback-bar", ScrubBar).focus()
-                    return
-            elif f.id == "side-table":
-                if f.row_count == 0 or (f.cursor_row is not None and f.cursor_row >= f.row_count - 1):
-                    self.query_one("#playback-bar", ScrubBar).focus()
-                    return
             f.action_cursor_down()
         elif isinstance(f, Input):
             if f.id == "search-box":
@@ -2029,7 +2021,13 @@ class SpoffTUI(App):
             self.notify_user("Reordering songs is available in Playlists.")
 
     def action_focus_bar(self):
-        self.query_one("#playback-bar", ScrubBar).focus()
+        if self.focused and self.focused.id == "playback-bar":
+            if self.active_tab == "lyrics":
+                self.query_one("#lyrics-table", DataTable).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
+        else:
+            self.query_one("#playback-bar", ScrubBar).focus()
 
     def seek_to_percent(self, pct: float):
         pos, dur = self.player.get_progress()
