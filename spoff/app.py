@@ -85,6 +85,11 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
         Binding("escape", "dismiss_modal", "Cancel"),
         Binding("tab", "switch_focus", "Switch Focus", show=False),
         Binding("down", "cursor_down_input", "Down", show=False),
+        Binding("j", "cursor_down_table", "Down", show=False),
+        Binding("k", "cursor_up_table", "Up", show=False),
+        Binding("i", "focus_input", "New Playlist", show=False),
+        Binding("a", "focus_input", "New Playlist", show=False),
+        Binding("q", "dismiss_modal", "Cancel", show=False),
     ]
 
     def __init__(self, track: Dict[str, Any], playlists: List[Dict[str, Any]]):
@@ -97,11 +102,11 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
         artist = self.track.get("artist", "Unknown")
         with Vertical(id="modal-dialog"):
             yield Static("ADD TO PLAYLIST", id="modal-title")
-            yield Static(f"Track: [bold #ffffff]{escape(title)}[/]  -  [#767676]{escape(artist)}[/]", id="modal-track-info")
-            yield Input(placeholder="New playlist name...", id="modal-input")
+            yield Static(f"Track: [bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]", id="modal-track-info")
+            yield Input(placeholder="Create new playlist: type name...", id="modal-input")
             yield Static("OR CHOOSE EXISTING PLAYLIST", id="modal-subtitle")
             yield DataTable(id="modal-table", cursor_type="row", show_header=False)
-            yield Static("[dim]Enter: select / create  |  Tab: switch  |  Esc: cancel[/dim]", id="modal-hint")
+            yield Static("[dim]j/k: select playlist  |  i/Tab: new name  |  Enter: confirm  |  Esc: cancel[/dim]", id="modal-hint")
 
     def on_mount(self) -> None:
         table = self.query_one("#modal-table", DataTable)
@@ -115,25 +120,87 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
                 is_spotify = p_id == "spotify_liked_songs" or (len(p_id) == 22 and p_id.isalnum()) or bool(p.get("spotify_id"))
                 tag = " [#569f68][Spotify][/]" if is_spotify else ""
                 table.add_row(f"{p_name}{tag}  [dim]({tracks_count} tracks)[/dim]")
+            table.focus()
         else:
             table.display = False
             self.query_one("#modal-subtitle", Static).update("[dim]No existing playlists yet — type a name above to create one[/dim]")
-        self.query_one("#modal-input", Input).focus()
+            self.query_one("#modal-input", Input).focus()
 
     def action_dismiss_modal(self) -> None:
         self.dismiss(None)
 
     def action_switch_focus(self) -> None:
         if self.focused and self.focused.id == "modal-input":
-            self.query_one("#modal-table", DataTable).focus()
+            if self.playlists:
+                self.query_one("#modal-table", DataTable).focus()
         else:
             self.query_one("#modal-input", Input).focus()
 
+    def action_focus_input(self) -> None:
+        self.query_one("#modal-input", Input).focus()
+
     def action_cursor_down_input(self) -> None:
         if self.focused and self.focused.id == "modal-input":
-            self.query_one("#modal-table", DataTable).focus()
+            if self.playlists:
+                self.query_one("#modal-table", DataTable).focus()
         elif self.focused and self.focused.id == "modal-table":
             self.query_one("#modal-table", DataTable).action_cursor_down()
+
+    def action_cursor_down_table(self) -> None:
+        if self.focused and self.focused.id == "modal-table":
+            self.query_one("#modal-table", DataTable).action_cursor_down()
+
+    def action_cursor_up_table(self) -> None:
+        if self.focused and self.focused.id == "modal-table":
+            table = self.query_one("#modal-table", DataTable)
+            if table.row_count == 0 or table.cursor_row == 0:
+                self.query_one("#modal-input", Input).focus()
+            else:
+                table.action_cursor_up()
+
+    def on_key(self, event: events.Key) -> None:
+        table = self.query_one("#modal-table", DataTable)
+        inp = self.query_one("#modal-input", Input)
+
+        if self.focused and self.focused.id == "modal-table":
+            if event.key in ("j", "down"):
+                table.action_cursor_down()
+                event.prevent_default()
+                event.stop()
+            elif event.key in ("k", "up"):
+                if table.row_count == 0 or table.cursor_row == 0:
+                    inp.focus()
+                else:
+                    table.action_cursor_up()
+                event.prevent_default()
+                event.stop()
+            elif event.key in ("i", "a") and event.character in ("i", "a"):
+                inp.focus()
+                event.prevent_default()
+                event.stop()
+            elif event.key in ("escape", "q"):
+                self.dismiss(None)
+                event.prevent_default()
+                event.stop()
+        elif self.focused and self.focused.id == "modal-input":
+            if event.key in ("down", "tab"):
+                if self.playlists:
+                    table.focus()
+                    event.prevent_default()
+                    event.stop()
+            elif event.key == "escape":
+                if inp.value:
+                    inp.value = ""
+                    event.prevent_default()
+                    event.stop()
+                elif self.playlists:
+                    table.focus()
+                    event.prevent_default()
+                    event.stop()
+                else:
+                    self.dismiss(None)
+                    event.prevent_default()
+                    event.stop()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "modal-input":
@@ -544,7 +611,7 @@ class HelpModal(ModalScreen[None]):
 
         nav_rows = [
             ("1 / 2 / 3", "Search / Playlists / Offline"),
-            ("4 / L", "Synchronized lyrics view"),
+            ("4", "Synchronized lyrics view"),
             ("h / l", "Switch Sidebar / Main pane"),
             ("j / k, Arrows", "Navigate table rows"),
             ("Tab", "Cycle Sidebar / Table"),
@@ -576,7 +643,7 @@ class HelpModal(ModalScreen[None]):
             ("J / K, Shift+↑↓", "Reorder songs in playlist"),
             ("a, +", "Add track to playlist"),
             ("i", "New playlist / import link"),
-            ("S", "Spotify login & sync"),
+            ("Shift+L, S", "Spotify login & sync"),
             ("/", "Focus search box"),
             ("Del, d, x", "Remove track / playlist"),
             ("D, Shift+Del", "Delete whole playlist"),
@@ -950,7 +1017,7 @@ class SpoffTUI(App):
     }
 
     #modal-dialog {
-        width: 60;
+        width: 70;
         height: auto;
         max-height: 22;
         background: #181818;
@@ -1412,7 +1479,8 @@ class SpoffTUI(App):
         Binding("+", "add_to_playlist", "Add to Playlist", show=False),
         Binding("s", "toggle_shuffle", "Shuffle"),
         Binding("r", "toggle_repeat", "Repeat"),
-        Binding("L", "toggle_lyrics", "Lyrics", show=False),
+        Binding("L", "open_spotify_auth", "Spotify", show=False),
+        Binding("shift+l", "open_spotify_auth", "Spotify", show=False),
         Binding("S", "open_spotify_auth", "Spotify", show=False),
         Binding("u", "check_update", "Update", show=False),
         Binding("U", "check_update", "Update", show=False),
@@ -1497,7 +1565,7 @@ class SpoffTUI(App):
         with Horizontal(id="top-bar"):
             yield Static(r"[bold #ffffff]\[1] Search[/]    [#555555]\[2] Playlists    \[3] Offline    \[4] Lyrics[/]", id="nav-bar")
             yield Static("", id="update-pill")
-            yield Static("[#555555]S: Spotify[/]", id="spotify-pill")
+            yield Static("[#555555]L: Spotify[/]", id="spotify-pill")
             yield Static("[dim]STANDBY[/dim]", id="status-pill")
 
         with Horizontal(id="main-layout"):
@@ -1528,7 +1596,7 @@ class SpoffTUI(App):
                 yield Static("00:00", id="time-elapsed")
                 yield ScrubBar(total=100, show_eta=False, id="playback-bar")
                 yield Static("00:00", id="time-total")
-            yield Static("Enter: play  |  Space: pause  |  s: shuf  |  r: rep  |  4/L: lyrics  |  : help  |  q: quit", id="deck-line-3")
+            yield Static("Enter: play  |  Space: pause  |  s: shuf  |  r: rep  |  4: lyrics  |  : help  |  q: quit", id="deck-line-3")
 
     def on_mount(self) -> None:
         self.player.start_mpv()
@@ -1665,12 +1733,7 @@ class SpoffTUI(App):
             event.prevent_default()
             event.stop()
             return
-        elif (event.key in ("L",) or event.character == "L") and not isinstance(self.focused, Input) and not (isinstance(self.focused, ScrubBar) and event.character == "L"):
-            self.action_toggle_lyrics()
-            event.prevent_default()
-            event.stop()
-            return
-        elif (event.key in ("S",) or event.character == "S") and not isinstance(self.focused, Input):
+        elif (event.key in ("L", "shift+l", "S", "shift+s") or event.character in ("L", "S")) and not isinstance(self.focused, Input) and not (isinstance(self.focused, ScrubBar) and event.character == "L"):
             self.action_open_spotify_auth()
             event.prevent_default()
             event.stop()
@@ -1722,7 +1785,7 @@ class SpoffTUI(App):
     def action_nav_search(self): self.switch_view("search")
     def action_nav_playlist(self): self.switch_view("playlist")
     def action_nav_offline(self): self.switch_view("offline")
-    def action_nav_lyrics(self): self.switch_view("lyrics")
+    def action_nav_lyrics(self): self.action_toggle_lyrics()
 
     def action_toggle_lyrics(self):
         if isinstance(self.focused, Input):
@@ -2850,12 +2913,12 @@ class SpoffTUI(App):
         if is_scrubbing:
             hints = "Seek: h/l (-/+5s)  |  H/L (-/+15s)  |  0-9: jump %  |  Space: pause  |  Esc: back"
         elif self.active_tab == "lyrics":
-            hints = "Enter/Click: seek to line  |  Space: pause  |  s: shuf  |  r: rep  |  Esc/L: back  |  q: quit"
+            hints = "Enter/Click: seek to line  |  Space: pause  |  s: shuf  |  r: rep  |  Esc/4: back  |  q: quit"
         else:
             queue_len = len(self.queue)
             queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "empty"
             vol_str = "Muted" if self.volume == 0 else f"{self.volume}%"
-            hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  s: shuf  |  r: rep  |  4/L: lyrics  |  b: seek  |  : help  |  q: quit"
+            hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  s: shuf  |  r: rep  |  4: lyrics  |  b: seek  |  : help  |  q: quit"
         self.query_one("#deck-line-3", Static).update(escape(hints))
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
