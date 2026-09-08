@@ -67,7 +67,7 @@ def live_search_tracks(query: str, limit: int = 15) -> List[Dict[str, Any]]:
                     "artist": uploader,
                     "duration_ms": int((e.get("duration") or 0) * 1000),
                     "url": e.get("url") or f"https://www.youtube.com/watch?v={t_id}",
-                    "source": "search"
+                    "source": "ytmusic"
                 })
     except Exception as e:
         logger.error(f"Live search failed for '{query}': {e}")

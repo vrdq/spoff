@@ -166,6 +166,44 @@ def save_advanced_mode(enabled: bool):
     except Exception as e:
         logger.error(f"Error saving advanced mode: {e}")
 
+def get_saved_search_engine() -> str:
+    """Retrieves active search engine ('ytmusic' or 'spotify'), defaulting to 'ytmusic'."""
+    try:
+        cfg = load_config()
+        eng = cfg.get("search_engine", "ytmusic")
+        if eng in ("ytmusic", "spotify"):
+            return eng
+    except Exception as e:
+        logger.error(f"Error reading search engine: {e}")
+    return "ytmusic"
+
+def save_search_engine(engine: str):
+    """Persists search engine choice to config."""
+    try:
+        cfg = load_config()
+        cfg["search_engine"] = "spotify" if engine == "spotify" else "ytmusic"
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving search engine: {e}")
+
+def get_saved_transparency() -> bool:
+    """Retrieves whether terminal window transparency is enabled, defaulting to True."""
+    try:
+        cfg = load_config()
+        return bool(cfg.get("transparency", True))
+    except Exception as e:
+        logger.error(f"Error reading transparency setting: {e}")
+        return True
+
+def save_transparency(enabled: bool):
+    """Persists transparency setting to config."""
+    try:
+        cfg = load_config()
+        cfg["transparency"] = bool(enabled)
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving transparency setting: {e}")
+
 def get_custom_keybindings() -> Dict[str, str]:
     """Retrieves custom keybindings mapping action_name -> key_string."""
     try:

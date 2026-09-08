@@ -34,7 +34,8 @@ try:
         update_playlist_tracks, get_cached_track_path, load_offline_index,
         delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
-        get_saved_advanced_mode, save_advanced_mode, get_custom_keybindings,
+        get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
+        get_saved_transparency, save_transparency, get_custom_keybindings,
         save_custom_keybindings, reset_custom_keybindings
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache
@@ -45,7 +46,8 @@ try:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        reorder_spotify_playlist_track, delete_spotify_playlist, has_modify_scopes
+        reorder_spotify_playlist_track, delete_spotify_playlist, has_modify_scopes,
+        search_spotify_tracks
     )
     from .lyrics import fetch_lyrics, get_active_lyric_index
     from .mpris import MPRISService
@@ -59,7 +61,8 @@ except ImportError:
         update_playlist_tracks, get_cached_track_path, load_offline_index,
         delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
-        get_saved_advanced_mode, save_advanced_mode, get_custom_keybindings,
+        get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
+        get_saved_transparency, save_transparency, get_custom_keybindings,
         save_custom_keybindings, reset_custom_keybindings
     )
     from streamer import search_and_resolve_stream, download_track_to_cache
@@ -70,7 +73,8 @@ except ImportError:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        reorder_spotify_playlist_track, delete_spotify_playlist, has_modify_scopes
+        reorder_spotify_playlist_track, delete_spotify_playlist, has_modify_scopes,
+        search_spotify_tracks
     )
     from lyrics import fetch_lyrics, get_active_lyric_index
     from mpris import MPRISService
@@ -115,6 +119,7 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "toggle_focus": "tab",
     "move_item_up": "K",
     "move_item_down": "J",
+    "switch_engine": "ctrl+e",
 }
 
 ACTION_INFO: Dict[str, Tuple[str, str]] = {
@@ -139,6 +144,7 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "nav_playlist": ("Navigation", "Switch to Playlists"),
     "nav_offline": ("Navigation", "Switch to Offline"),
     "nav_lyrics": ("Navigation", "Synchronized Lyrics"),
+    "switch_engine": ("Navigation", "Switch Search Engine (YTM/Spotify)"),
     "open_settings": ("General", "Settings & Keybinds"),
     "show_help": ("General", "Help & Reference"),
     "check_update": ("General", "Check for Updates"),
@@ -261,6 +267,20 @@ class AdvModeToggle(Static):
         if isinstance(self.screen, SettingsModal):
             self.screen.toggle_advanced_mode()
 
+class TransparencyToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_transparency()
+
+class SearchEngineToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_search_engine()
+
 class SettingsModal(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "dismiss_or_cancel", "Close", priority=True),
@@ -288,8 +308,10 @@ class SettingsModal(ModalScreen[None]):
                 yield Static("SETTINGS & KEYBINDS", id="settings-title")
                 yield Static("[dim]Esc / q to close[/dim]", id="settings-close-hint")
 
-            with Vertical(id="adv-mode-container"):
-                yield AdvModeToggle(id="adv-mode-toggle")
+            with Vertical(id="settings-options-container"):
+                yield AdvModeToggle(id="adv-mode-toggle", classes="setting-toggle-item")
+                yield TransparencyToggle(id="transparency-toggle", classes="setting-toggle-item")
+                yield SearchEngineToggle(id="engine-toggle", classes="setting-toggle-item")
 
             yield Static("REBINDABLE ACTIONS", id="settings-table-title")
             yield DataTable(id="settings-table", cursor_type="row", show_header=True)
@@ -301,7 +323,7 @@ class SettingsModal(ModalScreen[None]):
         table = self.query_one("#settings-table", DataTable)
         table.cursor_foreground_priority = "renderable"
         table.add_column("Category", key="cat", width=14)
-        table.add_column("Action", key="act", width=28)
+        table.add_column("Action", key="act", width=30)
         table.add_column("Keybind", key="key", width=18)
         table.add_column("Status", key="stat", width=12)
 
@@ -316,15 +338,27 @@ class SettingsModal(ModalScreen[None]):
 
     def update_toggle_ui(self) -> None:
         try:
-            toggle = self.query_one("#adv-mode-toggle", AdvModeToggle)
+            adv_toggle = self.query_one("#adv-mode-toggle", AdvModeToggle)
             if getattr(self.app, "advanced_mode", False):
-                toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]Advanced Mode[/]  [dim]— All shortcut strings & HUD hints hidden[/dim]")
+                adv_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]Advanced Mode[/]  [dim]— Keybind strings & HUD hints hidden[/dim]")
                 self.query_one("#settings-footer", Static).update("")
                 self.query_one("#settings-close-hint", Static).update("")
             else:
-                toggle.update("[#767676]○ DISABLED[/]  [#cccccc]Advanced Mode[/]  [dim]— Press Space/Enter to hide keybind indicators[/dim]")
+                adv_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]Advanced Mode[/]  [dim]— Press Space/Enter to hide keybind indicators[/dim]")
                 self.query_one("#settings-footer", Static).update("[dim]Enter: rebind  |  Backspace / r: reset key  |  R: reset all  |  j/k: navigate[/dim]")
                 self.query_one("#settings-close-hint", Static).update("[dim]Esc / q to close[/dim]")
+
+            trans_toggle = self.query_one("#transparency-toggle", TransparencyToggle)
+            if getattr(self.app, "transparency", True):
+                trans_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]UI Transparency[/]  [dim]— Terminal background & blur shines through[/dim]")
+            else:
+                trans_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]UI Transparency[/]  [dim]— Solid dark opaque background[/dim]")
+
+            eng_toggle = self.query_one("#engine-toggle", SearchEngineToggle)
+            if getattr(self.app, "search_engine", "ytmusic") == "spotify":
+                eng_toggle.update("[bold #569f68]● SPOTIFY[/]   [#ffffff]Search Engine[/]  [dim]— Official Spotify catalogue (syncs with Spotify)[/dim]")
+            else:
+                eng_toggle.update("[bold #ffffff]● YT MUSIC[/]  [#cccccc]Search Engine[/]  [dim]— YouTube Music streams (local playlists only)[/dim]")
         except Exception:
             pass
 
@@ -333,6 +367,18 @@ class SettingsModal(ModalScreen[None]):
         self.update_toggle_ui()
         state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
         self.query_one("#settings-status-line", Static).update(f"Advanced Mode {state_text}.")
+
+    def toggle_transparency(self) -> None:
+        new_state = self.app.toggle_transparency()
+        self.update_toggle_ui()
+        state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
+        self.query_one("#settings-status-line", Static).update(f"UI Transparency {state_text}.")
+
+    def toggle_search_engine(self) -> None:
+        new_engine = self.app.toggle_search_engine()
+        self.update_toggle_ui()
+        label = "Spotify" if new_engine == "spotify" else "YouTube Music"
+        self.query_one("#settings-status-line", Static).update(f"Search engine set to {label}.")
 
     def start_rebinding(self, act_id: str) -> None:
         self.is_rebinding = True
@@ -430,16 +476,27 @@ class SettingsModal(ModalScreen[None]):
     def action_switch_focus(self) -> None:
         if self.is_rebinding:
             return
-        if self.focused and self.focused.id == "adv-mode-toggle":
-            self.query_one("#settings-table", DataTable).focus()
+        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "engine-toggle"]
+        focused_id = self.focused.id if self.focused else None
+        if focused_id in toggle_ids:
+            idx = toggle_ids.index(focused_id)
+            if idx < len(toggle_ids) - 1:
+                self.query_one(f"#{toggle_ids[idx + 1]}", Static).focus()
+            else:
+                self.query_one("#settings-table", DataTable).focus()
         else:
             self.query_one("#adv-mode-toggle", AdvModeToggle).focus()
 
     def action_select_or_toggle(self) -> None:
         if self.is_rebinding:
             return
-        if self.focused and self.focused.id == "adv-mode-toggle":
+        focused_id = self.focused.id if self.focused else None
+        if focused_id == "adv-mode-toggle":
             self.toggle_advanced_mode()
+        elif focused_id == "transparency-toggle":
+            self.toggle_transparency()
+        elif focused_id == "engine-toggle":
+            self.toggle_search_engine()
         elif self.focused and self.focused.id == "settings-table":
             table = self.query_one("#settings-table", DataTable)
             if table.cursor_row is not None and table.row_count > 0:
@@ -458,16 +515,32 @@ class SettingsModal(ModalScreen[None]):
             return
 
         table = self.query_one("#settings-table", DataTable)
-        toggle = self.query_one("#adv-mode-toggle", AdvModeToggle)
+        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "engine-toggle"]
+        focused_id = self.focused.id if self.focused else None
 
-        if self.focused and self.focused.id == "adv-mode-toggle":
+        if focused_id in toggle_ids:
+            idx = toggle_ids.index(focused_id)
             if event.key in ("j", "down"):
-                table.focus()
+                if idx < len(toggle_ids) - 1:
+                    self.query_one(f"#{toggle_ids[idx + 1]}", Static).focus()
+                else:
+                    table.focus()
+                event.prevent_default()
+                event.stop()
+                return
+            elif event.key in ("k", "up"):
+                if idx > 0:
+                    self.query_one(f"#{toggle_ids[idx - 1]}", Static).focus()
                 event.prevent_default()
                 event.stop()
                 return
             elif event.key in ("enter", "space") or event.character in (" ",):
-                self.toggle_advanced_mode()
+                if focused_id == "adv-mode-toggle":
+                    self.toggle_advanced_mode()
+                elif focused_id == "transparency-toggle":
+                    self.toggle_transparency()
+                elif focused_id == "engine-toggle":
+                    self.toggle_search_engine()
                 event.prevent_default()
                 event.stop()
                 return
@@ -479,7 +552,7 @@ class SettingsModal(ModalScreen[None]):
         elif self.focused and self.focused.id == "settings-table":
             if event.key in ("k", "up"):
                 if table.row_count == 0 or table.cursor_row == 0:
-                    toggle.focus()
+                    self.query_one("#engine-toggle", SearchEngineToggle).focus()
                     event.prevent_default()
                     event.stop()
                     return
@@ -1244,6 +1317,13 @@ class SidebarSplitter(Widget):
             event.prevent_default()
             event.stop()
 
+class SearchEnginePill(Static):
+    can_focus = False
+
+    def on_click(self) -> None:
+        if hasattr(self.app, "toggle_search_engine"):
+            self.app.toggle_search_engine()
+
 class SpoffTUI(App):
     CSS = """
     * {
@@ -1256,13 +1336,17 @@ class SpoffTUI(App):
         scrollbar-size-vertical: 1;
     }
 
+    App {
+        background: ansi_default;
+    }
+
     Input {
         scrollbar-size-horizontal: 0 !important;
         scrollbar-size-vertical: 0 !important;
     }
 
     Screen {
-        background: transparent;
+        background: ansi_default;
         color: #e2e2e2;
         layout: vertical;
     }
@@ -1395,6 +1479,36 @@ class SpoffTUI(App):
 
     .action-input:focus {
         border: solid #767676;
+    }
+
+    #search-header-row {
+        height: 3;
+        margin-bottom: 1;
+    }
+
+    #search-header-row > #search-box {
+        width: 1fr;
+        height: 3;
+        margin-bottom: 0;
+    }
+
+    #engine-selector-pill {
+        width: auto;
+        height: 3;
+        border: solid #2a2a2a;
+        background: transparent;
+        padding: 0 1;
+        margin-left: 1;
+        content-align: center middle;
+    }
+
+    #engine-selector-pill:hover {
+        border: solid #569f68;
+    }
+
+    #deck-stats-pill {
+        width: auto;
+        margin-right: 2;
     }
 
     #track-table {
@@ -1857,7 +1971,7 @@ class SpoffTUI(App):
         width: 88;
         max-width: 96%;
         height: auto;
-        max-height: 27;
+        max-height: 34;
         background: #141414;
         border: solid #2a2a2a;
         padding: 1 2;
@@ -1881,22 +1995,23 @@ class SpoffTUI(App):
         color: #555555;
     }
 
-    #adv-mode-container {
-        height: 3;
+    #settings-options-container {
+        height: auto;
         width: 100%;
         margin-bottom: 1;
     }
 
-    #adv-mode-toggle {
+    .setting-toggle-item {
         height: 3;
         width: 100%;
         background: #1a1a1a;
         border: solid #282828;
         padding: 0 1;
+        margin-bottom: 1;
         content-align: left middle;
     }
 
-    #adv-mode-toggle:focus {
+    .setting-toggle-item:focus {
         border: solid #569f68;
         background: #1c261e;
     }
@@ -1909,7 +2024,7 @@ class SpoffTUI(App):
     }
 
     #settings-table {
-        height: 12;
+        height: 10;
         border: solid #222222;
         background: transparent;
     }
@@ -2071,6 +2186,8 @@ class SpoffTUI(App):
         self.current_lyrics: Optional[Dict[str, Any]] = None
         self._active_lyric_idx: int = -1
         self.last_browsing_tab: str = "playlist"
+        self.search_engine: str = get_saved_search_engine()
+        self.transparency: bool = get_saved_transparency()
         self.player.playback_finished_callback = self.on_track_finished
         atexit.register(self._cleanup_on_exit)
 
@@ -2085,16 +2202,86 @@ class SpoffTUI(App):
         self.apply_advanced_mode()
         return self.advanced_mode
 
+    def toggle_transparency(self) -> bool:
+        self.transparency = not self.transparency
+        save_transparency(self.transparency)
+        self.apply_transparency()
+        return self.transparency
+
+    def apply_transparency(self) -> None:
+        bg_val = "ansi_default" if self.transparency else "#121212"
+        self.styles.background = bg_val
+        try:
+            for s in self.screen_stack:
+                if not isinstance(s, ModalScreen):
+                    s.styles.background = bg_val
+        except Exception:
+            pass
+
+    def set_search_engine(self, engine: str) -> None:
+        self.search_engine = "spotify" if engine == "spotify" else "ytmusic"
+        save_search_engine(self.search_engine)
+        self.update_engine_pill()
+
+    def toggle_search_engine(self) -> str:
+        self.search_engine = "spotify" if self.search_engine == "ytmusic" else "ytmusic"
+        save_search_engine(self.search_engine)
+        self.update_engine_pill()
+        label = "Spotify" if self.search_engine == "spotify" else "YouTube Music"
+        self.notify_user(f"Search engine switched to {label}.")
+        try:
+            s_box = self.query_one("#search-box", Input)
+            q = s_box.value.strip()
+            if q and self.active_tab == "search":
+                self.do_search(q)
+        except Exception:
+            pass
+        return self.search_engine
+
+    def update_engine_pill(self) -> None:
+        try:
+            pill = self.query_one("#engine-selector-pill", SearchEnginePill)
+            s_box = self.query_one("#search-box", Input)
+            if self.search_engine == "spotify":
+                pill.update("[#767676]YTM[/]  [bold #569f68 on #18271c] SPOTIFY [/]")
+                s_box.placeholder = "Search Spotify (artists, tracks)..."
+            else:
+                pill.update("[bold #ffffff on #2e2e2e] YT MUSIC [/]  [#767676]SPOT[/]")
+                s_box.placeholder = "Search YouTube Music (artists, tracks)..."
+        except Exception:
+            pass
+
     def apply_advanced_mode(self) -> None:
         self._update_nav_bar()
         self.update_spotify_pill()
         self.update_settings_pill()
+        self.update_engine_pill()
         try:
             sb_hint = self.query_one("#sidebar-hint", Static)
-            sb_hint.update("" if self.advanced_mode else "[dim]Enter: open  |  Del: delete[/dim]")
+            if self.advanced_mode:
+                sb_hint.styles.display = "none"
+            else:
+                sb_hint.styles.display = "block"
+                sb_hint.update("[dim]Enter: open  |  Del: delete[/dim]")
         except Exception:
             pass
+
+        try:
+            deck_l3 = self.query_one("#deck-line-3", Static)
+            player_deck = self.query_one("#player-deck", Vertical)
+            if self.advanced_mode:
+                deck_l3.styles.display = "none"
+                player_deck.styles.height = 4
+            else:
+                deck_l3.styles.display = "block"
+                player_deck.styles.height = 5
+        except Exception:
+            pass
+
         self.update_player_hud()
+
+    def action_switch_engine(self) -> None:
+        self.toggle_search_engine()
 
     def set_custom_keybinding(self, action_id: str, new_key: str) -> None:
         if not new_key or new_key == DEFAULT_KEYBINDINGS.get(action_id):
@@ -2174,7 +2361,9 @@ class SpoffTUI(App):
             yield SidebarSplitter(id="sidebar-splitter")
 
             with Vertical(id="content-pane"):
-                yield Input(placeholder="Search songs or artists...", id="search-box", classes="action-input")
+                with Horizontal(id="search-header-row"):
+                    yield Input(placeholder="Search YouTube Music...", id="search-box", classes="action-input")
+                    yield SearchEnginePill("", id="engine-selector-pill")
                 yield DataTable(id="track-table", cursor_type="row", show_header=True)
                 with Vertical(id="lyrics-pane"):
                     yield Static("", id="lyrics-header")
@@ -2184,6 +2373,7 @@ class SpoffTUI(App):
             yield Static("", id="notification-line")
             with Horizontal(id="deck-line-1"):
                 yield Static("No track playing", id="deck-track")
+                yield Static("", id="deck-stats-pill")
                 yield VisualizerWidget(self.visualizer, id="deck-visualizer")
                 yield Static("[dim]SHUF[/dim]", id="shuf-pill")
                 yield Static("[dim]REP[/dim]", id="rep-pill")
@@ -2197,11 +2387,13 @@ class SpoffTUI(App):
     def on_mount(self) -> None:
         self.player.start_mpv()
         self.player.set_volume(self.volume)
+        self.apply_transparency()
         saved_sidebar_w = get_saved_sidebar_width()
         self.query_one("#sidebar").styles.width = saved_sidebar_w
         self.playlists = load_saved_playlists()
         self.apply_advanced_mode()
         self.apply_keybindings()
+        self.update_engine_pill()
         self.mpris.start()
         if self.mpris:
             self.mpris.update_volume(self.volume)
@@ -2315,6 +2507,13 @@ class SpoffTUI(App):
             return
         elif k in ("audio_raise_volume",) or name in ("audio_raise_volume",):
             self.action_vol_up()
+            event.prevent_default()
+            event.stop()
+            return
+
+        # Switch engine shortcut (e.g. Ctrl+E, accessible even when typing)
+        if key_matches(event.key, getattr(event, "character", None), self.keybindings.get("switch_engine", "ctrl+e")):
+            self.action_switch_engine()
             event.prevent_default()
             event.stop()
             return
@@ -2449,12 +2648,12 @@ class SpoffTUI(App):
 
     def switch_view(self, view: str):
         self.active_tab = view
-        search_box = self.query_one("#search-box", Input)
+        search_row = self.query_one("#search-header-row", Horizontal)
         track_table = self.query_one("#track-table", DataTable)
         lyrics_pane = self.query_one("#lyrics-pane", Vertical)
         lyrics_table = self.query_one("#lyrics-table", DataTable)
 
-        search_box.display = (view == "search")
+        search_row.display = (view == "search")
         track_table.display = (view != "lyrics")
         lyrics_pane.display = (view == "lyrics")
 
@@ -2608,7 +2807,14 @@ class SpoffTUI(App):
         for idx, t in enumerate(tracks):
             t_id = t.get("id") or str(hash(t.get("title", "") + t.get("artist", "")))
             is_cached = get_cached_track_path(t_id) is not None if t_id else False
-            type_tag = "[bold #569f68]OFFLINE[/]" if is_cached else "[dim]REMOTE[/dim]"
+            if is_cached:
+                type_tag = "[bold #2aa198]OFFLINE[/]"
+            elif t.get("source") == "spotify":
+                type_tag = "[bold #569f68]SPOT[/]"
+            elif t.get("source") in ("ytmusic", "youtube") or self.active_tab == "search":
+                type_tag = "[#888888]YTM[/]"
+            else:
+                type_tag = "[dim]REMOTE[/dim]"
             dur_ms = t.get("duration_ms") or 0
             dur = format_time(dur_ms / 1000)
             table.add_row(type_tag, escape(t.get("title", "")), escape(t.get("artist", "")), dur, key=str(idx))
@@ -3204,10 +3410,15 @@ class SpoffTUI(App):
                 pass
         try:
             hint = self.query_one("#sidebar-hint", Static)
-            if self.playlists:
-                hint.update("[dim]Enter: open  |  Del: delete[/dim]")
+            if self.advanced_mode:
+                hint.styles.display = "none"
+                hint.update("")
             else:
-                hint.update("[dim]Enter name or link above to create[/dim]")
+                hint.styles.display = "block"
+                if self.playlists:
+                    hint.update("[dim]Enter: open  |  Del: delete[/dim]")
+                else:
+                    hint.update("[dim]Enter name or link above to create[/dim]")
         except Exception:
             pass
 
@@ -3291,18 +3502,26 @@ class SpoffTUI(App):
                 self.refresh_side_table()
                 self.notify_user(f"Created playlist '{val}' and added '{t_title}'.")
 
-                # Asynchronous two-way sync to Spotify account
-                def _sync_create_bg():
-                    ok, msg = add_track_to_spotify_account(new_pl["id"], val, track)
-                    if ok:
-                        self.call_from_thread(self.notify_user, f"'{t_title}' synced to Spotify playlist '{val}'.")
-                        self.playlists = load_saved_playlists()
-                        self.call_from_thread(self.refresh_side_table)
-                    elif msg and not msg.startswith("Not logged in"):
-                        logger.info(f"Spotify sync notice: {msg}")
-                        if "permission" in msg.lower() or "re-link" in msg.lower():
-                            self.call_from_thread(self.notify_user, msg)
-                threading.Thread(target=_sync_create_bg, daemon=True).start()
+                # Asynchronous two-way sync to Spotify account (Spotify tracks only)
+                is_yt = (
+                    track.get("source") in ("ytmusic", "youtube")
+                    or not (
+                        track.get("uri", "").startswith("spotify:track:")
+                        or (track.get("id") and len(str(track.get("id"))) == 22 and track.get("source") == "spotify")
+                    )
+                )
+                if not is_yt:
+                    def _sync_create_bg():
+                        ok, msg = add_track_to_spotify_account(new_pl["id"], val, track)
+                        if ok:
+                            self.call_from_thread(self.notify_user, f"'{t_title}' synced to Spotify playlist '{val}'.")
+                            self.playlists = load_saved_playlists()
+                            self.call_from_thread(self.refresh_side_table)
+                        elif msg and not msg.startswith("Not logged in"):
+                            logger.info(f"Spotify sync notice: {msg}")
+                            if "permission" in msg.lower() or "re-link" in msg.lower():
+                                self.call_from_thread(self.notify_user, msg)
+                    threading.Thread(target=_sync_create_bg, daemon=True).start()
 
             elif mode == "select":
                 added = add_track_to_playlist(val, track)
@@ -3317,16 +3536,24 @@ class SpoffTUI(App):
                         break
                 if added:
                     self.notify_user(f"Added '{t_title}' to '{pl_name}'.")
-                    # Asynchronous two-way sync to Spotify account
-                    def _sync_select_bg():
-                        ok, msg = add_track_to_spotify_account(val, pl_name, track)
-                        if ok:
-                            self.call_from_thread(self.notify_user, f"'{t_title}' synced to Spotify playlist '{pl_name}'.")
-                        elif msg and not msg.startswith("Not logged in"):
-                            logger.info(f"Spotify sync notice: {msg}")
-                            if "permission" in msg.lower() or "re-link" in msg.lower():
-                                self.call_from_thread(self.notify_user, msg)
-                    threading.Thread(target=_sync_select_bg, daemon=True).start()
+                    # Asynchronous two-way sync to Spotify account (Spotify tracks only)
+                    is_yt = (
+                        track.get("source") in ("ytmusic", "youtube")
+                        or not (
+                            track.get("uri", "").startswith("spotify:track:")
+                            or (track.get("id") and len(str(track.get("id"))) == 22 and track.get("source") == "spotify")
+                        )
+                    )
+                    if not is_yt:
+                        def _sync_select_bg():
+                            ok, msg = add_track_to_spotify_account(val, pl_name, track)
+                            if ok:
+                                self.call_from_thread(self.notify_user, f"'{t_title}' synced to Spotify playlist '{pl_name}'.")
+                            elif msg and not msg.startswith("Not logged in"):
+                                logger.info(f"Spotify sync notice: {msg}")
+                                if "permission" in msg.lower() or "re-link" in msg.lower():
+                                    self.call_from_thread(self.notify_user, msg)
+                        threading.Thread(target=_sync_select_bg, daemon=True).start()
                 else:
                     self.notify_user(f"'{t_title}' is already in '{pl_name}'.")
                 self.refresh_side_table()
@@ -3557,26 +3784,40 @@ class SpoffTUI(App):
             self.query_one("#deck-source", Static).update("[dim]IDLE[/dim]")
             self.query_one("#deck-track", Static).update("No track playing")
 
+        queue_len = len(self.queue)
+        queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "empty"
+        vol_str = "Muted" if self.volume == 0 else f"{self.volume}%"
+
         if self.advanced_mode:
             if is_scrubbing:
-                hints = "Seeking Playback"
-            elif self.active_tab == "lyrics":
-                hints = ""
+                stat_text = "[bold #c4a768]SEEKING[/]"
             else:
-                queue_len = len(self.queue)
-                queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "empty"
-                vol_str = "Muted" if self.volume == 0 else f"{self.volume}%"
-                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}"
+                stat_text = f"[#767676]Vol: {vol_str}  Q: {queue_pos}[/]"
+            try:
+                stats_pill = self.query_one("#deck-stats-pill", Static)
+                stats_pill.update(stat_text)
+                stats_pill.styles.display = "block"
+            except Exception:
+                pass
+            try:
+                deck_l3 = self.query_one("#deck-line-3", Static)
+                deck_l3.update("")
+                deck_l3.styles.display = "none"
+            except Exception:
+                pass
         else:
+            try:
+                stats_pill = self.query_one("#deck-stats-pill", Static)
+                stats_pill.update("")
+                stats_pill.styles.display = "none"
+            except Exception:
+                pass
             if is_scrubbing:
                 hints = "Seek: h/l (-/+5s)  |  H/L (-/+15s)  |  0-9: jump %  |  Space: pause  |  Esc: back"
             elif self.active_tab == "lyrics":
                 lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
                 hints = f"Enter/Click: seek to line  |  Space: pause  |  s: shuf  |  r: rep  |  Esc/{lyr_k}: back  |  q: quit"
             else:
-                queue_len = len(self.queue)
-                queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "empty"
-                vol_str = "Muted" if self.volume == 0 else f"{self.volume}%"
                 shuf_k = format_key_display(self.keybindings.get("toggle_shuffle", "s"))
                 rep_k = format_key_display(self.keybindings.get("toggle_repeat", "r"))
                 lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
@@ -3586,7 +3827,12 @@ class SpoffTUI(App):
                 help_label = ": help" if help_k in (":", "colon") else f"{help_k}: help"
                 quit_k = format_key_display(self.keybindings.get("quit_app", "q"))
                 hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {seek_k}: seek  |  {sett_k}: set  |  {help_label}  |  {quit_k}: quit"
-        self.query_one("#deck-line-3", Static).update(escape(hints))
+            try:
+                deck_l3 = self.query_one("#deck-line-3", Static)
+                deck_l3.update(escape(hints))
+                deck_l3.styles.display = "block"
+            except Exception:
+                pass
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "search-box":
@@ -3608,8 +3854,22 @@ class SpoffTUI(App):
 
     @work(thread=True)
     def do_search(self, query: str):
-        self.notify_user(f"Searching for '{query}'...")
-        results = live_search_tracks(query, limit=25)
+        engine_name = "Spotify" if self.search_engine == "spotify" else "YouTube Music"
+        self.notify_user(f"Searching {engine_name} for '{query}'...")
+
+        if self.search_engine == "spotify":
+            ok, results, err_msg = search_spotify_tracks(query, limit=25)
+            if not ok:
+                self.search_results = []
+                def _notify_err():
+                    if self.active_tab == "search":
+                        self.render_tracks([])
+                    self.notify_user(err_msg or "Failed to search Spotify.")
+                self.call_from_thread(_notify_err)
+                return
+        else:
+            results = live_search_tracks(query, limit=25)
+
         self.search_results = results
 
         def _update_ui():
@@ -3620,11 +3880,13 @@ class SpoffTUI(App):
                 else:
                     self.query_one("#search-box", Input).focus()
             if results:
-                self.notify_user(f"Found {len(results)} tracks for '{query}'. Press Enter to play.")
+                hint_str = "" if self.advanced_mode else " Press Enter to play."
+                self.notify_user(f"Found {len(results)} tracks on {engine_name} for '{query}'.{hint_str}")
             else:
-                self.notify_user(f"No tracks found for '{query}'. Try different keywords.")
+                self.notify_user(f"No tracks found on {engine_name} for '{query}'. Try different keywords.")
 
         self.call_from_thread(_update_ui)
+
 
     @work(thread=True)
     def import_playlist_url(self, url: str):
