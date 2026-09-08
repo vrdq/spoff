@@ -4,6 +4,8 @@ import time
 import logging
 import threading
 import atexit
+import secrets
+import urllib.parse
 from typing import List, Dict, Any, Optional, Tuple
 from pathlib import Path
 
@@ -27,6 +29,12 @@ try:
     from .streamer import search_and_resolve_stream, download_track_to_cache
     from .search import live_search_tracks
     from .player import MPVController
+    from .auth import (
+        load_spotify_auth, save_spotify_auth, logout_spotify, get_valid_token,
+        generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
+        fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
+        SPOTIFY_PORT
+    )
 except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, parse_spotify_url
     from storage import (
@@ -38,6 +46,12 @@ except ImportError:
     from streamer import search_and_resolve_stream, download_track_to_cache
     from search import live_search_tracks
     from player import MPVController
+    from auth import (
+        load_spotify_auth, save_spotify_auth, logout_spotify, get_valid_token,
+        generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
+        fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
+        SPOTIFY_PORT
+    )
 
 logger = logging.getLogger("spoff")
 
@@ -141,6 +155,178 @@ class ConfirmModal(ModalScreen[bool]):
     def action_cancel(self) -> None:
         self.dismiss(False)
 
+class SpotifyAuthModal(ModalScreen[Optional[str]]):
+    BINDINGS = [
+        Binding("escape", "dismiss_modal", "Close"),
+        Binding("s", "sync_library", "Sync", show=False),
+        Binding("S", "sync_library", "Sync", show=False),
+        Binding("o", "logout_account", "Log Out", show=False),
+        Binding("O", "logout_account", "Log Out", show=False),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.auth_session = load_spotify_auth()
+        self.server: Optional[OAuthCallbackServer] = None
+        self.pkce_verifier: Optional[str] = None
+        self.is_logging_in: bool = False
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="spotify-dialog"):
+            yield Static("SPOTIFY ACCOUNT", id="spotify-title")
+            if self.auth_session and get_valid_token():
+                user = self.auth_session.get("user", {})
+                name = user.get("display_name") or user.get("id") or "Connected User"
+                u_id = user.get("id", "")
+                plan = user.get("product", "free").capitalize()
+
+                yield Static(f"Logged in as: [bold #ffffff]{escape(str(name))}[/]  [#767676](@{escape(str(u_id))})[/]", id="spotify-user-info")
+                yield Static(f"Account: [bold #569f68]Spotify {escape(str(plan))}[/]", id="spotify-desc")
+                yield Static("Synchronize your Spotify playlists and Liked Songs anytime.", id="spotify-status")
+                yield Static("", id="spotify-instruction")
+                yield Static("[bold #569f68][Enter / S][/] Sync Library    [bold #c47676][O][/] Log Out    [#767676][Esc][/] Close", id="spotify-hint")
+            else:
+                yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff.", id="spotify-desc")
+                yield Static("[dim]Status: Not connected[/dim]", id="spotify-status")
+                yield Static("", id="spotify-instruction")
+                yield Input(placeholder="Or paste redirect URL / auth code here...", id="spotify-input")
+                yield Static("[bold #569f68][Enter][/] Start Browser Login    [#767676][Esc][/] Cancel", id="spotify-hint")
+
+    def on_mount(self) -> None:
+        if not (self.auth_session and get_valid_token()):
+            try:
+                self.query_one("#spotify-input", Input).focus()
+            except Exception:
+                pass
+
+    def action_dismiss_modal(self) -> None:
+        if self.server:
+            self.server.stop()
+            self.server = None
+        self.dismiss(None)
+
+    def action_sync_library(self) -> None:
+        if self.auth_session and get_valid_token():
+            self.dismiss("sync_now")
+
+    def action_logout_account(self) -> None:
+        if self.auth_session:
+            logout_spotify()
+            self.auth_session = None
+            self.dismiss("logged_out")
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "spotify-input":
+            val = event.value.strip()
+            if val:
+                code = val
+                if "code=" in val:
+                    parsed = urllib.parse.urlparse(val)
+                    qs = urllib.parse.parse_qs(parsed.query)
+                    if "code" in qs:
+                        code = qs["code"][0]
+                self.process_auth_code(code)
+            else:
+                self.start_browser_login()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "enter" and not isinstance(self.focused, Input):
+            if self.auth_session and get_valid_token():
+                self.dismiss("sync_now")
+            else:
+                self.start_browser_login()
+            event.prevent_default()
+            event.stop()
+        elif (event.key in ("s", "S") or event.character in ("s", "S")) and not isinstance(self.focused, Input):
+            self.action_sync_library()
+            event.prevent_default()
+            event.stop()
+        elif (event.key in ("o", "O") or event.character in ("o", "O")) and not isinstance(self.focused, Input):
+            self.action_logout_account()
+            event.prevent_default()
+            event.stop()
+
+    def start_browser_login(self) -> None:
+        if self.is_logging_in:
+            return
+        self.is_logging_in = True
+        self.pkce_verifier, challenge = generate_pkce_pair()
+        auth_url, state = build_auth_url(self.pkce_verifier)
+
+        try:
+            self.query_one("#spotify-status", Static).update("[bold #c4a768]Waiting for authorization in browser...[/]")
+            self.query_one("#spotify-instruction", Static).update(
+                f"[dim]If your browser did not open, visit:[/dim]\n[#569f68]{auth_url}[/]"
+            )
+            self.query_one("#spotify-hint", Static).update("[dim]Listening on 127.0.0.1:8989/login  |  Esc: Cancel[/dim]")
+        except Exception:
+            pass
+
+        def _on_callback(code: Optional[str], err: Optional[str]):
+            if err:
+                def _show_err():
+                    try:
+                        self.query_one("#spotify-status", Static).update(f"[bold #c47676]Login failed: {err}[/]")
+                    except Exception:
+                        pass
+                    self.is_logging_in = False
+                self.app.call_from_thread(_show_err)
+            elif code:
+                def _do_proc():
+                    self.process_auth_code(code)
+                self.app.call_from_thread(_do_proc)
+
+        try:
+            self.server = OAuthCallbackServer(port=SPOTIFY_PORT)
+            self.server.start(_on_callback)
+        except Exception as e:
+            logger.error(f"Failed to start OAuth server: {e}")
+            try:
+                self.query_one("#spotify-status", Static).update(f"[bold #c47676]Could not bind port {SPOTIFY_PORT}: {e}[/]")
+            except Exception:
+                pass
+            self.is_logging_in = False
+            return
+
+        def _open():
+            import webbrowser
+            try:
+                webbrowser.open(auth_url)
+            except Exception as e:
+                logger.error(f"Failed to open browser: {e}")
+        threading.Thread(target=_open, daemon=True).start()
+
+    def process_auth_code(self, code: str) -> None:
+        try:
+            self.query_one("#spotify-status", Static).update("[dim]Exchanging tokens and fetching profile...[/dim]")
+        except Exception:
+            pass
+        verifier = self.pkce_verifier or secrets.token_urlsafe(32)
+
+        def _worker():
+            tokens = exchange_code_for_tokens(code, verifier)
+            if tokens and "access_token" in tokens:
+                prof = fetch_current_user_profile(tokens["access_token"])
+                if prof:
+                    tokens["user"] = prof
+                save_spotify_auth(tokens)
+                def _finish():
+                    if self.server:
+                        self.server.stop()
+                        self.server = None
+                    self.dismiss("login_success")
+                self.app.call_from_thread(_finish)
+            else:
+                def _fail():
+                    try:
+                        self.query_one("#spotify-status", Static).update("[bold #c47676]Token exchange failed. Please try again.[/]")
+                    except Exception:
+                        pass
+                    self.is_logging_in = False
+                self.app.call_from_thread(_fail)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
 class HelpModal(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "dismiss_modal", "Close"),
@@ -188,6 +374,7 @@ class HelpModal(ModalScreen[None]):
         right_table.add_row("[bold #569f68]PLAYLISTS & ACTIONS[/]", "")
         right_table.add_row("a, +", "Add track to playlist")
         right_table.add_row("i", "New playlist / import link")
+        right_table.add_row("L / S", "Spotify login & sync")
         right_table.add_row("/", "Focus search box")
         right_table.add_row("Del, d, x", "Delete track / playlist")
         right_table.add_row(": / Shift+;", "Show keybindings guide")
@@ -639,6 +826,72 @@ class SpoffTUI(App):
         color: #555555;
         margin-top: 1;
     }
+
+    /* MODAL: SPOTIFY AUTH */
+    SpotifyAuthModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.75);
+    }
+
+    #spotify-dialog {
+        width: 72;
+        height: auto;
+        background: #181818;
+        border: solid #2a2a2a;
+        padding: 1 2;
+    }
+
+    #spotify-title {
+        text-style: bold;
+        color: #ffffff;
+        margin-bottom: 1;
+    }
+
+    #spotify-user-info {
+        color: #e2e2e2;
+        margin-bottom: 1;
+    }
+
+    #spotify-desc {
+        color: #cccccc;
+        margin-bottom: 1;
+    }
+
+    #spotify-status {
+        color: #c4a768;
+        margin-bottom: 1;
+    }
+
+    #spotify-instruction {
+        color: #767676;
+        margin-bottom: 1;
+    }
+
+    #spotify-input {
+        background: transparent;
+        border: solid #2a2a2a;
+        color: #e2e2e2;
+        height: 3;
+        margin-bottom: 1;
+        padding: 0 1;
+        scrollbar-size-horizontal: 0 !important;
+        scrollbar-size-vertical: 0 !important;
+    }
+
+    #spotify-input:focus {
+        border: solid #569f68;
+    }
+
+    #spotify-hint {
+        color: #767676;
+        margin-top: 1;
+    }
+
+    #spotify-pill {
+        width: auto;
+        margin-right: 2;
+        color: #555555;
+    }
     """
 
     BINDINGS = [
@@ -669,6 +922,9 @@ class SpoffTUI(App):
         Binding("i", "focus_import", "Import"),
         Binding("a", "add_to_playlist", "Add to Playlist"),
         Binding("+", "add_to_playlist", "Add to Playlist", show=False),
+        Binding("L", "open_spotify_auth", "Spotify", show=False),
+        Binding("s", "open_spotify_auth", "Spotify", show=False),
+        Binding("S", "open_spotify_auth", "Spotify", show=False),
         Binding("colon", "show_help", "Help", show=False),
         Binding("shift+semicolon", "show_help", "Help", show=False),
         Binding("question_mark", "show_help", "Help", show=False),
@@ -709,6 +965,7 @@ class SpoffTUI(App):
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-bar"):
             yield Static(r"[bold #ffffff]\[1] Search[/]    [#555555]\[2] Playlists    \[3] Offline[/]", id="nav-bar")
+            yield Static("[#555555]L: Spotify[/]", id="spotify-pill")
             yield Static("[dim]STANDBY[/dim]", id="status-pill")
 
         with Horizontal(id="main-layout"):
@@ -736,6 +993,7 @@ class SpoffTUI(App):
     def on_mount(self) -> None:
         self.player.start_mpv()
         self.playlists = load_saved_playlists()
+        self.update_spotify_pill()
 
         st = self.query_one("#side-table", DataTable)
         st.add_column("Playlist", width=38)
@@ -773,6 +1031,9 @@ class SpoffTUI(App):
             _update()
 
     def on_click(self, event) -> None:
+        if getattr(event, "widget", None) and getattr(event.widget, "id", None) == "spotify-pill":
+            self.action_open_spotify_auth()
+            return
         if self.focused is None or not getattr(self.focused, "can_focus", False):
             if self.active_tab == "search" and not self.search_results:
                 self.query_one("#search-box", Input).focus()
@@ -818,6 +1079,11 @@ class SpoffTUI(App):
             return
         elif (event.key in ("colon", ":", "shift+semicolon", "question_mark") or event.character in (":", "?")) and not isinstance(self.focused, Input):
             self.action_show_help()
+            event.prevent_default()
+            event.stop()
+            return
+        elif (event.key in ("s", "S", "L") or event.character in ("s", "S", "L")) and not isinstance(self.focused, Input) and not (isinstance(self.focused, ScrubBar) and event.character == "L"):
+            self.action_open_spotify_auth()
             event.prevent_default()
             event.stop()
             return
@@ -1077,6 +1343,67 @@ class SpoffTUI(App):
 
     def action_show_help(self):
         self.push_screen(HelpModal())
+
+    def update_spotify_pill(self):
+        try:
+            auth_data = load_spotify_auth()
+            pill = self.query_one("#spotify-pill", Static)
+            if auth_data and get_valid_token():
+                user = auth_data.get("user", {})
+                name = user.get("display_name") or user.get("id") or "Connected"
+                pill.update(f"[bold #569f68]● {escape(str(name))}[/]")
+            else:
+                pill.update("[#555555]L: Spotify[/]")
+        except Exception:
+            pass
+
+    def action_open_spotify_auth(self):
+        def _handle_result(res: Optional[str]):
+            self.update_spotify_pill()
+            if res == "sync_now":
+                self.do_spotify_sync()
+            elif res == "login_success":
+                self.notify_user("Spotify account connected! Synchronizing library...")
+                self.do_spotify_sync()
+            elif res == "logged_out":
+                self.notify_user("Logged out of Spotify.")
+
+        self.push_screen(SpotifyAuthModal(), _handle_result)
+
+    @work(thread=True)
+    def do_spotify_sync(self):
+        self.notify_user("Syncing Spotify playlists and Liked Songs...")
+        auth_data = load_spotify_auth()
+        if not auth_data:
+            self.notify_user("Please log in to Spotify first.")
+            return
+
+        token = get_valid_token()
+        if not token:
+            self.notify_user("Spotify session expired. Please log in again.")
+            return
+
+        def _progress(msg: str):
+            self.notify_user(msg)
+
+        try:
+            synced_count = sync_spotify_library(token, progress_callback=_progress)
+            self.playlists = load_saved_playlists()
+
+            def _refresh_ui():
+                self.refresh_side_table()
+                self.update_spotify_pill()
+                if synced_count > 0:
+                    self.notify_user(f"Synced {synced_count} Spotify playlists/collections into your library!")
+                    if self.playlists and self.active_tab == "playlist":
+                        self.load_playlist_by_index(0)
+                else:
+                    self.notify_user("Spotify library sync completed.")
+
+            self.call_from_thread(_refresh_ui)
+        except Exception as e:
+            logger.error(f"Error syncing Spotify library: {e}")
+            self.notify_user(f"Sync error: {e}")
 
     def action_next_track(self):
         if self.current_index + 1 < len(self.queue):
