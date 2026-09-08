@@ -37,7 +37,6 @@ try:
         has_modify_scopes
     )
     from .mpris import MPRISService
-    from .visualizer import CavaVisualizer
     from .updater import check_for_updates, perform_update, run_cli_update
 except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, parse_spotify_url
@@ -58,7 +57,6 @@ except ImportError:
         has_modify_scopes
     )
     from mpris import MPRISService
-    from visualizer import CavaVisualizer
     from updater import check_for_updates, perform_update, run_cli_update
 
 logger = logging.getLogger("spoff")
@@ -93,6 +91,7 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
 
     def on_mount(self) -> None:
         table = self.query_one("#modal-table", DataTable)
+        table.cursor_foreground_priority = "renderable"
         table.add_columns("Playlist")
         if self.playlists:
             for p in self.playlists:
@@ -732,24 +731,18 @@ class SpoffTUI(App):
 
     DataTable > .datatable--cursor {
         background: #252525;
-        color: #e2e2e2;
     }
 
     DataTable:focus > .datatable--cursor {
         background: #2e2e2e;
-        color: #ffffff;
-        text-style: bold;
     }
 
     #side-table > .datatable--cursor {
         background: #252525;
-        color: #e2e2e2;
     }
 
     #side-table:focus > .datatable--cursor {
         background: #2e2e2e;
-        color: #ffffff;
-        text-style: bold;
     }
 
     DataTable > .datatable--hover {
@@ -1182,11 +1175,6 @@ class SpoffTUI(App):
         text-style: bold;
     }
 
-    #deck-visualizer {
-        width: auto;
-        margin-right: 2;
-    }
-
     /* MODAL: UPDATE */
     UpdateModal {
         align: center middle;
@@ -1282,7 +1270,6 @@ class SpoffTUI(App):
     def __init__(self):
         super().__init__()
         self.player = MPVController()
-        self.visualizer = CavaVisualizer(bars=14)
         mpris_callbacks = {
             "play_pause": lambda: self.call_from_thread(self.action_toggle_play),
             "play": lambda: self.call_from_thread(self._mpris_play),
@@ -1310,10 +1297,6 @@ class SpoffTUI(App):
         atexit.register(self._cleanup_on_exit)
 
     def _cleanup_on_exit(self):
-        try:
-            self.visualizer.stop()
-        except Exception:
-            pass
         try:
             if self.mpris:
                 self.mpris.stop()
@@ -1349,7 +1332,6 @@ class SpoffTUI(App):
             yield Static("", id="notification-line")
             with Horizontal(id="deck-line-1"):
                 yield Static("No track playing", id="deck-track")
-                yield Static("", id="deck-visualizer")
                 yield Static("[dim]IDLE[/dim]", id="deck-source")
             with Horizontal(id="deck-line-2"):
                 yield Static("00:00", id="time-elapsed")
@@ -1362,15 +1344,16 @@ class SpoffTUI(App):
         self.playlists = load_saved_playlists()
         self.update_spotify_pill()
         self.mpris.start()
-        self.visualizer.start()
         self.check_github_updates_bg()
 
         st = self.query_one("#side-table", DataTable)
+        st.cursor_foreground_priority = "renderable"
         st.add_column("Playlist", width=38)
         for idx, p in enumerate(self.playlists):
             st.add_row(p.get("name", "Untitled"), key=str(idx))
 
         tt = self.query_one("#track-table", DataTable)
+        tt.cursor_foreground_priority = "renderable"
         tt.add_columns("Source", "Title", "Artist", "Duration")
 
         self.set_interval(0.5, self.update_player_hud)
@@ -2139,13 +2122,7 @@ class SpoffTUI(App):
         curr = self.player.current_track
         is_scrubbing = (self.focused and self.focused.id == "playback-bar")
 
-        # CAVA Audio Spectrum Visualizer
         is_paused = self.player.is_paused if curr else False
-        vis_markup = self.visualizer.get_bars_markup(curr is not None, is_paused)
-        try:
-            self.query_one("#deck-visualizer", Static).update(vis_markup)
-        except Exception:
-            pass
 
         # MPRIS Desktop Media Integration
         if self.mpris:
