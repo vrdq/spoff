@@ -12,6 +12,7 @@ import atexit
 import secrets
 import urllib.parse
 from typing import List, Dict, Any, Optional, Tuple
+import random
 from pathlib import Path
 
 from rich.markup import escape
@@ -21,6 +22,7 @@ from textual.app import App, ComposeResult
 from textual.screen import ModalScreen
 from textual.containers import Horizontal, Vertical
 from textual.widgets import Static, Input, DataTable, ProgressBar, Button
+from textual.coordinate import Coordinate
 from textual.binding import Binding
 
 try:
@@ -42,6 +44,7 @@ try:
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
         reorder_spotify_playlist_track, delete_spotify_playlist, has_modify_scopes
     )
+    from .lyrics import fetch_lyrics, get_active_lyric_index
     from .mpris import MPRISService
     from .visualizer import VisualizerWidget, CavaVisualizer
     from .updater import check_for_updates, perform_update, run_cli_update
@@ -64,6 +67,7 @@ except ImportError:
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
         reorder_spotify_playlist_track, delete_spotify_playlist, has_modify_scopes
     )
+    from lyrics import fetch_lyrics, get_active_lyric_index
     from mpris import MPRISService
     from visualizer import VisualizerWidget, CavaVisualizer
     from updater import check_for_updates, perform_update, run_cli_update
@@ -537,6 +541,7 @@ class HelpModal(ModalScreen[None]):
         left_table.add_row("1", "Search songs & artists")
         left_table.add_row("2", "Playlists & favorites")
         left_table.add_row("3", "Offline library (cached)")
+        left_table.add_row("4, L", "Synchronized lyrics")
         left_table.add_row("h / l", "Sidebar / Tracks pane")
         left_table.add_row("j / k, Arrows", "Navigate table rows")
         left_table.add_row("k (at top row)", "Jump into search/import bar")
@@ -545,6 +550,8 @@ class HelpModal(ModalScreen[None]):
         left_table.add_row("", "")
         left_table.add_row("[bold #569f68]PLAYBACK[/]", "")
         left_table.add_row("Space, Fn+F8", "Play / Pause toggle")
+        left_table.add_row("s", "Toggle shuffle mode")
+        left_table.add_row("r", "Toggle repeat (off/all/1)")
         left_table.add_row("F1", "Mute / Unmute audio")
         left_table.add_row("F2 / F3", "Volume -/+ 5%")
         left_table.add_row("p / n, Fn+F7/F9", "Previous / Next track")
@@ -559,13 +566,13 @@ class HelpModal(ModalScreen[None]):
         right_table.add_row("h / l", "Seek -5s / +5s on bar")
         right_table.add_row("H / L", "Fast seek -15s / +15s")
         right_table.add_row("0 – 9", "Jump to 0% – 90% of song")
-        right_table.add_row("Esc, k, Up", "Return to tracks table")
+        right_table.add_row("Enter / Click", "Jump to lyric timestamp")
         right_table.add_row("", "")
         right_table.add_row("[bold #569f68]PLAYLISTS & ACTIONS[/]", "")
         right_table.add_row("J / K, Shift+Arrows", "Reorder / drag songs")
         right_table.add_row("a, +", "Add track to playlist")
         right_table.add_row("i", "New playlist / import link")
-        right_table.add_row("L / S", "Spotify login & sync")
+        right_table.add_row("S", "Spotify login & sync")
         right_table.add_row("u / U", "Check / pull GitHub update")
         right_table.add_row("/", "Focus search box")
         right_table.add_row("Del, d, x", "Remove track / playlist")
@@ -803,6 +810,36 @@ class SpoffTUI(App):
         height: 1fr;
         border: none;
         background: transparent;
+    }
+
+    #lyrics-pane {
+        height: 1fr;
+        display: none;
+    }
+
+    #lyrics-header {
+        height: 1;
+        margin-bottom: 1;
+        color: #767676;
+    }
+
+    #lyrics-table {
+        height: 1fr;
+        border: none;
+        background: transparent;
+    }
+
+    #lyrics-table > .datatable--cursor {
+        background: #252525;
+    }
+
+    #lyrics-table:focus > .datatable--cursor {
+        background: #2e2e2e;
+    }
+
+    #shuf-pill, #rep-pill {
+        width: auto;
+        margin-right: 2;
     }
 
     /* BOTTOM TRANSPORT DECK */
@@ -1252,8 +1289,9 @@ class SpoffTUI(App):
         Binding("i", "focus_import", "Import"),
         Binding("a", "add_to_playlist", "Add to Playlist"),
         Binding("+", "add_to_playlist", "Add to Playlist", show=False),
-        Binding("L", "open_spotify_auth", "Spotify", show=False),
-        Binding("s", "open_spotify_auth", "Spotify", show=False),
+        Binding("s", "toggle_shuffle", "Shuffle"),
+        Binding("r", "toggle_repeat", "Repeat"),
+        Binding("L", "toggle_lyrics", "Lyrics", show=False),
         Binding("S", "open_spotify_auth", "Spotify", show=False),
         Binding("u", "check_update", "Update", show=False),
         Binding("U", "check_update", "Update", show=False),
@@ -1263,6 +1301,7 @@ class SpoffTUI(App):
         Binding("1", "nav_search", "Search"),
         Binding("2", "nav_playlist", "Playlist"),
         Binding("3", "nav_offline", "Offline"),
+        Binding("4", "nav_lyrics", "Lyrics"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
         Binding("J", "move_item_down", "Move Down", show=False),
@@ -1301,6 +1340,12 @@ class SpoffTUI(App):
         self.search_results: List[Dict[str, Any]] = []
         self.active_tab: str = "search"
         self._play_request_id: int = 0
+        self.shuffle_mode: bool = False
+        self.repeat_mode: str = "off"  # "off", "all", "one"
+        self._shuffle_history: List[int] = []
+        self.current_lyrics: Optional[Dict[str, Any]] = None
+        self._active_lyric_idx: int = -1
+        self.last_browsing_tab: str = "playlist"
         self.player.playback_finished_callback = self.on_track_finished
         atexit.register(self._cleanup_on_exit)
 
@@ -1329,9 +1374,9 @@ class SpoffTUI(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-bar"):
-            yield Static(r"[bold #ffffff]\[1] Search[/]    [#555555]\[2] Playlists    \[3] Offline[/]", id="nav-bar")
+            yield Static(r"[bold #ffffff]\[1] Search[/]    [#555555]\[2] Playlists    \[3] Offline    \[4] Lyrics[/]", id="nav-bar")
             yield Static("", id="update-pill")
-            yield Static("[#555555]L: Spotify[/]", id="spotify-pill")
+            yield Static("[#555555]S: Spotify[/]", id="spotify-pill")
             yield Static("[dim]STANDBY[/dim]", id="status-pill")
 
         with Horizontal(id="main-layout"):
@@ -1344,18 +1389,23 @@ class SpoffTUI(App):
             with Vertical(id="content-pane"):
                 yield Input(placeholder="Search songs or artists...", id="search-box", classes="action-input")
                 yield DataTable(id="track-table", cursor_type="row", show_header=True)
+                with Vertical(id="lyrics-pane"):
+                    yield Static("", id="lyrics-header")
+                    yield DataTable(id="lyrics-table", cursor_type="row", show_header=False)
 
         with Vertical(id="player-deck"):
             yield Static("", id="notification-line")
             with Horizontal(id="deck-line-1"):
                 yield Static("No track playing", id="deck-track")
                 yield VisualizerWidget(self.visualizer, id="deck-visualizer")
+                yield Static("[dim]SHUF[/dim]", id="shuf-pill")
+                yield Static("[dim]REP[/dim]", id="rep-pill")
                 yield Static("[dim]IDLE[/dim]", id="deck-source")
             with Horizontal(id="deck-line-2"):
                 yield Static("00:00", id="time-elapsed")
                 yield ScrubBar(total=100, show_eta=False, id="playback-bar")
                 yield Static("00:00", id="time-total")
-            yield Static("Enter: play  |  Space: pause  |  b: seek  |  : help  |  q: quit", id="deck-line-3")
+            yield Static("Enter: play  |  Space: pause  |  s: shuf  |  r: rep  |  4/L: lyrics  |  : help  |  q: quit", id="deck-line-3")
 
     def on_mount(self) -> None:
         self.player.start_mpv()
@@ -1377,6 +1427,11 @@ class SpoffTUI(App):
         tt = self.query_one("#track-table", DataTable)
         tt.cursor_foreground_priority = "renderable"
         tt.add_columns("Source", "Title", "Artist", "Duration")
+
+        lt = self.query_one("#lyrics-table", DataTable)
+        lt.cursor_foreground_priority = "renderable"
+        lt.add_column("Time", width=7)
+        lt.add_column("Lyric")
 
         self.set_interval(0.5, self.update_player_hud)
         logger.info("Spoff engine active.")
@@ -1418,12 +1473,24 @@ class SpoffTUI(App):
             elif event.widget.id == "update-pill":
                 self.action_check_update()
                 return
+            elif event.widget.id == "shuf-pill":
+                self.action_toggle_shuffle()
+                return
+            elif event.widget.id == "rep-pill":
+                self.action_toggle_repeat()
+                return
         if self.focused is None or not getattr(self.focused, "can_focus", False):
-            self.query_one("#track-table", DataTable).focus()
+            if self.active_tab == "lyrics":
+                self.query_one("#lyrics-table", DataTable).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
 
     def on_key(self, event) -> None:
         if self.focused is None:
-            self.query_one("#track-table", DataTable).focus()
+            if self.active_tab == "lyrics":
+                self.query_one("#lyrics-table", DataTable).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
 
         k = str(getattr(event, "key", "")).lower()
         name = str(getattr(event, "name", "")).lower()
@@ -1463,7 +1530,22 @@ class SpoffTUI(App):
             event.prevent_default()
             event.stop()
             return
-        elif (event.key in ("s", "S", "L") or event.character in ("s", "S", "L")) and not isinstance(self.focused, Input) and not (isinstance(self.focused, ScrubBar) and event.character == "L"):
+        elif (event.key in ("s",) or event.character == "s") and not isinstance(self.focused, Input):
+            self.action_toggle_shuffle()
+            event.prevent_default()
+            event.stop()
+            return
+        elif (event.key in ("r",) or event.character == "r") and not isinstance(self.focused, Input):
+            self.action_toggle_repeat()
+            event.prevent_default()
+            event.stop()
+            return
+        elif (event.key in ("L",) or event.character == "L") and not isinstance(self.focused, Input) and not (isinstance(self.focused, ScrubBar) and event.character == "L"):
+            self.action_toggle_lyrics()
+            event.prevent_default()
+            event.stop()
+            return
+        elif (event.key in ("S",) or event.character == "S") and not isinstance(self.focused, Input):
             self.action_open_spotify_auth()
             event.prevent_default()
             event.stop()
@@ -1522,16 +1604,56 @@ class SpoffTUI(App):
     def action_nav_search(self): self.switch_view("search")
     def action_nav_playlist(self): self.switch_view("playlist")
     def action_nav_offline(self): self.switch_view("offline")
+    def action_nav_lyrics(self): self.switch_view("lyrics")
+
+    def action_toggle_lyrics(self):
+        if isinstance(self.focused, Input):
+            return
+        if self.active_tab == "lyrics":
+            prev = getattr(self, "last_browsing_tab", "playlist")
+            if prev == "lyrics":
+                prev = "playlist"
+            self.switch_view(prev)
+        else:
+            self.last_browsing_tab = self.active_tab
+            self.switch_view("lyrics")
+
+    def action_toggle_shuffle(self):
+        if isinstance(self.focused, Input):
+            return
+        self.shuffle_mode = not self.shuffle_mode
+        self._shuffle_history = []
+        status = "ON" if self.shuffle_mode else "OFF"
+        self.notify_user(f"Shuffle: {status}")
+        self.update_player_hud()
+
+    def action_toggle_repeat(self):
+        if isinstance(self.focused, Input):
+            return
+        modes = ["off", "all", "one"]
+        curr_idx = modes.index(self.repeat_mode) if self.repeat_mode in modes else 0
+        self.repeat_mode = modes[(curr_idx + 1) % len(modes)]
+        labels = {"off": "OFF", "all": "ALL", "one": "SINGLE TRACK"}
+        self.notify_user(f"Repeat: {labels[self.repeat_mode]}")
+        self.update_player_hud()
 
     def switch_view(self, view: str):
         self.active_tab = view
         search_box = self.query_one("#search-box", Input)
         track_table = self.query_one("#track-table", DataTable)
+        lyrics_pane = self.query_one("#lyrics-pane", Vertical)
+        lyrics_table = self.query_one("#lyrics-table", DataTable)
 
         search_box.display = (view == "search")
-        track_table.display = True
+        track_table.display = (view != "lyrics")
+        lyrics_pane.display = (view == "lyrics")
 
-        tabs = [("search", "1", "Search"), ("playlist", "2", "Playlists"), ("offline", "3", "Offline")]
+        tabs = [
+            ("search", "1", "Search"),
+            ("playlist", "2", "Playlists"),
+            ("offline", "3", "Offline"),
+            ("lyrics", "4", "Lyrics"),
+        ]
         parts = []
         for mode, num, label in tabs:
             if mode == view:
@@ -1570,6 +1692,96 @@ class SpoffTUI(App):
                 self.notify_user("Offline library is empty — cached tracks appear here")
             else:
                 self.notify_user("")
+        elif view == "lyrics":
+            self.render_lyrics()
+            if not (self.focused and self.focused.id == "side-table"):
+                lyrics_table.focus()
+            self.notify_user("Lyrics: Enter or Click any line to jump to that moment")
+
+    def render_lyrics(self):
+        lh = self.query_one("#lyrics-header", Static)
+        lt = self.query_one("#lyrics-table", DataTable)
+
+        curr = self.player.current_track
+        if not curr:
+            lh.update("[dim]NO TRACK PLAYING[/dim]")
+            lt.clear()
+            lt.add_row("", "[dim]Play a song to view lyrics[/dim]")
+            return
+
+        title = curr.get("title", "Unknown")
+        artist = curr.get("artist", "Unknown")
+
+        if self.current_lyrics is None:
+            lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]  [dim #767676]· FETCHING LYRICS...[/dim]")
+            lt.clear()
+            lt.add_row("", "[dim]Searching synchronized lyrics on LRCLIB...[/dim]")
+            return
+
+        lyr = self.current_lyrics
+        if lyr.get("synced"):
+            tag = "[bold #569f68]SYNCED[/]"
+        elif lyr.get("instrumental"):
+            tag = "[dim #d08770]INSTRUMENTAL[/dim]"
+        else:
+            tag = "[dim]PLAIN[/dim]"
+
+        lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]  {tag}")
+
+        lt.clear()
+        if lyr.get("instrumental"):
+            lt.add_row("", "[dim]— Instrumental Track (No Lyrics) —[/dim]")
+            return
+
+        lines = lyr.get("lines", [])
+        if not lines:
+            lt.add_row("", "[dim]No lyrics found for this track[/dim]")
+            return
+
+        pos, _ = self.player.get_progress()
+        active_idx = get_active_lyric_index(lines, pos) if lyr.get("synced") else -1
+        self._active_lyric_idx = active_idx
+
+        for idx, line in enumerate(lines):
+            t_sec = line.get("time")
+            time_label = format_time(t_sec) if t_sec is not None else ""
+            text = escape(line.get("text") or "♪")
+
+            if idx == active_idx:
+                lt.add_row(f"[bold #569f68]{time_label}[/]", f"[bold #ffffff]▶  {text}[/]", key=str(idx))
+            elif active_idx != -1 and idx < active_idx:
+                lt.add_row(f"[dim #3a3a3a]{time_label}[/]", f"[#555555]   {text}[/]", key=str(idx))
+            else:
+                lt.add_row(f"[dim #555555]{time_label}[/]", f"[#888888]   {text}[/]", key=str(idx))
+
+        if 0 <= active_idx < len(lines):
+            try:
+                lt.move_cursor(row=active_idx)
+            except Exception:
+                pass
+
+    def _highlight_lyric_line(self, old_idx: int, new_idx: int, lines: List[Dict[str, Any]]):
+        try:
+            lt = self.query_one("#lyrics-table", DataTable)
+        except Exception:
+            return
+        if 0 <= old_idx < lt.row_count and old_idx < len(lines):
+            old_line = lines[old_idx]
+            t_str = format_time(old_line.get("time", 0))
+            try:
+                lt.update_cell_at(Coordinate(old_idx, 0), f"[dim #3a3a3a]{t_str}[/]")
+                lt.update_cell_at(Coordinate(old_idx, 1), f"[#555555]   {escape(old_line.get('text') or '♪')}[/]")
+            except Exception:
+                pass
+        if 0 <= new_idx < lt.row_count and new_idx < len(lines):
+            new_line = lines[new_idx]
+            t_str = format_time(new_line.get("time", 0))
+            try:
+                lt.update_cell_at(Coordinate(new_idx, 0), f"[bold #569f68]{t_str}[/]")
+                lt.update_cell_at(Coordinate(new_idx, 1), f"[bold #ffffff]▶  {escape(new_line.get('text') or '♪')}[/]")
+                lt.move_cursor(row=new_idx)
+            except Exception:
+                pass
 
     def render_tracks(self, tracks: List[Dict[str, Any]], select_row: Optional[int] = None):
         table = self.query_one("#track-table", DataTable)
@@ -1611,7 +1823,10 @@ class SpoffTUI(App):
 
     def action_focus_tracks(self):
         if not isinstance(self.focused, Input):
-            self.query_one("#track-table", DataTable).focus()
+            if self.active_tab == "lyrics":
+                self.query_one("#lyrics-table", DataTable).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
 
     def action_clear_or_unfocus(self):
         f = self.focused
@@ -1621,7 +1836,15 @@ class SpoffTUI(App):
             else:
                 self.query_one("#track-table", DataTable).focus()
         elif f and f.id == "playback-bar":
-            self.query_one("#track-table", DataTable).focus()
+            if self.active_tab == "lyrics":
+                self.query_one("#lyrics-table", DataTable).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
+        elif (f and f.id == "lyrics-table") or self.active_tab == "lyrics":
+            prev = getattr(self, "last_browsing_tab", "playlist")
+            if prev == "lyrics":
+                prev = "playlist"
+            self.switch_view(prev)
         else:
             self.query_one("#track-table", DataTable).focus()
 
@@ -1636,10 +1859,13 @@ class SpoffTUI(App):
             else:
                 self.query_one("#track-table", DataTable).focus()
         elif f.id == "side-table":
-            self.query_one("#track-table", DataTable).focus()
+            if self.active_tab == "lyrics":
+                self.query_one("#lyrics-table", DataTable).focus()
+            else:
+                self.query_one("#track-table", DataTable).focus()
         elif f.id == "search-box":
             self.query_one("#track-table", DataTable).focus()
-        elif f.id == "track-table":
+        elif f.id in ("track-table", "lyrics-table"):
             self.query_one("#playback-bar", ScrubBar).focus()
         elif f.id == "playback-bar":
             self.query_one("#side-table", DataTable).focus()
@@ -1653,7 +1879,7 @@ class SpoffTUI(App):
             return
 
         if isinstance(f, DataTable):
-            if f.id == "track-table":
+            if f.id in ("track-table", "lyrics-table"):
                 if f.row_count == 0 or (f.cursor_row is not None and f.cursor_row >= f.row_count - 1):
                     self.query_one("#playback-bar", ScrubBar).focus()
                     return
@@ -2046,18 +2272,35 @@ class SpoffTUI(App):
                 self.queue = list(view_tracks)
                 self.current_index = -1
 
-        if self.queue:
-            if self.current_index + 1 < len(self.queue):
-                next_idx = self.current_index + 1 if self.current_index >= 0 else 0
-                self.play_index(next_idx)
-                self._sync_table_cursor_to_index(next_idx)
-            else:
-                self.player.stop()
-                self.current_index = -1
-                self.notify_user("End of queue reached.")
-                self.update_player_hud()
-        else:
+        if not self.queue:
             self.notify_user("No tracks available in queue.")
+            return
+
+        if self.repeat_mode == "one" and self.current_index >= 0:
+            self.play_index(self.current_index)
+            return
+
+        if self.shuffle_mode and len(self.queue) > 1:
+            if self.current_index >= 0:
+                self._shuffle_history.append(self.current_index)
+            candidates = [i for i in range(len(self.queue)) if i != self.current_index]
+            next_idx = random.choice(candidates)
+            self.play_index(next_idx)
+            self._sync_table_cursor_to_index(next_idx)
+            return
+
+        if self.current_index + 1 < len(self.queue):
+            next_idx = self.current_index + 1 if self.current_index >= 0 else 0
+            self.play_index(next_idx)
+            self._sync_table_cursor_to_index(next_idx)
+        elif self.repeat_mode == "all":
+            self.play_index(0)
+            self._sync_table_cursor_to_index(0)
+        else:
+            self.player.stop()
+            self.current_index = -1
+            self.notify_user("End of queue reached.")
+            self.update_player_hud()
 
     def action_prev_track(self):
         pos, _ = self.player.get_progress()
@@ -2072,20 +2315,28 @@ class SpoffTUI(App):
             if view_tracks:
                 self.queue = list(view_tracks)
 
-        if self.queue:
-            if self.current_index > 0:
-                prev_idx = self.current_index - 1
+        if not self.queue:
+            self.notify_user("No tracks available in queue.")
+            return
+
+        if self.shuffle_mode and self._shuffle_history:
+            prev_idx = self._shuffle_history.pop()
+            if 0 <= prev_idx < len(self.queue):
                 self.play_index(prev_idx)
                 self._sync_table_cursor_to_index(prev_idx)
-            elif self.current_index == 0:
-                self.player.seek_absolute(0)
-                self.notify_user("Restarted track.")
-                self.update_player_hud()
-            else:
-                self.play_index(0)
-                self._sync_table_cursor_to_index(0)
+                return
+
+        if self.current_index > 0:
+            prev_idx = self.current_index - 1
+            self.play_index(prev_idx)
+            self._sync_table_cursor_to_index(prev_idx)
+        elif self.current_index == 0:
+            self.player.seek_absolute(0)
+            self.notify_user("Restarted track.")
+            self.update_player_hud()
         else:
-            self.notify_user("No tracks available in queue.")
+            self.play_index(0)
+            self._sync_table_cursor_to_index(0)
 
     def action_quit_app(self):
         try:
@@ -2413,7 +2664,10 @@ class SpoffTUI(App):
                 self.action_delete_playlist()
 
     def on_track_finished(self):
-        self.call_from_thread(self.action_next_track)
+        if self.repeat_mode == "one" and self.current_index >= 0:
+            self.call_from_thread(self.play_index, self.current_index)
+        else:
+            self.call_from_thread(self.action_next_track)
 
     def update_player_hud(self):
         pos, dur = self.player.get_progress()
@@ -2429,6 +2683,26 @@ class SpoffTUI(App):
         is_scrubbing = (self.focused and self.focused.id == "playback-bar")
 
         is_paused = self.player.is_paused if curr else False
+
+        # Update shuffle & repeat indicators
+        shuf_badge = "[bold #569f68]SHUF[/]" if self.shuffle_mode else "[dim]SHUF[/dim]"
+        self.query_one("#shuf-pill", Static).update(shuf_badge)
+
+        rep_badge = "[dim]REP[/dim]"
+        if self.repeat_mode == "all":
+            rep_badge = "[bold #569f68]REP[/]"
+        elif self.repeat_mode == "one":
+            rep_badge = "[bold #569f68]REP-1[/]"
+        self.query_one("#rep-pill", Static).update(rep_badge)
+
+        # Update synced lyrics tracking
+        if self.active_tab == "lyrics" and self.current_lyrics and self.current_lyrics.get("synced"):
+            lines = self.current_lyrics.get("lines", [])
+            active_idx = get_active_lyric_index(lines, pos)
+            if active_idx != self._active_lyric_idx:
+                old_idx = self._active_lyric_idx
+                self._active_lyric_idx = active_idx
+                self._highlight_lyric_line(old_idx, active_idx, lines)
 
         # MPRIS Desktop Media Integration
         if self.mpris:
@@ -2456,11 +2730,13 @@ class SpoffTUI(App):
 
         if is_scrubbing:
             hints = "Seek: h/l (-/+5s)  |  H/L (-/+15s)  |  0-9: jump %  |  Space: pause  |  Esc: back"
+        elif self.active_tab == "lyrics":
+            hints = "Enter/Click: seek to line  |  Space: pause  |  s: shuf  |  r: rep  |  Esc/L: back  |  q: quit"
         else:
             queue_len = len(self.queue)
             queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "empty"
             vol_str = "Muted" if self.volume == 0 else f"{self.volume}%"
-            hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  Enter: play  |  Space: pause  |  b: seek  |  : help  |  q: quit"
+            hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  s: shuf  |  r: rep  |  4/L: lyrics  |  b: seek  |  : help  |  q: quit"
         self.query_one("#deck-line-3", Static).update(escape(hints))
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -2542,6 +2818,18 @@ class SpoffTUI(App):
                 self.load_playlist_by_index(idx, focus_tracks=False)
         elif table_id == "track-table":
             self.play_current_table_row(event.cursor_row)
+        elif table_id == "lyrics-table":
+            idx = event.cursor_row
+            if self.current_lyrics and self.current_lyrics.get("lines"):
+                lines = self.current_lyrics["lines"]
+                if idx is not None and 0 <= idx < len(lines):
+                    t = lines[idx].get("time")
+                    if t is not None:
+                        self.player.seek_absolute(t)
+                        self.notify_user(f"Seeked to {format_time(t)}")
+                        old_idx = self._active_lyric_idx
+                        self._active_lyric_idx = idx
+                        self._highlight_lyric_line(old_idx, idx, lines)
 
     def play_index(self, index: int):
         if not (0 <= index < len(self.queue)):
@@ -2558,6 +2846,21 @@ class SpoffTUI(App):
         t_id = track.get("id") or str(hash(track.get("title", "") + track.get("artist", "")))
         title = track.get("title", "Unknown")
         artist = track.get("artist", "Unknown")
+
+        # Asynchronously fetch synced lyrics in background
+        self._active_lyric_idx = -1
+        self.current_lyrics = None
+        if self.active_tab == "lyrics":
+            self.call_from_thread(self.render_lyrics)
+
+        def _fetch_lyr_bg():
+            dur_ms = track.get("duration_ms")
+            lyr = fetch_lyrics(title, artist, dur_ms)
+            if req_id == self._play_request_id:
+                self.current_lyrics = lyr
+                if self.active_tab == "lyrics":
+                    self.call_from_thread(self.render_lyrics)
+        threading.Thread(target=_fetch_lyr_bg, daemon=True).start()
 
         if self.mpris:
             dur_sec = float(track.get("duration_ms", 0)) / 1000.0
