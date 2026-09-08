@@ -286,22 +286,75 @@ def get_valid_token() -> Optional[str]:
 
     return access_token
 
-def spotify_api_get(endpoint: str, token: str) -> Optional[Dict[str, Any]]:
-    """Performs an authorized GET request to Spotify Web API."""
+def spotify_api_request(
+    endpoint: str,
+    method: str = "GET",
+    body: Optional[Dict[str, Any]] = None,
+    token: Optional[str] = None,
+    max_retries: int = 2
+) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    """
+    Performs an authorized HTTP request to Spotify Web API with auto-retry on 429 rate limit.
+    Returns (success, response_dict_or_none, error_message).
+    """
+    if not token:
+        token = get_valid_token()
+    if not token:
+        return False, None, "Not authenticated with Spotify"
+
     url = f"{SPOTIFY_API_BASE}{endpoint}" if endpoint.startswith("/") else endpoint
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "User-Agent": "Spoff/0.1.0"
-        }
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        logger.error(f"Spotify API GET failed for {endpoint}: {e}")
-        return None
+    payload = json.dumps(body).encode("utf-8") if body is not None else None
+
+    for attempt in range(max_retries + 1):
+        req = urllib.request.Request(
+            url,
+            data=payload,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "User-Agent": "Spoff/0.1.0",
+                "Content-Type": "application/json"
+            },
+            method=method.upper()
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=14) as resp:
+                content = resp.read().decode("utf-8")
+                data = json.loads(content) if content.strip() else {}
+                return True, data, ""
+        except urllib.error.HTTPError as e:
+            err_body = ""
+            try:
+                err_body = e.read().decode("utf-8")
+                err_json = json.loads(err_body)
+                msg = err_json.get("error", {}).get("message", str(e))
+            except Exception:
+                msg = f"HTTP {e.code}: {e.reason}"
+
+            if e.code == 429 and attempt < max_retries:
+                retry_header = e.headers.get("retry-after") or e.headers.get("Retry-After") or "2"
+                try:
+                    retry_sec = min(int(retry_header), 6)
+                except ValueError:
+                    retry_sec = 2
+                logger.warning(f"Spotify 429 rate limit on {endpoint}, waiting {retry_sec}s (attempt {attempt+1}/{max_retries})")
+                time.sleep(retry_sec)
+                continue
+
+            if e.code == 403 and "scope" in msg.lower():
+                return False, None, "Spotify permission required: please re-link account (press 'L') for playlist sync"
+
+            logger.error(f"Spotify API {method} {endpoint} failed ({e.code}): {msg}")
+            return False, None, msg
+        except Exception as e:
+            logger.error(f"Spotify API {method} {endpoint} network error: {e}")
+            return False, None, str(e)
+
+    return False, None, "Spotify request timed out after retries"
+
+def spotify_api_get(endpoint: str, token: str) -> Optional[Dict[str, Any]]:
+    """Performs an authorized GET request to Spotify Web API with auto-retry."""
+    ok, data, _ = spotify_api_request(endpoint, method="GET", token=token)
+    return data if ok else None
 
 def fetch_current_user_profile(token: str) -> Optional[Dict[str, Any]]:
     """Fetches user profile information."""
@@ -458,71 +511,6 @@ def has_modify_scopes() -> bool:
     granted_scopes = set(auth.get("scope", "").split())
     required = {"playlist-modify-public", "playlist-modify-private", "user-library-modify"}
     return bool(required.intersection(granted_scopes))
-
-def spotify_api_request(
-    endpoint: str,
-    method: str = "GET",
-    body: Optional[Dict[str, Any]] = None,
-    token: Optional[str] = None,
-    max_retries: int = 2
-) -> Tuple[bool, Optional[Dict[str, Any]], str]:
-    """
-    Performs an authorized HTTP request to Spotify Web API with auto-retry on 429 rate limit.
-    Returns (success, response_dict_or_none, error_message).
-    """
-    if not token:
-        token = get_valid_token()
-    if not token:
-        return False, None, "Not authenticated with Spotify"
-
-    url = f"{SPOTIFY_API_BASE}{endpoint}" if endpoint.startswith("/") else endpoint
-    payload = json.dumps(body).encode("utf-8") if body is not None else None
-
-    for attempt in range(max_retries + 1):
-        req = urllib.request.Request(
-            url,
-            data=payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "User-Agent": "Spoff/0.1.0",
-                "Content-Type": "application/json"
-            },
-            method=method.upper()
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=14) as resp:
-                content = resp.read().decode("utf-8")
-                data = json.loads(content) if content.strip() else {}
-                return True, data, ""
-        except urllib.error.HTTPError as e:
-            err_body = ""
-            try:
-                err_body = e.read().decode("utf-8")
-                err_json = json.loads(err_body)
-                msg = err_json.get("error", {}).get("message", str(e))
-            except Exception:
-                msg = f"HTTP {e.code}: {e.reason}"
-
-            if e.code == 429 and attempt < max_retries:
-                retry_header = e.headers.get("retry-after") or e.headers.get("Retry-After") or "2"
-                try:
-                    retry_sec = min(int(retry_header), 6)
-                except ValueError:
-                    retry_sec = 2
-                logger.warning(f"Spotify 429 rate limit on {endpoint}, waiting {retry_sec}s (attempt {attempt+1}/{max_retries})")
-                time.sleep(retry_sec)
-                continue
-
-            if e.code == 403 and "scope" in msg.lower():
-                return False, None, "Spotify permission required: please re-link account (press 'L') for playlist sync"
-
-            logger.error(f"Spotify API {method} {endpoint} failed ({e.code}): {msg}")
-            return False, None, msg
-        except Exception as e:
-            logger.error(f"Spotify API {method} {endpoint} network error: {e}")
-            return False, None, str(e)
-
-    return False, None, "Spotify request timed out after retries"
 
 def search_spotify_track(title: str, artist: str = "", token: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """

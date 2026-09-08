@@ -15,7 +15,7 @@ from textual import events, work
 from textual.app import App, ComposeResult
 from textual.screen import ModalScreen
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Static, Input, DataTable, ProgressBar
+from textual.widgets import Static, Input, DataTable, ProgressBar, Button
 from textual.binding import Binding
 
 try:
@@ -175,6 +175,7 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
         Binding("R", "relink_account", "Re-link", show=False),
         Binding("o", "logout_account", "Log Out", show=False),
         Binding("O", "logout_account", "Log Out", show=False),
+        Binding("q", "dismiss_modal", "Close", show=False),
     ]
 
     def __init__(self):
@@ -189,32 +190,98 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
             yield Static("SPOTIFY ACCOUNT", id="spotify-title")
             if self.auth_session and get_valid_token():
                 user = self.auth_session.get("user", {})
-                name = user.get("display_name") or user.get("id") or "Connected User"
-                u_id = user.get("id", "")
+                name = user.get("display_name") or user.get("id") or "Spotify User"
+                email = user.get("email") or ""
                 plan = user.get("product", "free").capitalize()
+                u_id = user.get("id") or ""
 
-                yield Static(f"Logged in as: [bold #ffffff]{escape(str(name))}[/]  [#767676](@{escape(str(u_id))})[/]", id="spotify-user-info")
-                yield Static(f"Account: [bold #569f68]Spotify {escape(str(plan))}[/]", id="spotify-desc")
-                yield Static("Synchronize your Spotify playlists and Liked Songs anytime.", id="spotify-status")
-                if not has_modify_scopes():
-                    yield Static("[bold #c4a768]Two-way sync notice:[/] Account permissions need an update for playlist editing.\nPress [bold #569f68][R][/] to re-link Spotify with two-way sync permissions.", id="spotify-instruction")
-                    yield Static("[bold #569f68][S][/] Sync Library    [bold #569f68][R][/] Re-link for Sync    [bold #c47676][O][/] Log Out    [#767676][Esc][/] Close", id="spotify-hint")
+                user_line = f"User: [bold #ffffff]{escape(str(name))}[/]"
+                if email:
+                    user_line += f"  [#767676]({escape(str(email))})[/]"
+                elif u_id and u_id != name:
+                    user_line += f"  [#767676](@{escape(str(u_id))})[/]"
+
+                yield Static(user_line, id="spotify-user-info")
+                yield Static(f"Plan: [bold #569f68]Spotify {escape(str(plan))}[/]", id="spotify-desc")
+
+                can_modify = has_modify_scopes()
+                if can_modify:
+                    yield Static("[bold #569f68]● Two-way synchronization active[/]  [dim](changes sync to your Spotify account)[/dim]", id="spotify-status")
+                    yield Static("Select an action below, or press the shortcut key in brackets:", id="spotify-instruction")
                 else:
-                    yield Static("[#569f68]Two-way playlist & Liked Songs synchronization active.[/]", id="spotify-instruction")
-                    yield Static("[bold #569f68][Enter / S][/] Sync Library    [bold #c47676][O][/] Log Out    [#767676][Esc][/] Close", id="spotify-hint")
+                    yield Static("[bold #c4a768]▲ Permissions update available[/]  [dim](re-link once to enable two-way sync)[/dim]", id="spotify-status")
+                    yield Static("Select an action below, or press the shortcut key in brackets:", id="spotify-instruction")
+
+                with Horizontal(id="spotify-actions"):
+                    yield Button(r"\[S] Sync", variant="primary", id="btn-sync")
+                    if not can_modify:
+                        yield Button(r"\[R] Re-link", variant="warning", id="btn-relink")
+                    else:
+                        yield Button(r"\[R] Re-link", id="btn-relink")
+                    yield Button(r"\[O] Log Out", variant="error", id="btn-logout")
+                    yield Button(r"\[Esc] Close", id="btn-close")
+
+                yield Static(r"[dim]Tab / Shift+Tab to switch buttons  •  Enter or click to select  •  S / R / O directly[/dim]", id="spotify-hint")
+
             else:
-                yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff.", id="spotify-desc")
+                yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff, and enable two-way synchronization.", id="spotify-desc")
                 yield Static("[dim]Status: Not connected[/dim]", id="spotify-status")
-                yield Static("", id="spotify-instruction")
-                yield Input(placeholder="Or paste redirect URL / auth code here...", id="spotify-input")
-                yield Static("[bold #569f68][Enter][/] Start Browser Login    [#767676][Esc][/] Cancel", id="spotify-hint")
+                yield Static("Select an action below, or paste an authorization URL:", id="spotify-instruction")
+
+                with Horizontal(id="spotify-actions"):
+                    yield Button(r"\[Enter] Browser Login", variant="primary", id="btn-login")
+                    yield Button(r"\[Esc] Cancel", id="btn-close")
+
+                yield Static("[dim]Or paste redirect URL / auth code in the box below and press Enter:[/dim]", id="spotify-manual-hint")
+                yield Input(placeholder="Paste URL or code here...", id="spotify-input")
+                yield Static("[dim]Tab to switch between buttons and input  •  Esc to cancel[/dim]", id="spotify-hint")
 
     def on_mount(self) -> None:
-        if not (self.auth_session and get_valid_token()):
+        if self.auth_session and get_valid_token():
             try:
-                self.query_one("#spotify-input", Input).focus()
+                self.query_one("#btn-sync", Button).focus()
             except Exception:
                 pass
+            # Auto-refresh user profile in background if missing
+            user = self.auth_session.get("user", {})
+            if not user or not user.get("display_name"):
+                def _fetch_bg():
+                    tok = get_valid_token()
+                    if tok:
+                        prof = fetch_current_user_profile(tok)
+                        if prof:
+                            self.auth_session["user"] = prof
+                            save_spotify_auth(self.auth_session)
+                            name = prof.get("display_name") or prof.get("id") or "Spotify User"
+                            email = prof.get("email") or ""
+                            line = f"User: [bold #ffffff]{escape(str(name))}[/]"
+                            if email:
+                                line += f"  [#767676]({escape(str(email))})[/]"
+                            def _update():
+                                try:
+                                    self.query_one("#spotify-user-info", Static).update(line)
+                                except Exception:
+                                    pass
+                            self.app.call_from_thread(_update)
+                threading.Thread(target=_fetch_bg, daemon=True).start()
+        else:
+            try:
+                self.query_one("#btn-login", Button).focus()
+            except Exception:
+                pass
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id
+        if btn_id == "btn-sync":
+            self.action_sync_library()
+        elif btn_id == "btn-relink":
+            self.action_relink_account()
+        elif btn_id == "btn-logout":
+            self.action_logout_account()
+        elif btn_id == "btn-close":
+            self.action_dismiss_modal()
+        elif btn_id == "btn-login":
+            self.start_browser_login()
 
     def action_dismiss_modal(self) -> None:
         if self.server:
@@ -250,25 +317,62 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
                 self.start_browser_login()
 
     def on_key(self, event: events.Key) -> None:
-        if event.key == "enter" and not isinstance(self.focused, Input):
+        if isinstance(self.focused, Input):
+            return
+
+        if event.key in ("s", "S") or event.character in ("s", "S"):
+            self.action_sync_library()
+            event.prevent_default()
+            event.stop()
+        elif event.key in ("r", "R") or event.character in ("r", "R"):
+            self.action_relink_account()
+            event.prevent_default()
+            event.stop()
+        elif event.key in ("o", "O") or event.character in ("o", "O"):
+            self.action_logout_account()
+            event.prevent_default()
+            event.stop()
+        elif event.key in ("q", "Q"):
+            self.action_dismiss_modal()
+            event.prevent_default()
+            event.stop()
+        elif event.key == "left" or event.character == "h":
+            self.action_focus_prev_button()
+            event.prevent_default()
+            event.stop()
+        elif event.key == "right" or event.character == "l":
+            self.action_focus_next_button()
+            event.prevent_default()
+            event.stop()
+        elif event.key == "enter" and not isinstance(self.focused, Button):
             if self.auth_session and get_valid_token():
-                self.dismiss("sync_now")
+                self.action_sync_library()
             else:
                 self.start_browser_login()
             event.prevent_default()
             event.stop()
-        elif (event.key in ("s", "S") or event.character in ("s", "S")) and not isinstance(self.focused, Input):
-            self.action_sync_library()
-            event.prevent_default()
-            event.stop()
-        elif (event.key in ("r", "R") or event.character in ("r", "R")) and not isinstance(self.focused, Input):
-            self.action_relink_account()
-            event.prevent_default()
-            event.stop()
-        elif (event.key in ("o", "O") or event.character in ("o", "O")) and not isinstance(self.focused, Input):
-            self.action_logout_account()
-            event.prevent_default()
-            event.stop()
+
+    def action_focus_prev_button(self) -> None:
+        buttons = [b for b in self.query(Button) if b.display]
+        if not buttons:
+            return
+        if self.focused in buttons:
+            idx = buttons.index(self.focused)
+            prev_idx = (idx - 1) % len(buttons)
+            buttons[prev_idx].focus()
+        else:
+            buttons[-1].focus()
+
+    def action_focus_next_button(self) -> None:
+        buttons = [b for b in self.query(Button) if b.display]
+        if not buttons:
+            return
+        if self.focused in buttons:
+            idx = buttons.index(self.focused)
+            next_idx = (idx + 1) % len(buttons)
+            buttons[next_idx].focus()
+        else:
+            buttons[0].focus()
 
     def start_browser_login(self) -> None:
         if self.is_logging_in:
@@ -919,7 +1023,7 @@ class SpoffTUI(App):
     }
 
     #spotify-dialog {
-        width: 72;
+        width: 80;
         height: auto;
         background: #181818;
         border: solid #2a2a2a;
@@ -934,7 +1038,7 @@ class SpoffTUI(App):
 
     #spotify-user-info {
         color: #e2e2e2;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
 
     #spotify-desc {
@@ -948,8 +1052,102 @@ class SpoffTUI(App):
     }
 
     #spotify-instruction {
-        color: #767676;
+        color: #888888;
         margin-bottom: 1;
+    }
+
+    #spotify-actions {
+        width: 100%;
+        height: auto;
+        margin-top: 1;
+        margin-bottom: 1;
+        align: left middle;
+    }
+
+    #spotify-actions > Button {
+        margin-right: 1;
+        height: 3;
+        min-width: 14;
+        background: #222222;
+        color: #e2e2e2;
+        border: tall #333333;
+        padding: 0 1;
+    }
+
+    #spotify-actions > Button:hover {
+        background: #2d2d2d;
+        border: tall #569f68;
+        color: #ffffff;
+    }
+
+    #spotify-actions > Button:focus {
+        background: #333333;
+        border: tall #569f68;
+        color: #ffffff;
+        text-style: bold;
+    }
+
+    #spotify-actions > Button.-primary {
+        background: #18271c;
+        color: #569f68;
+        border: tall #36603e;
+    }
+
+    #spotify-actions > Button.-primary:hover {
+        background: #203425;
+        color: #72b984;
+        border: tall #569f68;
+    }
+
+    #spotify-actions > Button.-primary:focus {
+        background: #569f68;
+        color: #131313;
+        border: tall #72b984;
+        text-style: bold;
+    }
+
+    #spotify-actions > Button.-warning {
+        background: #282115;
+        color: #c4a768;
+        border: tall #564420;
+    }
+
+    #spotify-actions > Button.-warning:hover {
+        background: #352c1c;
+        color: #e2c07a;
+        border: tall #c4a768;
+    }
+
+    #spotify-actions > Button.-warning:focus {
+        background: #c4a768;
+        color: #131313;
+        border: tall #e2c07a;
+        text-style: bold;
+    }
+
+    #spotify-actions > Button.-error {
+        background: #261717;
+        color: #c47676;
+        border: tall #562525;
+    }
+
+    #spotify-actions > Button.-error:hover {
+        background: #341e1e;
+        color: #df8888;
+        border: tall #c47676;
+    }
+
+    #spotify-actions > Button.-error:focus {
+        background: #c47676;
+        color: #131313;
+        border: tall #df8888;
+        text-style: bold;
+    }
+
+    #spotify-manual-hint {
+        color: #767676;
+        margin-top: 1;
+        margin-bottom: 0;
     }
 
     #spotify-input {
@@ -957,6 +1155,7 @@ class SpoffTUI(App):
         border: solid #2a2a2a;
         color: #e2e2e2;
         height: 3;
+        margin-top: 0;
         margin-bottom: 1;
         padding: 0 1;
         scrollbar-size-horizontal: 0 !important;
