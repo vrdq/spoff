@@ -21,6 +21,7 @@ from textual import events, work
 from textual.app import App, ComposeResult
 from textual.screen import ModalScreen
 from textual.containers import Horizontal, Vertical
+from textual.widget import Widget
 from textual.widgets import Static, Input, DataTable, ProgressBar, Button
 from textual.coordinate import Coordinate
 from textual.binding import Binding
@@ -32,7 +33,7 @@ try:
         create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
         delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done,
-        get_saved_volume, save_volume
+        get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache
     from .search import live_search_tracks
@@ -533,62 +534,76 @@ class HelpModal(ModalScreen[None]):
     ]
 
     def compose(self) -> ComposeResult:
-        left_table = Table.grid(padding=(0, 2))
-        left_table.add_column(style="bold #ffffff", width=16)
-        left_table.add_column(style="#cccccc", width=26)
+        def make_sec_table(rows: List[Tuple[str, str]]) -> Table:
+            t = Table.grid(padding=(0, 2))
+            t.add_column(style="bold #ffffff", width=18, no_wrap=True)
+            t.add_column(style="#b0b0b0", no_wrap=True)
+            for k, d in rows:
+                t.add_row(k, d)
+            return t
 
-        left_table.add_row("[bold #569f68]VIEWS & NAV[/]", "")
-        left_table.add_row("1", "Search songs & artists")
-        left_table.add_row("2", "Playlists & favorites")
-        left_table.add_row("3", "Offline library (cached)")
-        left_table.add_row("4, L", "Synchronized lyrics")
-        left_table.add_row("h / l", "Sidebar / Tracks pane")
-        left_table.add_row("j / k, Arrows", "Navigate table rows")
-        left_table.add_row("k (at top row)", "Jump into search/import bar")
-        left_table.add_row("Tab", "Cycle input, table, seek bar")
-        left_table.add_row("Enter", "Play track / Open playlist")
-        left_table.add_row("", "")
-        left_table.add_row("[bold #569f68]PLAYBACK[/]", "")
-        left_table.add_row("Space, Fn+F8", "Play / Pause toggle")
-        left_table.add_row("s", "Toggle shuffle mode")
-        left_table.add_row("r", "Toggle repeat (off/all/1)")
-        left_table.add_row("F1", "Mute / Unmute audio")
-        left_table.add_row("F2 / F3", "Volume -/+ 5%")
-        left_table.add_row("p / n, Fn+F7/F9", "Previous / Next track")
-        left_table.add_row("Left / Right", "Seek -/+ 5 seconds")
+        nav_rows = [
+            ("1 / 2 / 3", "Search / Playlists / Offline"),
+            ("4 / L", "Synchronized lyrics view"),
+            ("h / l", "Switch Sidebar / Main pane"),
+            ("j / k, Arrows", "Navigate table rows"),
+            ("Tab", "Cycle Sidebar / Table"),
+            ("Enter", "Play track / Open playlist"),
+            ("k (at top row)", "Jump up into input box"),
+            ("Esc", "Unfocus / Back to playlist"),
+        ]
 
-        right_table = Table.grid(padding=(0, 2))
-        right_table.add_column(style="bold #ffffff", width=16)
-        right_table.add_column(style="#cccccc", width=26)
+        playback_rows = [
+            ("Space, Fn+F8", "Play / Pause toggle"),
+            ("s", "Toggle shuffle mode"),
+            ("r", "Cycle repeat (off / all / 1)"),
+            ("p / n, Fn+F7/F9", "Previous / Next track"),
+            ("Left / Right", "Seek -/+ 5 seconds"),
+            ("F1", "Mute / Unmute audio"),
+            ("F2 / F3", "Volume down / up 5%"),
+        ]
 
-        right_table.add_row("[bold #569f68]SEEK / PROGRESS[/]", "")
-        right_table.add_row("b", "Focus song seek bar")
-        right_table.add_row("h / l", "Seek -5s / +5s on bar")
-        right_table.add_row("H / L", "Fast seek -15s / +15s")
-        right_table.add_row("0 – 9", "Jump to 0% – 90% of song")
-        right_table.add_row("Enter / Click", "Jump to lyric timestamp")
-        right_table.add_row("", "")
-        right_table.add_row("[bold #569f68]PLAYLISTS & ACTIONS[/]", "")
-        right_table.add_row("J / K, Shift+Arrows", "Reorder / drag songs")
-        right_table.add_row("a, +", "Add track to playlist")
-        right_table.add_row("i", "New playlist / import link")
-        right_table.add_row("S", "Spotify login & sync")
-        right_table.add_row("u / U", "Check / pull GitHub update")
-        right_table.add_row("/", "Focus search box")
-        right_table.add_row("Del, d, x", "Remove track / playlist")
-        right_table.add_row("D, Shift+Del", "Delete whole playlist")
-        right_table.add_row(": / Shift+;", "Show keybindings guide")
-        right_table.add_row("q", "Quit Spoff")
+        seek_rows = [
+            ("b", "Toggle seek bar focus"),
+            ("h / l", "Seek -/+ 5s on bar"),
+            ("H / L", "Fast seek -/+ 15s on bar"),
+            ("0 – 9", "Jump to 0% – 90% of song"),
+            ("Enter / Click", "Jump to lyric timestamp"),
+            ("b / Esc / k", "Return to table"),
+        ]
 
-        main_table = Table.grid(padding=(0, 2))
-        main_table.add_column()
-        main_table.add_column()
-        main_table.add_row(left_table, right_table)
+        playlist_rows = [
+            ("J / K, Shift+↑↓", "Reorder songs in playlist"),
+            ("a, +", "Add track to playlist"),
+            ("i", "New playlist / import link"),
+            ("S", "Spotify login & sync"),
+            ("/", "Focus search box"),
+            ("Del, d, x", "Remove track / playlist"),
+            ("D, Shift+Del", "Delete whole playlist"),
+            ("u / U", "Check / pull updates"),
+            ("q", "Quit Spoff"),
+        ]
 
         with Vertical(id="help-dialog"):
-            yield Static("KEYBINDINGS & USAGE GUIDE", id="help-title")
-            yield Static(main_table, id="help-text")
-            yield Static("[dim]Press Esc, Enter, or : to close[/dim]", id="help-hint")
+            with Horizontal(id="help-header-bar"):
+                yield Static("KEYBINDINGS & USAGE GUIDE", id="help-title")
+                yield Static("[dim]Esc / Enter / : to close[/dim]", id="help-close-hint")
+
+            with Horizontal(id="help-body"):
+                with Vertical(classes="help-col"):
+                    yield Static("[bold #569f68]NAVIGATION & VIEWS[/]", classes="help-sec-title")
+                    yield Static(make_sec_table(nav_rows), classes="help-sec-table")
+                    yield Static("[bold #569f68]PLAYBACK CONTROLS[/]", classes="help-sec-title")
+                    yield Static(make_sec_table(playback_rows), classes="help-sec-table")
+
+                with Vertical(id="help-col-sep"):
+                    pass
+
+                with Vertical(classes="help-col"):
+                    yield Static("[bold #569f68]SEEK & TIMESTAMPS[/]", classes="help-sec-title")
+                    yield Static(make_sec_table(seek_rows), classes="help-sec-table")
+                    yield Static("[bold #569f68]PLAYLISTS & LIBRARY[/]", classes="help-sec-title")
+                    yield Static(make_sec_table(playlist_rows), classes="help-sec-table")
 
     def action_dismiss_modal(self) -> None:
         self.dismiss(None)
@@ -656,6 +671,76 @@ class ScrubBar(ProgressBar):
             event.prevent_default()
             event.stop()
 
+class SidebarSplitter(Widget):
+    DEFAULT_CSS = """
+    SidebarSplitter {
+        width: 1;
+        height: 100%;
+        background: transparent;
+        border-left: solid #262626;
+    }
+    SidebarSplitter:hover {
+        border-left: solid #569f68;
+    }
+    SidebarSplitter.-dragging {
+        border-left: solid #569f68;
+        background: #18221b;
+    }
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._dragging = False
+        self._drag_start_x = 0
+        self._start_width = 44
+
+    def on_mouse_down(self, event: events.MouseDown) -> None:
+        if event.button == 1:
+            self._dragging = True
+            self.add_class("-dragging")
+            self._drag_start_x = event.screen_x
+            sidebar = self.app.query_one("#sidebar")
+            self._start_width = int(sidebar.outer_size.width or (sidebar.styles.width.value if sidebar.styles.width else 44))
+            self.capture_mouse(True)
+            event.prevent_default()
+            event.stop()
+
+    def on_mouse_move(self, event: events.MouseMove) -> None:
+        if self._dragging:
+            delta_x = event.screen_x - self._drag_start_x
+            max_w = max(35, self.app.size.width - 30)
+            new_w = max(20, min(max_w, self._start_width + delta_x))
+            sidebar = self.app.query_one("#sidebar")
+            sidebar.styles.width = new_w
+            event.prevent_default()
+            event.stop()
+
+    def on_mouse_up(self, event: events.MouseUp) -> None:
+        if self._dragging:
+            self._dragging = False
+            self.remove_class("-dragging")
+            self.release_mouse()
+            sidebar = self.app.query_one("#sidebar")
+            try:
+                final_w = int(sidebar.outer_size.width or (sidebar.styles.width.value if sidebar.styles.width else 44))
+                save_sidebar_width(final_w)
+            except Exception:
+                pass
+            event.prevent_default()
+            event.stop()
+
+    def on_click(self, event: events.Click) -> None:
+        if event.chain == 2:
+            sidebar = self.app.query_one("#sidebar")
+            sidebar.styles.width = 44
+            try:
+                save_sidebar_width(44)
+            except Exception:
+                pass
+            self.app.notify_user("Playlists sidebar width reset to default (44).")
+            event.prevent_default()
+            event.stop()
+
 class SpoffTUI(App):
     CSS = """
     * {
@@ -708,7 +793,6 @@ class SpoffTUI(App):
     #sidebar {
         width: 44;
         height: 100%;
-        border-right: solid #262626;
         background: transparent;
         padding: 0 1;
     }
@@ -1033,26 +1117,59 @@ class SpoffTUI(App):
     }
 
     #help-dialog {
-        width: 90;
+        width: 110;
+        max-width: 96%;
         height: auto;
-        background: #181818;
+        background: #141414;
         border: solid #2a2a2a;
         padding: 1 2;
     }
 
-    #help-title {
-        text-style: bold;
-        color: #ffffff;
+    #help-header-bar {
+        height: 2;
+        width: 100%;
+        border-bottom: solid #222222;
         margin-bottom: 1;
     }
 
-    #help-text {
-        color: #cccccc;
+    #help-title {
+        width: 1fr;
+        text-style: bold;
+        color: #ffffff;
     }
 
-    #help-hint {
+    #help-close-hint {
+        width: auto;
         color: #555555;
+    }
+
+    #help-body {
+        height: auto;
+        width: 100%;
+    }
+
+    .help-col {
+        width: 1fr;
+        height: auto;
+    }
+
+    #help-col-sep {
+        width: 1;
+        height: 100%;
+        border-left: solid #222222;
+        margin: 0 1;
+    }
+
+    .help-sec-title {
+        height: 1;
         margin-top: 1;
+        margin-bottom: 0;
+        text-style: bold;
+        color: #569f68;
+    }
+
+    .help-sec-table {
+        margin-bottom: 1;
     }
 
     /* MODAL: SPOTIFY AUTH */
@@ -1390,6 +1507,8 @@ class SpoffTUI(App):
                 yield DataTable(id="side-table", cursor_type="row", show_header=False)
                 yield Static("[dim]Enter: open  |  Del: delete[/dim]", id="sidebar-hint")
 
+            yield SidebarSplitter(id="sidebar-splitter")
+
             with Vertical(id="content-pane"):
                 yield Input(placeholder="Search songs or artists...", id="search-box", classes="action-input")
                 yield DataTable(id="track-table", cursor_type="row", show_header=True)
@@ -1414,6 +1533,8 @@ class SpoffTUI(App):
     def on_mount(self) -> None:
         self.player.start_mpv()
         self.player.set_volume(self.volume)
+        saved_sidebar_w = get_saved_sidebar_width()
+        self.query_one("#sidebar").styles.width = saved_sidebar_w
         self.playlists = load_saved_playlists()
         self.update_spotify_pill()
         self.mpris.start()

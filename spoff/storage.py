@@ -128,6 +128,26 @@ def save_volume(volume: int):
     except Exception as e:
         logger.error(f"Error saving volume: {e}")
 
+def get_saved_sidebar_width() -> int:
+    """Retrieves saved sidebar width, defaulting to 44."""
+    try:
+        cfg = load_config()
+        val = cfg.get("sidebar_width")
+        if val is not None:
+            return max(20, min(120, int(val)))
+    except Exception as e:
+        logger.error(f"Error reading saved sidebar width: {e}")
+    return 44
+
+def save_sidebar_width(width: int):
+    """Persists sidebar width to config."""
+    try:
+        cfg = load_config()
+        cfg["sidebar_width"] = max(20, min(120, int(width)))
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving sidebar width: {e}")
+
 def load_saved_playlists() -> List[Dict[str, Any]]:
     try:
         if PLAYLISTS_FILE.exists() and PLAYLISTS_FILE.stat().st_size > 0:
