@@ -242,7 +242,6 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
                     yield Button(r"\[Enter] Browser Login", variant="primary", id="btn-login")
                     yield Button(r"\[Esc] Skip" if self.first_run else r"\[Esc] Cancel", id="btn-close")
 
-                yield Input(placeholder="Or paste redirect URL / auth code here...", id="spotify-input")
                 yield Static("", id="spotify-instruction")
                 yield Static("", id="spotify-hint")
 
@@ -311,20 +310,6 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
             logout_spotify()
             self.auth_session = None
             self.dismiss("logged_out")
-
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "spotify-input":
-            val = event.value.strip()
-            if val:
-                code = val
-                if "code=" in val:
-                    parsed = urllib.parse.urlparse(val)
-                    qs = urllib.parse.parse_qs(parsed.query)
-                    if "code" in qs:
-                        code = qs["code"][0]
-                self.process_auth_code(code)
-            else:
-                self.start_browser_login()
 
     def on_key(self, event: events.Key) -> None:
         if isinstance(self.focused, Input):
@@ -1159,22 +1144,6 @@ class SpoffTUI(App):
         color: #767676;
         margin-top: 1;
         margin-bottom: 0;
-    }
-
-    #spotify-input {
-        background: transparent;
-        border: solid #2a2a2a;
-        color: #e2e2e2;
-        height: 3;
-        margin-top: 1;
-        margin-bottom: 0;
-        padding: 0 1;
-        scrollbar-size-horizontal: 0 !important;
-        scrollbar-size-vertical: 0 !important;
-    }
-
-    #spotify-input:focus {
-        border: solid #569f68;
     }
 
     #spotify-hint {
