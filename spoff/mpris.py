@@ -172,12 +172,20 @@ class MPRISService:
 
             bus = SessionBus()
             self.dbus_obj = SpoffMPRISDbus(self.callbacks)
-            self.publication = bus.publish(
-                "org.mpris.MediaPlayer2.spoff",
-                ("/org/mpris/MediaPlayer2", self.dbus_obj)
-            )
+            try:
+                self.publication = bus.publish(
+                    "org.mpris.MediaPlayer2.spoff",
+                    ("/org/mpris/MediaPlayer2", self.dbus_obj)
+                )
+                logger.info("MPRIS service registered at org.mpris.MediaPlayer2.spoff")
+            except Exception as e:
+                logger.debug(f"Primary MPRIS bus name busy: {e}, falling back to instance name")
+                self.publication = bus.publish(
+                    f"org.mpris.MediaPlayer2.spoff.instance{os.getpid()}",
+                    ("/org/mpris/MediaPlayer2", self.dbus_obj)
+                )
+                logger.info(f"MPRIS service registered at org.mpris.MediaPlayer2.spoff.instance{os.getpid()}")
             self._started = True
-            logger.info("MPRIS service registered at org.mpris.MediaPlayer2.spoff")
             return True
         except Exception as e:
             logger.warning(f"Failed to publish MPRIS service: {e}")
@@ -284,6 +292,12 @@ class MPRISService:
             pass
 
     def stop(self) -> None:
+        if self.publication:
+            try:
+                self.publication.unpublish()
+            except Exception:
+                pass
+            self.publication = None
         if self.loop:
             try:
                 self.loop.quit()

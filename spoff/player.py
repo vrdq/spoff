@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 
 class MPVController:
-    def __init__(self, socket_path: Optional[str] = None):
+    def __init__(self, socket_path: Optional[str] = None, initial_volume: int = 80):
         if socket_path is None:
             self.socket_path = f"/tmp/spoff_mpv_{os.getpid()}.sock"
         else:
@@ -22,7 +22,7 @@ class MPVController:
         self._stop_listener = False
         self._last_pos = 0.0
         self._duration = 0.0
-        self._volume = 80
+        self._volume = max(0, min(100, int(initial_volume)))
 
     def start_mpv(self):
         if self.process and self.process.poll() is None:
@@ -44,7 +44,7 @@ class MPVController:
             "--idle=yes",
             f"--input-ipc-server={self.socket_path}",
             "--no-video",
-            "--volume=80",
+            f"--volume={self._volume}",
             "--really-quiet",
             "--gapless-audio=yes"
         ]

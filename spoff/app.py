@@ -28,7 +28,8 @@ try:
         load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
         create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
-        delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done
+        delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done,
+        get_saved_volume, save_volume
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache
     from .search import live_search_tracks
@@ -49,7 +50,8 @@ except ImportError:
         load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
         create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
-        delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done
+        delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done,
+        get_saved_volume, save_volume
     )
     from streamer import search_and_resolve_stream, download_track_to_cache
     from search import live_search_tracks
@@ -1235,12 +1237,18 @@ class SpoffTUI(App):
         Binding("n", "next_track", "Next"),
         Binding("p", "prev_track", "Prev"),
         Binding("f7", "prev_track", "Prev", show=False),
+        Binding("F7", "prev_track", "Prev", show=False),
         Binding("f8", "toggle_play", "Play/Pause", show=False),
+        Binding("F8", "toggle_play", "Play/Pause", show=False),
         Binding("f9", "next_track", "Next", show=False),
+        Binding("F9", "next_track", "Next", show=False),
         Binding("audio_prev", "prev_track", "Prev", show=False),
         Binding("audio_play", "toggle_play", "Play/Pause", show=False),
         Binding("audio_pause", "toggle_play", "Play/Pause", show=False),
         Binding("audio_next", "next_track", "Next", show=False),
+        Binding("mediaprevioustrack", "prev_track", "Prev", show=False),
+        Binding("mediaplaypause", "toggle_play", "Play/Pause", show=False),
+        Binding("medianexttrack", "next_track", "Next", show=False),
         Binding("slash", "focus_search", "Search"),
         Binding("b", "focus_bar", "Seek Bar"),
         Binding("i", "focus_import", "Import"),
@@ -1270,7 +1278,8 @@ class SpoffTUI(App):
 
     def __init__(self):
         super().__init__()
-        self.player = MPVController()
+        self.volume: int = get_saved_volume()
+        self.player = MPVController(initial_volume=self.volume)
         self.visualizer = CavaVisualizer(bars=14)
         mpris_callbacks = {
             "play_pause": lambda: self.call_from_thread(self.action_toggle_play),
@@ -1293,12 +1302,15 @@ class SpoffTUI(App):
         self.current_playlist_id: Optional[str] = None
         self.search_results: List[Dict[str, Any]] = []
         self.active_tab: str = "search"
-        self.volume: int = 80
         self._play_request_id: int = 0
         self.player.playback_finished_callback = self.on_track_finished
         atexit.register(self._cleanup_on_exit)
 
     def _cleanup_on_exit(self):
+        try:
+            save_volume(self.volume)
+        except Exception:
+            pass
         try:
             self.visualizer.stop()
         except Exception:
@@ -1348,9 +1360,12 @@ class SpoffTUI(App):
 
     def on_mount(self) -> None:
         self.player.start_mpv()
+        self.player.set_volume(self.volume)
         self.playlists = load_saved_playlists()
         self.update_spotify_pill()
         self.mpris.start()
+        if self.mpris:
+            self.mpris.update_volume(self.volume)
         self.visualizer.start()
         self.check_github_updates_bg()
 
@@ -1417,32 +1432,35 @@ class SpoffTUI(App):
             else:
                 self.query_one("#track-table", DataTable).focus()
 
-        if event.key in ("f1", "audio_mute"):
+        k = str(getattr(event, "key", "")).lower()
+        name = str(getattr(event, "name", "")).lower()
+
+        if k in ("f1", "audio_mute") or name in ("f1", "audio_mute"):
             self.action_vol_mute()
             event.prevent_default()
             event.stop()
             return
-        elif event.key in ("f2", "audio_lower_volume"):
+        elif k in ("f2", "audio_lower_volume") or name in ("f2", "audio_lower_volume"):
             self.action_vol_down()
             event.prevent_default()
             event.stop()
             return
-        elif event.key in ("f3", "audio_raise_volume"):
+        elif k in ("f3", "audio_raise_volume") or name in ("f3", "audio_raise_volume"):
             self.action_vol_up()
             event.prevent_default()
             event.stop()
             return
-        elif event.key in ("f7", "audio_prev"):
+        elif k in ("f7", "audio_prev", "mediaprevioustrack") or name in ("f7", "audio_prev", "mediaprevioustrack"):
             self.action_prev_track()
             event.prevent_default()
             event.stop()
             return
-        elif event.key in ("f8", "audio_play", "audio_pause"):
+        elif k in ("f8", "audio_play", "audio_pause", "mediaplaypause") or name in ("f8", "audio_play", "audio_pause", "mediaplaypause"):
             self.action_toggle_play()
             event.prevent_default()
             event.stop()
             return
-        elif event.key in ("f9", "audio_next"):
+        elif k in ("f9", "audio_next", "medianexttrack") or name in ("f9", "audio_next", "medianexttrack"):
             self.action_next_track()
             event.prevent_default()
             event.stop()
@@ -1804,9 +1822,54 @@ class SpoffTUI(App):
             self.notify_user(f"Seek to {int(pct * 100)}% ({format_time(target_sec)})")
             self.update_player_hud()
 
+    def _get_current_view_tracks(self) -> List[Dict[str, Any]]:
+        if self.active_tab == "search":
+            return list(self.search_results)
+        elif self.active_tab == "playlist":
+            return list(self.current_playlist_tracks)
+        elif self.active_tab == "offline":
+            return list(load_offline_index().values())
+        return []
+
+    def _sync_table_cursor_to_index(self, idx: int):
+        try:
+            tt = self.query_one("#track-table", DataTable)
+            if 0 <= idx < tt.row_count:
+                tt.move_cursor(row=idx)
+        except Exception:
+            pass
+
+    def _start_or_resume_playback(self):
+        if self.queue and 0 <= self.current_index < len(self.queue):
+            self.play_index(self.current_index)
+            return
+
+        try:
+            tt = self.query_one("#track-table", DataTable)
+            if tt.row_count > 0:
+                row_idx = tt.cursor_row if tt.cursor_row is not None and 0 <= tt.cursor_row < tt.row_count else 0
+                self.play_current_table_row(row_idx)
+                return
+        except Exception:
+            pass
+
+        if self.queue:
+            self.play_index(0)
+            return
+
+        view_tracks = self._get_current_view_tracks()
+        if view_tracks:
+            self.queue = list(view_tracks)
+            self.play_index(0)
+        else:
+            self.notify_user("No tracks available to play.")
+
     def action_toggle_play(self):
-        self.player.toggle_pause()
-        self.update_player_hud()
+        if self.player.current_track is not None:
+            self.player.toggle_pause()
+            self.update_player_hud()
+        else:
+            self._start_or_resume_playback()
 
     def action_seek_fwd(self):
         self.player.seek(5)
@@ -1821,22 +1884,26 @@ class SpoffTUI(App):
             self._prev_volume = self.volume
             self.volume = 0
             self.player.set_volume(0)
+            save_volume(0)
             self.notify_user("Volume: Muted")
         else:
             self.volume = getattr(self, "_prev_volume", 80) or 80
             self.player.set_volume(self.volume)
+            save_volume(self.volume)
             self.notify_user(f"Volume: {self.volume}%")
         self.update_player_hud()
 
     def action_vol_up(self):
         self.volume = min(100, self.volume + 5)
         self.player.set_volume(self.volume)
+        save_volume(self.volume)
         self.notify_user(f"Volume: {self.volume}%")
         self.update_player_hud()
 
     def action_vol_down(self):
         self.volume = max(0, self.volume - 5)
         self.player.set_volume(self.volume)
+        save_volume(self.volume)
         self.notify_user(f"Volume: {self.volume}%")
         self.update_player_hud()
 
@@ -1932,6 +1999,7 @@ class SpoffTUI(App):
     def _mpris_set_vol(self, vol: int):
         self.volume = max(0, min(100, vol))
         self.player.set_volume(self.volume)
+        save_volume(self.volume)
         self.update_player_hud()
 
     @work(thread=True)
@@ -1981,21 +2049,58 @@ class SpoffTUI(App):
             threading.Thread(target=_check, daemon=True).start()
 
     def action_next_track(self):
-        if self.current_index + 1 < len(self.queue):
-            self.play_index(self.current_index + 1)
+        if not self.queue:
+            view_tracks = self._get_current_view_tracks()
+            if view_tracks:
+                self.queue = list(view_tracks)
+                self.current_index = -1
+
+        if self.queue:
+            if self.current_index + 1 < len(self.queue):
+                next_idx = self.current_index + 1 if self.current_index >= 0 else 0
+                self.play_index(next_idx)
+                self._sync_table_cursor_to_index(next_idx)
+            else:
+                self.player.stop()
+                self.current_index = -1
+                self.notify_user("End of queue reached.")
+                self.update_player_hud()
         else:
-            self.player.stop()
-            self.current_index = -1
-            self.notify_user("End of queue reached.")
-            self.update_player_hud()
+            self.notify_user("No tracks available in queue.")
 
     def action_prev_track(self):
-        if self.current_index > 0:
-            self.play_index(self.current_index - 1)
+        pos, _ = self.player.get_progress()
+        if pos > 3.0:
+            self.player.seek_absolute(0)
+            self.notify_user("Restarted track.")
+            self.update_player_hud()
+            return
+
+        if not self.queue:
+            view_tracks = self._get_current_view_tracks()
+            if view_tracks:
+                self.queue = list(view_tracks)
+
+        if self.queue:
+            if self.current_index > 0:
+                prev_idx = self.current_index - 1
+                self.play_index(prev_idx)
+                self._sync_table_cursor_to_index(prev_idx)
+            elif self.current_index == 0:
+                self.player.seek_absolute(0)
+                self.notify_user("Restarted track.")
+                self.update_player_hud()
+            else:
+                self.play_index(0)
+                self._sync_table_cursor_to_index(0)
         else:
-            self.player.seek(-self.player._last_pos)
+            self.notify_user("No tracks available in queue.")
 
     def action_quit_app(self):
+        try:
+            save_volume(self.volume)
+        except Exception:
+            pass
         self.player.stop()
         self.exit()
 
@@ -2049,6 +2154,9 @@ class SpoffTUI(App):
 
             if pl.get("tracks"):
                 self.current_playlist_tracks = list(pl["tracks"])
+                if not self.queue or self.current_index == -1:
+                    self.queue = list(self.current_playlist_tracks)
+                    self.current_index = -1
                 self.notify_user(f"Loaded playlist '{name}' ({len(self.current_playlist_tracks)} tracks).")
                 self.switch_view("playlist")
                 self.query_one("#track-table", DataTable).focus()
@@ -2379,6 +2487,7 @@ class SpoffTUI(App):
             return
         self.current_index = index
         track = self.queue[index]
+        self._sync_table_cursor_to_index(index)
         self._play_request_id += 1
         req_id = self._play_request_id
         self.start_playback(track, req_id)

@@ -90,6 +90,26 @@ def mark_first_launch_done():
     except Exception as e:
         logger.error(f"Error marking first launch done: {e}")
 
+def get_saved_volume() -> int:
+    """Retrieves saved volume level (0-100), defaulting to 80."""
+    try:
+        cfg = load_config()
+        val = cfg.get("volume")
+        if val is not None:
+            return max(0, min(100, int(val)))
+    except Exception as e:
+        logger.error(f"Error reading saved volume: {e}")
+    return 80
+
+def save_volume(volume: int):
+    """Persists volume level (0-100) to config."""
+    try:
+        cfg = load_config()
+        cfg["volume"] = max(0, min(100, int(volume)))
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving volume: {e}")
+
 def load_saved_playlists() -> List[Dict[str, Any]]:
     try:
         if PLAYLISTS_FILE.exists():
