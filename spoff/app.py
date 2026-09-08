@@ -543,10 +543,10 @@ class HelpModal(ModalScreen[None]):
         left_table.add_row("Enter", "Play track / Open playlist")
         left_table.add_row("", "")
         left_table.add_row("[bold #569f68]PLAYBACK[/]", "")
-        left_table.add_row("Space, F8", "Play / Pause toggle")
+        left_table.add_row("Space, Fn+F8", "Play / Pause toggle")
         left_table.add_row("F1", "Mute / Unmute audio")
         left_table.add_row("F2 / F3", "Volume -/+ 5%")
-        left_table.add_row("p / n, F7/F9", "Previous / Next track")
+        left_table.add_row("p / n, Fn+F7/F9", "Previous / Next track")
         left_table.add_row("Left / Right", "Seek -/+ 5 seconds")
 
         right_table = Table.grid(padding=(0, 2))
@@ -1236,12 +1236,6 @@ class SpoffTUI(App):
         Binding("f3", "vol_up", "Vol+", show=False),
         Binding("n", "next_track", "Next"),
         Binding("p", "prev_track", "Prev"),
-        Binding("f7", "prev_track", "Prev", show=False),
-        Binding("F7", "prev_track", "Prev", show=False),
-        Binding("f8", "toggle_play", "Play/Pause", show=False),
-        Binding("F8", "toggle_play", "Play/Pause", show=False),
-        Binding("f9", "next_track", "Next", show=False),
-        Binding("F9", "next_track", "Next", show=False),
         Binding("audio_prev", "prev_track", "Prev", show=False),
         Binding("audio_play", "toggle_play", "Play/Pause", show=False),
         Binding("audio_pause", "toggle_play", "Play/Pause", show=False),
@@ -1450,17 +1444,17 @@ class SpoffTUI(App):
             event.prevent_default()
             event.stop()
             return
-        elif k in ("f7", "audio_prev", "mediaprevioustrack") or name in ("f7", "audio_prev", "mediaprevioustrack"):
+        elif k in ("audio_prev", "mediaprevioustrack") or name in ("audio_prev", "mediaprevioustrack"):
             self.action_prev_track()
             event.prevent_default()
             event.stop()
             return
-        elif k in ("f8", "audio_play", "audio_pause", "mediaplaypause") or name in ("f8", "audio_play", "audio_pause", "mediaplaypause"):
+        elif k in ("audio_play", "audio_pause", "mediaplaypause") or name in ("audio_play", "audio_pause", "mediaplaypause"):
             self.action_toggle_play()
             event.prevent_default()
             event.stop()
             return
-        elif k in ("f9", "audio_next", "medianexttrack") or name in ("f9", "audio_next", "medianexttrack"):
+        elif k in ("audio_next", "medianexttrack") or name in ("audio_next", "medianexttrack"):
             self.action_next_track()
             event.prevent_default()
             event.stop()

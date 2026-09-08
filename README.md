@@ -77,12 +77,12 @@ uv run python3 -m spoff
 | Key | Action |
 | :--- | :--- |
 | `Enter` | Play highlighted track / Open highlighted playlist |
-| `Space` / `F8` | Toggle Play / Pause |
+| `Space` / `Fn + F8` | Toggle Play / Pause |
 | `F1` | Mute / Unmute audio |
 | `F2` | Lower volume (-5%) |
 | `F3` | Raise volume (+5%) |
-| `F7` / `p` | Previous track in queue |
-| `F9` / `n` | Next track in queue |
+| `Fn + F7` / `p` | Previous track in queue |
+| `Fn + F9` / `n` | Next track in queue |
 | `b` | Focus song scrub / seek bar |
 | `h` / `l` | Seek -/+ 5s on scrub bar (or switch sidebar/tracks) |
 | `H` / `L` | Fast seek -/+ 15s on scrub bar |
