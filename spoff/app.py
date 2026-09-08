@@ -28,6 +28,10 @@ from textual.binding import Binding
 
 try:
     from .spotify import fetch_spotify_playlist, fetch_spotify_album, parse_spotify_url
+    from .ytmusic import (
+        fetch_ytmusic_playlist, fetch_ytmusic_album, fetch_ytmusic_track,
+        parse_ytmusic_url, search_ytmusic_tracks
+    )
     from .storage import (
         load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
         create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
@@ -55,6 +59,10 @@ try:
     from .updater import check_for_updates, perform_update, run_cli_update
 except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, parse_spotify_url
+    from ytmusic import (
+        fetch_ytmusic_playlist, fetch_ytmusic_album, fetch_ytmusic_track,
+        parse_ytmusic_url, search_ytmusic_tracks
+    )
     from storage import (
         load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
         create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
@@ -2424,7 +2432,7 @@ class SpoffTUI(App):
         with Horizontal(id="main-layout"):
             with Vertical(id="sidebar"):
                 yield Static("PLAYLISTS", classes="pane-title")
-                yield Input(placeholder="New playlist name or Spotify link", id="sidebar-import-input", classes="action-input")
+                yield Input(placeholder="New playlist name or Spotify / YTM link", id="sidebar-import-input", classes="action-input")
                 yield DataTable(id="side-table", cursor_type="row", show_header=False)
                 yield Static("" if self.advanced_mode else "[dim]Enter: open  |  Del: delete[/dim]", id="sidebar-hint")
 
@@ -3964,7 +3972,7 @@ class SpoffTUI(App):
             u = event.value.strip()
             if u:
                 event.input.value = ""
-                if u.startswith("http://") or u.startswith("https://") or "spotify.com" in u:
+                if u.startswith("http://") or u.startswith("https://") or "spotify.com" in u or "youtube.com" in u or "youtu.be" in u or u.startswith("PL") or u.startswith("MPREb_"):
                     self.import_playlist_url(u)
                 else:
                     new_pl = create_local_playlist(u)
@@ -4011,24 +4019,63 @@ class SpoffTUI(App):
 
     @work(thread=True)
     def import_playlist_url(self, url: str):
-        self.notify_user("Fetching tracks from Spotify link...")
-        parsed = parse_spotify_url(url)
+        parsed_sp = parse_spotify_url(url)
+        parsed_yt = parse_ytmusic_url(url)
+
         tracks = []
-        name = "Spotify Playlist"
+        name = "Imported Playlist"
+        pid = None
 
-        pl = None
-        if parsed and parsed[0] == "album":
-            pl = fetch_spotify_album(url)
+        if parsed_sp or ("spotify.com" in url or url.startswith("spotify:")):
+            self.notify_user("Fetching tracks from Spotify link...")
+            if parsed_sp and parsed_sp[0] == "album":
+                pl = fetch_spotify_album(url)
+            else:
+                pl = fetch_spotify_playlist(url)
+
+            if pl:
+                tracks = pl.get("tracks", [])
+                name = pl.get("name", "Spotify Playlist")
+                pid = pl["id"]
+            else:
+                self.notify_user("Could not load Spotify playlist. Please check that the link is public.")
+                return
+
+        elif parsed_yt or ("youtube.com" in url or "youtu.be" in url or url.startswith("PL") or url.startswith("MPREb_")):
+            self.notify_user("Fetching tracks from YouTube Music link...")
+            if parsed_yt and parsed_yt[0] == "album":
+                pl = fetch_ytmusic_album(url)
+            elif parsed_yt and parsed_yt[0] == "track":
+                pl = fetch_ytmusic_track(url)
+                if pl:
+                    tracks = [pl]
+                    name = pl.get("title", "YouTube Track")
+                    pid = pl.get("id", str(hash(url)))
+            else:
+                pl = fetch_ytmusic_playlist(url)
+
+            if pl and not tracks:
+                tracks = pl.get("tracks", [])
+                name = pl.get("name", "YouTube Music Playlist")
+                pid = pl.get("id", str(hash(url)))
+            elif not pl and not tracks:
+                self.notify_user("Could not load YouTube Music playlist. Please check that the link is valid and public.")
+                return
         else:
+            self.notify_user("Fetching tracks from music link...")
             pl = fetch_spotify_playlist(url)
+            if not pl:
+                pl = fetch_ytmusic_playlist(url)
+            if pl:
+                tracks = pl.get("tracks", [])
+                name = pl.get("name", "Music Playlist")
+                pid = pl.get("id", str(hash(url)))
+            else:
+                self.notify_user("Could not recognize or load playlist link.")
+                return
 
-        if pl:
-            tracks = pl.get("tracks", [])
-            name = pl.get("name", name)
-            pid = pl["id"]
-        else:
-            self.notify_user("Could not load Spotify playlist. Please check that the link is public.")
-            return
+        if not pid:
+            pid = f"pl_{secrets.token_hex(6)}"
 
         add_saved_playlist({"id": pid, "name": name, "url": url, "tracks": tracks})
         self.playlists = load_saved_playlists()
@@ -4037,7 +4084,7 @@ class SpoffTUI(App):
 
         def _update():
             self.refresh_side_table()
-            self.notify_user(f"Imported playlist '{name}' ({len(tracks)} tracks).")
+            self.notify_user(f"Imported '{name}' ({len(tracks)} tracks).")
             self.switch_view("playlist")
             self.query_one("#track-table", DataTable).focus()
         self.call_from_thread(_update)

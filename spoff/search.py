@@ -6,12 +6,25 @@ import urllib.parse
 from typing import List, Dict, Any
 import yt_dlp
 
+try:
+    from .ytmusic import search_ytmusic_tracks, get_ytmusic_search_suggestions
+except ImportError:
+    try:
+        from ytmusic import search_ytmusic_tracks, get_ytmusic_search_suggestions
+    except ImportError:
+        search_ytmusic_tracks = None
+        get_ytmusic_search_suggestions = None
+
 logger = logging.getLogger("search")
 
 def get_search_suggestions(query: str) -> List[str]:
     """Gets real-time search query suggestions as the user types."""
     if not query.strip():
         return []
+    if get_ytmusic_search_suggestions:
+        suggestions = get_ytmusic_search_suggestions(query)
+        if suggestions:
+            return suggestions
     try:
         encoded = urllib.parse.quote(query.strip())
         url = f"https://suggestqueries.google.com/complete/search?client=youtube&ds=yt&q={encoded}"
@@ -26,11 +39,17 @@ def get_search_suggestions(query: str) -> List[str]:
         logger.debug(f"Suggestions query failed: {e}")
     return []
 
-def live_search_tracks(query: str, limit: int = 15) -> List[Dict[str, Any]]:
+def live_search_tracks(query: str, limit: int = 25) -> List[Dict[str, Any]]:
     """Live searches YouTube/YT Music for playable tracks with metadata."""
     if not query.strip():
         return []
-    
+
+    # Fast path: use ytmusicapi
+    if search_ytmusic_tracks:
+        res = search_ytmusic_tracks(query, limit=limit)
+        if res:
+            return res
+
     ydl_opts = {
         "extract_flat": True,
         "quiet": True,
