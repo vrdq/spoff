@@ -207,10 +207,8 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
                 can_modify = has_modify_scopes()
                 if can_modify:
                     yield Static("[bold #569f68]● Two-way synchronization active[/]  [dim](changes sync to your Spotify account)[/dim]", id="spotify-status")
-                    yield Static("Select an action below, or press the shortcut key in brackets:", id="spotify-instruction")
                 else:
                     yield Static("[bold #c4a768]▲ Permissions update available[/]  [dim](re-link once to enable two-way sync)[/dim]", id="spotify-status")
-                    yield Static("Select an action below, or press the shortcut key in brackets:", id="spotify-instruction")
 
                 with Horizontal(id="spotify-actions"):
                     yield Button(r"\[S] Sync", variant="primary", id="btn-sync")
@@ -221,20 +219,20 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
                     yield Button(r"\[O] Log Out", variant="error", id="btn-logout")
                     yield Button(r"\[Esc] Close", id="btn-close")
 
-                yield Static(r"[dim]Tab / Shift+Tab to switch buttons  •  Enter or click to select  •  S / R / O directly[/dim]", id="spotify-hint")
+                yield Static("", id="spotify-instruction")
+                yield Static("", id="spotify-hint")
 
             else:
                 yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff, and enable two-way synchronization.", id="spotify-desc")
                 yield Static("[dim]Status: Not connected[/dim]", id="spotify-status")
-                yield Static("Select an action below, or paste an authorization URL:", id="spotify-instruction")
 
                 with Horizontal(id="spotify-actions"):
                     yield Button(r"\[Enter] Browser Login", variant="primary", id="btn-login")
                     yield Button(r"\[Esc] Cancel", id="btn-close")
 
-                yield Static("[dim]Or paste redirect URL / auth code in the box below and press Enter:[/dim]", id="spotify-manual-hint")
-                yield Input(placeholder="Paste URL or code here...", id="spotify-input")
-                yield Static("[dim]Tab to switch between buttons and input  •  Esc to cancel[/dim]", id="spotify-hint")
+                yield Input(placeholder="Or paste redirect URL / auth code here...", id="spotify-input")
+                yield Static("", id="spotify-instruction")
+                yield Static("", id="spotify-hint")
 
     def on_mount(self) -> None:
         if self.auth_session and get_valid_token():
