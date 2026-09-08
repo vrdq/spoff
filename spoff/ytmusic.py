@@ -73,6 +73,10 @@ def parse_ytmusic_url(url_or_id: str) -> Optional[Tuple[str, str]]:
     if len(u) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', u):
         return ("track", u)
 
+    if not (u.startswith("http://") or u.startswith("https://")):
+        if any(d in u.lower() for d in ("youtube.com", "youtu.be")):
+            u = f"https://{u}"
+
     try:
         parsed = urllib.parse.urlparse(u)
     except Exception:

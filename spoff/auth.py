@@ -10,7 +10,6 @@ import threading
 import urllib.request
 import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
-from pathlib import Path
 from typing import Optional, Dict, Any, List, Callable, Tuple
 
 try:

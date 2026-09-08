@@ -1,5 +1,6 @@
 import sys
 import os
+import re
 import signal
 
 if "TEXTUAL_FPS" not in os.environ:
@@ -10,10 +11,8 @@ import logging
 import threading
 import atexit
 import secrets
-import urllib.parse
 from typing import List, Dict, Any, Optional, Tuple
 import random
-from pathlib import Path
 
 from rich.markup import escape
 from rich.table import Table
@@ -30,13 +29,13 @@ try:
     from .spotify import fetch_spotify_playlist, fetch_spotify_album, parse_spotify_url
     from .ytmusic import (
         fetch_ytmusic_playlist, fetch_ytmusic_album, fetch_ytmusic_track,
-        parse_ytmusic_url, search_ytmusic_tracks
+        parse_ytmusic_url
     )
     from .storage import (
         load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
-        create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
+        create_local_playlist, add_track_to_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
-        delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done,
+        delete_cached_track, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
         get_saved_transparency, save_transparency, get_custom_keybindings,
@@ -61,13 +60,13 @@ except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, parse_spotify_url
     from ytmusic import (
         fetch_ytmusic_playlist, fetch_ytmusic_album, fetch_ytmusic_track,
-        parse_ytmusic_url, search_ytmusic_tracks
+        parse_ytmusic_url
     )
     from storage import (
         load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
-        create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
+        create_local_playlist, add_track_to_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
-        delete_cached_track, CACHE_DIR, LOG_FILE, is_first_launch, mark_first_launch_done,
+        delete_cached_track, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
         get_saved_transparency, save_transparency, get_custom_keybindings,
@@ -91,10 +90,16 @@ except ImportError:
 
 logger = logging.getLogger("spoff")
 
-def format_time(seconds: float) -> str:
-    m = int(seconds) // 60
-    s = int(seconds) % 60
-    return f"{m:02d}:{s:02d}"
+def format_time(seconds: Optional[float]) -> str:
+    if seconds is None or seconds <= 0:
+        return "00:00"
+    try:
+        sec = int(seconds)
+        m = sec // 60
+        s = sec % 60
+        return f"{m:02d}:{s:02d}"
+    except (ValueError, OverflowError):
+        return "00:00"
 
 DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "toggle_play": "space",
@@ -1114,6 +1119,9 @@ class UpdateModal(ModalScreen[bool]):
             yield Static(u_hint, id="update-hint")
 
     def action_confirm(self) -> None:
+        if getattr(self, "_update_complete", False):
+            self.dismiss(True)
+            return
         if self.is_updating:
             return
         self.is_updating = True
@@ -1126,6 +1134,7 @@ class UpdateModal(ModalScreen[bool]):
             ok, msg = perform_update()
             def _done():
                 if ok:
+                    self._update_complete = True
                     try:
                         self.query_one("#update-status", Static).update(f"[bold #569f68]{escape(msg)} Restart Spoff to apply.[/]")
                         self.query_one("#update-hint", Static).update("[dim]Press Esc or Enter to close[/dim]")
@@ -3791,14 +3800,28 @@ class SpoffTUI(App):
                 pl_id = self.current_playlist_id
                 pl_name = next((p.get("name", "Playlist") for p in self.playlists if p.get("id") == pl_id), "Playlist")
 
+                target_track = t
+                target_track_id = t.get("id")
+
                 def handle_remove_track_confirm(confirmed: bool) -> None:
                     if not confirmed:
                         return
-                    if 0 <= row_idx < len(self.current_playlist_tracks):
-                        removed_track = self.current_playlist_tracks.pop(row_idx)
+                    found_idx = None
+                    if target_track in self.current_playlist_tracks:
+                        found_idx = self.current_playlist_tracks.index(target_track)
+                    elif target_track_id:
+                        for idx, item in enumerate(self.current_playlist_tracks):
+                            if item.get("id") == target_track_id:
+                                found_idx = idx
+                                break
+                    elif 0 <= row_idx < len(self.current_playlist_tracks):
+                        found_idx = row_idx
+
+                    if found_idx is not None and 0 <= found_idx < len(self.current_playlist_tracks):
+                        removed_track = self.current_playlist_tracks.pop(found_idx)
                         self.render_tracks(self.current_playlist_tracks)
                         if self.current_playlist_tracks:
-                            new_row = max(0, min(row_idx, len(self.current_playlist_tracks) - 1))
+                            new_row = max(0, min(found_idx, len(self.current_playlist_tracks) - 1))
                             f.move_cursor(row=new_row)
                         if pl_id:
                             update_playlist_tracks(pl_id, self.current_playlist_tracks)
@@ -3828,7 +3851,8 @@ class SpoffTUI(App):
                 if row_idx is not None and 0 <= row_idx < len(offline_tracks):
                     t = offline_tracks[row_idx]
                     t_title = t.get("title", "Track")
-                    delete_cached_track(t["id"])
+                    if t.get("id"):
+                        delete_cached_track(t["id"])
                     remaining = list(load_offline_index().values())
                     self.render_tracks(remaining)
                     if remaining:
@@ -3975,7 +3999,7 @@ class SpoffTUI(App):
                 if u.startswith("http://") or u.startswith("https://") or "spotify.com" in u or "youtube.com" in u or "youtu.be" in u or u.startswith("PL") or u.startswith("MPREb_"):
                     self.import_playlist_url(u)
                 else:
-                    new_pl = create_local_playlist(u)
+                    create_local_playlist(u)
                     self.playlists = load_saved_playlists()
                     self.refresh_side_table()
                     self.load_playlist_by_index(0, focus_tracks=True)
@@ -4155,7 +4179,11 @@ class SpoffTUI(App):
 
         self.notify_user(f"Connecting stream for '{title}'...")
 
-        res = search_and_resolve_stream(title, artist)
+        track_url = track.get("url")
+        if not track_url and t_id and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
+            track_url = f"https://www.youtube.com/watch?v={t_id}"
+
+        res = search_and_resolve_stream(title, artist, direct_url=track_url)
         if req_id != self._play_request_id:
             return
 
@@ -4174,7 +4202,7 @@ class SpoffTUI(App):
                     self.render_tracks(list(load_offline_index().values()))
                 self.call_from_thread(_refresh)
 
-        download_track_to_cache(t_id, title, artist, on_complete=on_cached)
+        download_track_to_cache(t_id, title, artist, on_complete=on_cached, direct_url=track_url)
 
 SpotatoTUI = SpoffTUI
 

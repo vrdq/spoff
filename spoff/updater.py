@@ -1,4 +1,3 @@
-import os
 import sys
 import json
 import shutil
@@ -135,7 +134,7 @@ def run_cli_update():
         print("Spoff is already up to date on the latest GitHub commit.")
         return
 
-    print(f"\nNew update found:")
+    print("\nNew update found:")
     print(f"  Current commit: {info['local_sha']}")
     print(f"  Latest commit:  {info['remote_sha']} ({info['message']}) by {info['author']}")
     print("\nPulling updates...")

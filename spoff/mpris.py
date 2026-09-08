@@ -1,6 +1,6 @@
+import os
 import logging
 import threading
-import time
 from typing import Dict, Any, Optional, Callable
 
 logger = logging.getLogger("mpris")

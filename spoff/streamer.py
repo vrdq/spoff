@@ -1,16 +1,12 @@
-import os
 import re
-import sys
-import json
 import logging
 import threading
-from pathlib import Path
 from typing import Optional, Dict, Any
 import yt_dlp
 try:
-    from .storage import CACHE_DIR, get_cached_track_path, register_cached_track
+    from .storage import CACHE_DIR, register_cached_track
 except ImportError:
-    from storage import CACHE_DIR, get_cached_track_path, register_cached_track
+    from storage import CACHE_DIR, register_cached_track
 
 logger = logging.getLogger("streamer")
 _active_downloads = set()
@@ -30,30 +26,35 @@ def get_base_ydl_opts(extra_opts=None):
         opts.update(extra_opts)
     return opts
 
-def search_and_resolve_stream(track_title: str, artist: str) -> Optional[Dict[str, Any]]:
+def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Rapidly resolves a playable direct audio stream URL.
     """
     cache_key = f"{track_title.lower()}::{artist.lower()}"
+    if direct_url:
+        cache_key = f"{direct_url}::{cache_key}"
     if cache_key in _stream_cache:
         return _stream_cache[cache_key]
 
-    if track_title.startswith("http://") or track_title.startswith("https://"):
-        queries = [track_title]
+    queries = []
+    if direct_url and (direct_url.startswith("http://") or direct_url.startswith("https://")):
+        queries.append(direct_url)
+    elif track_title.startswith("http://") or track_title.startswith("https://"):
+        queries.append(track_title)
     elif len(track_title) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', track_title):
-        queries = [f"https://www.youtube.com/watch?v={track_title}"]
+        queries.append(f"https://www.youtube.com/watch?v={track_title}")
+
+    clean_artist = "" if artist.lower() in ("unknown artist", "unknown", "none", "") else artist.strip()
+    if clean_artist:
+        queries.extend([
+            f"{track_title} {clean_artist} audio",
+            f"{track_title} {clean_artist}",
+        ])
     else:
-        clean_artist = "" if artist.lower() in ("unknown artist", "unknown", "none", "") else artist.strip()
-        if clean_artist:
-            queries = [
-                f"{track_title} {clean_artist} audio",
-                f"{track_title} {clean_artist}",
-            ]
-        else:
-            queries = [
-                f"{track_title} audio",
-                track_title,
-            ]
+        queries.extend([
+            f"{track_title} audio",
+            track_title,
+        ])
     ydl_opts = get_base_ydl_opts()
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -101,7 +102,7 @@ def search_and_resolve_stream(track_title: str, artist: str) -> Optional[Dict[st
         logger.error(f"Error resolving stream for {track_title} {artist}: {e}")
         return None
 
-def download_track_to_cache(track_id: str, title: str, artist: str, on_complete=None):
+def download_track_to_cache(track_id: str, title: str, artist: str, on_complete=None, direct_url: Optional[str] = None):
     """
     Asynchronously downloads track to local disk.
     """
@@ -119,8 +120,12 @@ def download_track_to_cache(track_id: str, title: str, artist: str, on_complete=
                 return
 
             temp_path = CACHE_DIR / f"{track_id}_dl"
-            if title.startswith("http://") or title.startswith("https://"):
+            if direct_url and (direct_url.startswith("http://") or direct_url.startswith("https://")):
+                query = direct_url
+            elif title.startswith("http://") or title.startswith("https://"):
                 query = title
+            elif len(track_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', track_id):
+                query = f"https://www.youtube.com/watch?v={track_id}"
             elif len(title) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', title):
                 query = f"https://www.youtube.com/watch?v={title}"
             else:

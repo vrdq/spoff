@@ -1,5 +1,4 @@
 import os
-import sys
 import math
 import time
 import shutil
@@ -8,9 +7,6 @@ import logging
 import threading
 import subprocess
 from typing import Optional, List
-from rich.text import Text
-from rich.console import RenderableType
-from textual.widget import Widget
 from textual.widgets import Static
 
 logger = logging.getLogger("visualizer")

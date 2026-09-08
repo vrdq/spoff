@@ -350,6 +350,8 @@ def save_offline_index(index: Dict[str, Dict[str, Any]]):
         logger.error(f"Error saving offline index: {e}")
 
 def get_cached_track_path(track_id: str) -> Optional[Path]:
+    if not track_id:
+        return None
     for ext in (".m4a", ".opus", ".mp3", ".webm"):
         track_path = CACHE_DIR / f"{track_id}{ext}"
         if track_path.exists() and track_path.stat().st_size > 10000:
