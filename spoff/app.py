@@ -25,7 +25,7 @@ from textual.binding import Binding
 try:
     from .spotify import fetch_spotify_playlist, fetch_spotify_album, parse_spotify_url
     from .storage import (
-        load_saved_playlists, add_saved_playlist, remove_saved_playlist,
+        load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
         create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
         delete_cached_track, CACHE_DIR, LOG_FILE
@@ -38,7 +38,7 @@ try:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        has_modify_scopes
+        reorder_spotify_playlist_track, has_modify_scopes
     )
     from .mpris import MPRISService
     from .visualizer import VisualizerWidget, CavaVisualizer
@@ -46,7 +46,7 @@ try:
 except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, parse_spotify_url
     from storage import (
-        load_saved_playlists, add_saved_playlist, remove_saved_playlist,
+        load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
         create_local_playlist, add_track_to_playlist, remove_track_from_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
         delete_cached_track, CACHE_DIR, LOG_FILE
@@ -59,7 +59,7 @@ except ImportError:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        has_modify_scopes
+        reorder_spotify_playlist_track, has_modify_scopes
     )
     from mpris import MPRISService
     from visualizer import VisualizerWidget, CavaVisualizer
@@ -563,6 +563,7 @@ class HelpModal(ModalScreen[None]):
         right_table.add_row("Esc, k, Up", "Return to tracks table")
         right_table.add_row("", "")
         right_table.add_row("[bold #569f68]PLAYLISTS & ACTIONS[/]", "")
+        right_table.add_row("J / K, Shift+Arrows", "Reorder / drag songs")
         right_table.add_row("a, +", "Add track to playlist")
         right_table.add_row("i", "New playlist / import link")
         right_table.add_row("L / S", "Spotify login & sync")
@@ -1274,6 +1275,10 @@ class SpoffTUI(App):
         Binding("3", "nav_offline", "Offline"),
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
+        Binding("J", "move_item_down", "Move Down", show=False),
+        Binding("K", "move_item_up", "Move Up", show=False),
+        Binding("shift+down", "move_item_down", "Move Down", show=False),
+        Binding("shift+up", "move_item_up", "Move Up", show=False),
         Binding("h", "focus_sidebar", "Sidebar", show=False),
         Binding("l", "focus_tracks", "Tracks", show=False),
         Binding("tab", "toggle_focus", "Switch Pane", show=False, priority=True),
@@ -1468,6 +1473,14 @@ class SpoffTUI(App):
             event.prevent_default()
             event.stop()
             return
+        elif (event.key in ("J", "K", "shift+down", "shift+up") or event.character in ("J", "K")) and not isinstance(self.focused, Input):
+            if event.key in ("J", "shift+down") or event.character == "J":
+                self.action_move_item_down()
+            else:
+                self.action_move_item_up()
+            event.prevent_default()
+            event.stop()
+            return
         elif event.key == "down" and isinstance(self.focused, Input):
             if self.focused.id == "search-box":
                 self.query_one("#track-table", DataTable).focus()
@@ -1529,29 +1542,29 @@ class SpoffTUI(App):
             self.render_tracks(self.search_results)
             if not self.search_results:
                 search_box.focus()
-                self.notify_user("Search mode: Press / to search songs or artists")
+                self.notify_user("Search: Press / to enter keywords")
             else:
                 track_table.focus()
-                self.notify_user("View: Search")
+                self.notify_user("")
         elif view == "playlist":
             self.render_tracks(self.current_playlist_tracks)
             track_table.focus()
             if not self.playlists:
-                self.notify_user("No playlists yet. Type a name or Spotify link in the sidebar to create one.")
+                self.notify_user("No playlists yet — enter name in sidebar to create")
             elif not self.current_playlist_tracks:
-                self.notify_user("Playlist is empty. Add songs from Search with 'a'.")
+                self.notify_user("Playlist is empty — add songs from search with 'a'")
             else:
-                self.notify_user("View: Playlist")
+                self.notify_user("")
         elif view == "offline":
             offline_tracks = list(load_offline_index().values())
             self.render_tracks(offline_tracks)
             track_table.focus()
             if not offline_tracks:
-                self.notify_user("Offline library is empty. Cached or downloaded tracks will appear here.")
+                self.notify_user("Offline library is empty — cached tracks appear here")
             else:
-                self.notify_user("View: Offline Library")
+                self.notify_user("")
 
-    def render_tracks(self, tracks: List[Dict[str, Any]]):
+    def render_tracks(self, tracks: List[Dict[str, Any]], select_row: Optional[int] = None):
         table = self.query_one("#track-table", DataTable)
         table.clear()
         for idx, t in enumerate(tracks):
@@ -1562,8 +1575,9 @@ class SpoffTUI(App):
             dur = format_time(dur_ms / 1000)
             table.add_row(type_tag, escape(t.get("title", "")), escape(t.get("artist", "")), dur, key=str(idx))
         if tracks:
+            target = 0 if select_row is None else max(0, min(select_row, len(tracks) - 1))
             try:
-                table.move_cursor(row=0)
+                table.move_cursor(row=target)
             except Exception:
                 pass
 
@@ -1674,6 +1688,121 @@ class SpoffTUI(App):
             f.action_cursor_up()
         elif isinstance(f, ScrubBar):
             self.query_one("#track-table", DataTable).focus()
+
+    def action_move_item_up(self):
+        if isinstance(self.focused, Input):
+            return
+
+        # 1. Reordering playlists in the sidebar
+        if self.focused and self.focused.id == "side-table":
+            st = self.query_one("#side-table", DataTable)
+            idx = st.cursor_row
+            if idx is not None and 1 <= idx < len(self.playlists):
+                new_idx = idx - 1
+                p = self.playlists.pop(idx)
+                self.playlists.insert(new_idx, p)
+                save_saved_playlists(self.playlists)
+                st.clear()
+                for i, pl in enumerate(self.playlists):
+                    st.add_row(pl.get("name", "Untitled"), key=str(i))
+                st.move_cursor(row=new_idx)
+                return
+
+        # 2. Dragging/reordering songs in a playlist
+        if self.active_tab == "playlist" and self.current_playlist_tracks:
+            tt = self.query_one("#track-table", DataTable)
+            idx = tt.cursor_row
+            if idx is not None and 1 <= idx < len(self.current_playlist_tracks):
+                new_idx = idx - 1
+                track = self.current_playlist_tracks.pop(idx)
+                self.current_playlist_tracks.insert(new_idx, track)
+
+                if self.current_playlist_id:
+                    update_playlist_tracks(self.current_playlist_id, self.current_playlist_tracks)
+                    for p in self.playlists:
+                        if p.get("id") == self.current_playlist_id:
+                            p["tracks"] = list(self.current_playlist_tracks)
+                            break
+
+                    # Sync reordering to Spotify in background if this is a Spotify playlist
+                    if self.current_playlist_id != "spotify_liked_songs":
+                        is_spotify = (len(self.current_playlist_id) == 22 and self.current_playlist_id.isalnum()) or any(
+                            p.get("id") == self.current_playlist_id and p.get("spotify_id") for p in self.playlists
+                        )
+                        if is_spotify:
+                            threading.Thread(
+                                target=reorder_spotify_playlist_track,
+                                args=(self.current_playlist_id, idx, new_idx),
+                                daemon=True
+                            ).start()
+
+                if self.current_index == idx:
+                    self.current_index = new_idx
+                elif self.current_index == new_idx:
+                    self.current_index = idx
+
+                self.render_tracks(self.current_playlist_tracks, select_row=new_idx)
+                tt.focus()
+                return
+        elif self.active_tab in ("search", "offline"):
+            self.notify_user("Reordering songs is available in Playlists.")
+
+    def action_move_item_down(self):
+        if isinstance(self.focused, Input):
+            return
+
+        # 1. Reordering playlists in the sidebar
+        if self.focused and self.focused.id == "side-table":
+            st = self.query_one("#side-table", DataTable)
+            idx = st.cursor_row
+            if idx is not None and 0 <= idx < len(self.playlists) - 1:
+                new_idx = idx + 1
+                p = self.playlists.pop(idx)
+                self.playlists.insert(new_idx, p)
+                save_saved_playlists(self.playlists)
+                st.clear()
+                for i, pl in enumerate(self.playlists):
+                    st.add_row(pl.get("name", "Untitled"), key=str(i))
+                st.move_cursor(row=new_idx)
+                return
+
+        # 2. Dragging/reordering songs in a playlist
+        if self.active_tab == "playlist" and self.current_playlist_tracks:
+            tt = self.query_one("#track-table", DataTable)
+            idx = tt.cursor_row
+            if idx is not None and 0 <= idx < len(self.current_playlist_tracks) - 1:
+                new_idx = idx + 1
+                track = self.current_playlist_tracks.pop(idx)
+                self.current_playlist_tracks.insert(new_idx, track)
+
+                if self.current_playlist_id:
+                    update_playlist_tracks(self.current_playlist_id, self.current_playlist_tracks)
+                    for p in self.playlists:
+                        if p.get("id") == self.current_playlist_id:
+                            p["tracks"] = list(self.current_playlist_tracks)
+                            break
+
+                    if self.current_playlist_id != "spotify_liked_songs":
+                        is_spotify = (len(self.current_playlist_id) == 22 and self.current_playlist_id.isalnum()) or any(
+                            p.get("id") == self.current_playlist_id and p.get("spotify_id") for p in self.playlists
+                        )
+                        if is_spotify:
+                            threading.Thread(
+                                target=reorder_spotify_playlist_track,
+                                args=(self.current_playlist_id, idx, new_idx),
+                                daemon=True
+                            ).start()
+
+                if self.current_index == idx:
+                    self.current_index = new_idx
+                elif self.current_index == new_idx:
+                    self.current_index = idx
+
+                self.render_tracks(self.current_playlist_tracks, select_row=new_idx)
+                tt.focus()
+                return
+        elif self.active_tab in ("search", "offline"):
+            self.notify_user("Reordering songs is available in Playlists.")
 
     def action_focus_bar(self):
         self.query_one("#playback-bar", ScrubBar).focus()
@@ -2279,7 +2408,7 @@ class SpoffTUI(App):
         if cached:
             if req_id != self._play_request_id:
                 return
-            self.notify_user(f"Playing '{title}' (offline from disk).")
+            self.notify_user("")
             self.player.load_and_play(str(cached), track)
             return
 
@@ -2294,7 +2423,7 @@ class SpoffTUI(App):
             return
 
         stream_url = res["stream_url"]
-        self.notify_user(f"Streaming '{title}' (caching for offline listening)...")
+        self.notify_user("")
         self.player.load_and_play(stream_url, track)
 
         def on_cached(path):

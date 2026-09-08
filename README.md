@@ -94,6 +94,7 @@ uv run python3 -m spoff
 | `a` / `+` | Add highlighted or playing track to playlist |
 | `Tab` | Cycle active focus (Sidebar $\rightarrow$ Tracks $\rightarrow$ Scrub Bar) |
 | `j` / `k` (or `Down` / `Up`) | Navigate table rows (scrolling past last row focuses Scrub Bar) |
+| `J` / `K` (or `Shift`+`Down` / `Up`) | Reorder / drag song up or down in playlist (or playlist in sidebar) |
 | `Left` / `Right` | Seek backward / forward 5 seconds |
 | `Up` / `Down` | Adjust volume |
 | `Delete` / `d` / `x` | Remove playlist (with confirmation) or delete track |

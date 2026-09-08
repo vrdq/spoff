@@ -720,3 +720,45 @@ def remove_track_from_spotify_account(
         return True, f"Removed from Spotify playlist '{playlist_name}'"
     return False, err
 
+def reorder_spotify_playlist_track(
+    playlist_id: str,
+    old_index: int,
+    new_index: int,
+    token: Optional[str] = None
+) -> Tuple[bool, str]:
+    """
+    Syncs track reordering to the user's Spotify playlist.
+    """
+    if not token:
+        token = get_valid_token()
+    if not token:
+        return False, "Not logged in to Spotify"
+
+    if playlist_id == "spotify_liked_songs":
+        return False, "Liked Songs is chronological on Spotify"
+
+    target_spotify_pl_id = None
+    if len(playlist_id) == 22 and playlist_id.isalnum() and not playlist_id.startswith("local_"):
+        target_spotify_pl_id = playlist_id
+    else:
+        local_playlists = load_saved_playlists()
+        for pl in local_playlists:
+            if pl.get("id") == playlist_id and pl.get("spotify_id"):
+                target_spotify_pl_id = pl["spotify_id"]
+                break
+
+    if not target_spotify_pl_id:
+        return False, "Not a Spotify playlist"
+
+    insert_before = new_index if new_index < old_index else new_index + 1
+    body = {
+        "range_start": old_index,
+        "insert_before": insert_before,
+        "range_length": 1
+    }
+    ok, _, err = spotify_api_request(f"/playlists/{target_spotify_pl_id}/tracks", method="PUT", body=body, token=token)
+    if ok:
+        return True, "Reordered on Spotify"
+    return False, err
+
+
