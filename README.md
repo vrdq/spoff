@@ -9,6 +9,7 @@ A fast, minimalist, dark-monochrome Spotify and YouTube music TUI with transpare
 - **No Credentials Required (Default)**: Works out of the box with no Spotify Premium, API tokens, or web cookies required. Parses public Spotify playlist/album links directly.
 - **Two-Way Spotify Account Sync**: Connect your Spotify account (`L`) to import your playlists and Liked Songs. Adding or removing songs in Spoff automatically syncs to your Spotify account in real time.
 - **Desktop Media Integration (MPRIS 2)**: Seamlessly integrates with system media tabs, Waybar, lockscreens, and hardware media keys via `playerctl` and standard MPRIS D-Bus.
+- **60+ FPS Real-Time Audio Visualizer**: Butter-smooth spectrum analyzer powered by CAVA (with PipeWire binary stream backend), exponential gravity falloff, and sub-millisecond refresh rates.
 - **Instant Streaming + Transparent Caching**: Tracks start streaming in seconds and simultaneously save to local storage (`~/.local/share/spoff/cache/`) for offline playback.
 - **Offline Library**: Browse, search, and play cached tracks with zero internet connection in `[3] Offline Library`.
 - **Automatic GitHub Updates**: Built-in update notifications on new GitHub pushes (`u` in-app) or `spoff --update` from the command line.

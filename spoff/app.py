@@ -1,5 +1,9 @@
 import sys
 import os
+
+if "TEXTUAL_FPS" not in os.environ:
+    os.environ["TEXTUAL_FPS"] = "60"
+
 import time
 import logging
 import threading
@@ -37,6 +41,7 @@ try:
         has_modify_scopes
     )
     from .mpris import MPRISService
+    from .visualizer import VisualizerWidget, CavaVisualizer
     from .updater import check_for_updates, perform_update, run_cli_update
 except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, parse_spotify_url
@@ -57,6 +62,7 @@ except ImportError:
         has_modify_scopes
     )
     from mpris import MPRISService
+    from visualizer import VisualizerWidget, CavaVisualizer
     from updater import check_for_updates, perform_update, run_cli_update
 
 logger = logging.getLogger("spoff")
@@ -1175,6 +1181,12 @@ class SpoffTUI(App):
         text-style: bold;
     }
 
+    #deck-visualizer {
+        width: 14;
+        height: 1;
+        margin-right: 2;
+    }
+
     /* MODAL: UPDATE */
     UpdateModal {
         align: center middle;
@@ -1270,6 +1282,7 @@ class SpoffTUI(App):
     def __init__(self):
         super().__init__()
         self.player = MPVController()
+        self.visualizer = CavaVisualizer(bars=14)
         mpris_callbacks = {
             "play_pause": lambda: self.call_from_thread(self.action_toggle_play),
             "play": lambda: self.call_from_thread(self._mpris_play),
@@ -1297,6 +1310,10 @@ class SpoffTUI(App):
         atexit.register(self._cleanup_on_exit)
 
     def _cleanup_on_exit(self):
+        try:
+            self.visualizer.stop()
+        except Exception:
+            pass
         try:
             if self.mpris:
                 self.mpris.stop()
@@ -1332,6 +1349,7 @@ class SpoffTUI(App):
             yield Static("", id="notification-line")
             with Horizontal(id="deck-line-1"):
                 yield Static("No track playing", id="deck-track")
+                yield VisualizerWidget(self.visualizer, id="deck-visualizer")
                 yield Static("[dim]IDLE[/dim]", id="deck-source")
             with Horizontal(id="deck-line-2"):
                 yield Static("00:00", id="time-elapsed")
@@ -1344,6 +1362,7 @@ class SpoffTUI(App):
         self.playlists = load_saved_playlists()
         self.update_spotify_pill()
         self.mpris.start()
+        self.visualizer.start()
         self.check_github_updates_bg()
 
         st = self.query_one("#side-table", DataTable)
