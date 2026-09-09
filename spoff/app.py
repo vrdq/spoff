@@ -2641,6 +2641,15 @@ class SpoffTUI(App):
             else:
                 self.query_one("#track-table", DataTable).focus()
 
+    def _get_active_tracks(self) -> List[Dict[str, Any]]:
+        if self.active_tab == "search":
+            return self.search_results
+        elif self.active_tab == "offline":
+            return list(load_offline_index().values())
+        elif self.active_tab == "playlist":
+            return self.current_playlist_tracks
+        return []
+
     def on_resize(self, event: events.Resize) -> None:
         last_w = getattr(self, "_last_rendered_width", None)
         self._last_rendered_width = event.size.width
@@ -3038,8 +3047,9 @@ class SpoffTUI(App):
         old_cursor = table.cursor_row
         table.clear()
         is_compact = self.size.width < 115
-        spot_name = "SPOT" if is_compact else "SPOTIFY"
-        ytm_name = "YTM" if is_compact else "YT MUSIC"
+        spot_name = "spot" if is_compact else "Spotify"
+        ytm_name = "ytm" if is_compact else "YT Music"
+        loc_name = "local" if is_compact else "Local disk"
 
         for idx, t in enumerate(tracks):
             t_id = t.get("id") or str(hash(t.get("title", "") + t.get("artist", "")))
@@ -3054,20 +3064,17 @@ class SpoffTUI(App):
             else:
                 src = raw_src or "remote"
 
+            dot = "[dim #555555] · [/]"
             if src == "local":
-                type_tag = "[bold #569f68]LOCAL DISK[/]"
+                type_tag = f"[#569f68]{loc_name}[/]"
             elif src == "spotify":
-                if is_cached:
-                    type_tag = f"[bold #569f68]{spot_name}[/] [dim #767676]·[/] [bold #569f68]OFFLINE[/]"
-                else:
-                    type_tag = f"[bold #569f68]{spot_name}[/] [dim #767676]·[/] [#c4a768]STREAM[/]"
+                status = "[#569f68]offline[/]" if is_cached else "[#c4a768]stream[/]"
+                type_tag = f"[#569f68]{spot_name}[/]{dot}{status}"
             elif src == "ytmusic":
-                if is_cached:
-                    type_tag = f"[bold #e06c75]{ytm_name}[/] [dim #767676]·[/] [bold #569f68]OFFLINE[/]"
-                else:
-                    type_tag = f"[#888888]{ytm_name}[/] [dim #767676]·[/] [#c4a768]STREAM[/]"
+                status = "[#569f68]offline[/]" if is_cached else "[#c4a768]stream[/]"
+                type_tag = f"[#e06c75]{ytm_name}[/]{dot}{status}"
             else:
-                type_tag = "[bold #569f68]OFFLINE[/]" if is_cached else "[dim]REMOTE[/dim]"
+                type_tag = "[#569f68]offline[/]" if is_cached else "[dim]remote[/dim]"
 
             dur_ms = t.get("duration_ms") or 0
             dur = format_time(dur_ms / 1000)
