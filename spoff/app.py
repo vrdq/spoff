@@ -51,7 +51,7 @@ try:
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
         reorder_spotify_playlist_track, delete_spotify_playlist, has_modify_scopes,
-        search_spotify_tracks
+        search_spotify_tracks, is_client_side_track
     )
     from .lyrics import fetch_lyrics, get_active_lyric_index
     from .mpris import MPRISService
@@ -83,7 +83,7 @@ except ImportError:
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
         reorder_spotify_playlist_track, delete_spotify_playlist, has_modify_scopes,
-        search_spotify_tracks
+        search_spotify_tracks, is_client_side_track
     )
     from lyrics import fetch_lyrics, get_active_lyric_index
     from mpris import MPRISService
@@ -3435,7 +3435,14 @@ class SpoffTUI(App):
                 if synced_count > 0:
                     self.notify_user(f"Synced {synced_count} Spotify playlists/collections into your library!")
                     if self.playlists and self.active_tab == "playlist":
-                        self.load_playlist_by_index(0, focus_tracks=True)
+                        matched_idx = None
+                        if self.current_playlist_id:
+                            for p_i, pl in enumerate(self.playlists):
+                                if pl.get("id") == self.current_playlist_id or (pl.get("spotify_id") and pl.get("spotify_id") == self.current_playlist_id):
+                                    matched_idx = p_i
+                                    break
+                        target_idx = matched_idx if matched_idx is not None else 0
+                        self.load_playlist_by_index(target_idx, focus_tracks=False)
                 else:
                     self.notify_user("Spotify library sync completed.")
 
@@ -3725,14 +3732,7 @@ class SpoffTUI(App):
                 self.notify_user(f"Created playlist '{val}' and added '{t_title}'.")
 
                 # Asynchronous two-way sync to Spotify account (Spotify tracks only)
-                is_yt = (
-                    track.get("source") in ("ytmusic", "youtube")
-                    or not (
-                        track.get("uri", "").startswith("spotify:track:")
-                        or (track.get("id") and len(str(track.get("id"))) == 22 and track.get("source") == "spotify")
-                    )
-                )
-                if not is_yt:
+                if not is_client_side_track(track):
                     def _sync_create_bg():
                         ok, msg = add_track_to_spotify_account(new_pl["id"], val, track)
                         if ok:
@@ -3759,14 +3759,7 @@ class SpoffTUI(App):
                 if added:
                     self.notify_user(f"Added '{t_title}' to '{pl_name}'.")
                     # Asynchronous two-way sync to Spotify account (Spotify tracks only)
-                    is_yt = (
-                        track.get("source") in ("ytmusic", "youtube")
-                        or not (
-                            track.get("uri", "").startswith("spotify:track:")
-                            or (track.get("id") and len(str(track.get("id"))) == 22 and track.get("source") == "spotify")
-                        )
-                    )
-                    if not is_yt:
+                    if not is_client_side_track(track):
                         def _sync_select_bg():
                             ok, msg = add_track_to_spotify_account(val, pl_name, track)
                             if ok:
@@ -3912,11 +3905,12 @@ class SpoffTUI(App):
                             self.playlists = load_saved_playlists()
                             self.refresh_side_table()
 
-                            def _sync_remove_bg():
-                                ok, msg = remove_track_from_spotify_account(pl_id, pl_name, removed_track)
-                                if ok:
-                                    self.call_from_thread(self.notify_user, f"Removed '{t_title}' from Spotify playlist '{pl_name}'.")
-                            threading.Thread(target=_sync_remove_bg, daemon=True).start()
+                            if not is_client_side_track(removed_track):
+                                def _sync_remove_bg():
+                                    ok, msg = remove_track_from_spotify_account(pl_id, pl_name, removed_track)
+                                    if ok:
+                                        self.call_from_thread(self.notify_user, f"Removed '{t_title}' from Spotify playlist '{pl_name}'.")
+                                threading.Thread(target=_sync_remove_bg, daemon=True).start()
 
                         self.notify_user(f"Removed '{t_title}' from playlist '{pl_name}'.")
 

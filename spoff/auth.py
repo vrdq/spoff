@@ -415,7 +415,8 @@ def fetch_playlist_tracks(token: str, playlist_id: str) -> List[Dict[str, Any]]:
                 "title": t.get("name", "Unknown"),
                 "artist": artists if artists else "Unknown",
                 "duration_ms": t.get("duration_ms", 0),
-                "uri": t.get("uri", "")
+                "uri": t.get("uri", ""),
+                "source": "spotify"
             })
         url = res.get("next")
     return tracks
@@ -439,14 +440,108 @@ def fetch_liked_songs(token: str, max_tracks: int = 200) -> List[Dict[str, Any]]
                 "title": t.get("name", "Unknown"),
                 "artist": artists if artists else "Unknown",
                 "duration_ms": t.get("duration_ms", 0),
-                "uri": t.get("uri", "")
+                "uri": t.get("uri", ""),
+                "source": "spotify"
             })
         url = res.get("next")
     return tracks
 
+def is_client_side_track(track: Dict[str, Any]) -> bool:
+    """
+    Returns True if track was added client-side (e.g. from YouTube Music search,
+    URL import, or local offline storage) rather than official Spotify catalogue.
+    """
+    if not isinstance(track, dict):
+        return False
+    src = str(track.get("source", "")).lower()
+    if src in ("ytmusic", "youtube", "local", "offline"):
+        return True
+    url = str(track.get("url", "")).lower()
+    if "youtube.com" in url or "youtu.be" in url:
+        return True
+    if src == "spotify":
+        return False
+    uri = str(track.get("uri", ""))
+    if uri.startswith("spotify:track:"):
+        return False
+    tid = str(track.get("id", ""))
+    if len(tid) == 22 and tid.isalnum() and not tid.startswith("local_"):
+        return False
+    return True
+
+def merge_spotify_and_client_tracks(
+    spotify_tracks: List[Dict[str, Any]],
+    existing_tracks: Optional[List[Dict[str, Any]]]
+) -> List[Dict[str, Any]]:
+    """
+    Merges newly synchronized tracks from Spotify with client-side tracks (YouTube Music,
+    local tracks) that the user previously added into the playlist.
+    Preserves all client-side tracks and their relative positions in the playlist.
+    """
+    if not existing_tracks:
+        return list(spotify_tracks)
+
+    client_buckets: Dict[Optional[str], List[Dict[str, Any]]] = {None: []}
+    current_anchor: Optional[str] = None
+    has_client_tracks = False
+
+    for t in existing_tracks:
+        if is_client_side_track(t):
+            has_client_tracks = True
+            client_buckets[current_anchor].append(t)
+        else:
+            anchor_key = str(t.get("id") or t.get("uri") or "")
+            current_anchor = anchor_key
+            if current_anchor not in client_buckets:
+                client_buckets[current_anchor] = []
+
+    if not has_client_tracks:
+        return list(spotify_tracks)
+
+    merged: List[Dict[str, Any]] = []
+    seen_client_keys = set()
+
+    # Top client tracks preceding any Spotify track
+    for ct in client_buckets.pop(None, []):
+        ckey = ct.get("id") or (str(ct.get("title", "")).strip().lower(), str(ct.get("artist", "")).strip().lower())
+        if ckey not in seen_client_keys:
+            seen_client_keys.add(ckey)
+            merged.append(ct)
+
+    # Fresh Spotify tracks with their anchored client tracks
+    for st in spotify_tracks:
+        merged.append(st)
+        st_id = str(st.get("id") or "")
+        st_uri = str(st.get("uri") or "")
+
+        matched_anchor = None
+        if st_id in client_buckets:
+            matched_anchor = st_id
+        elif st_uri in client_buckets:
+            matched_anchor = st_uri
+
+        if matched_anchor is not None:
+            for ct in client_buckets.pop(matched_anchor, []):
+                ckey = ct.get("id") or (str(ct.get("title", "")).strip().lower(), str(ct.get("artist", "")).strip().lower())
+                if ckey not in seen_client_keys:
+                    seen_client_keys.add(ckey)
+                    merged.append(ct)
+
+    # Any remaining client tracks whose Spotify anchors were removed on Spotify
+    for remaining_list in client_buckets.values():
+        for ct in remaining_list:
+            ckey = ct.get("id") or (str(ct.get("title", "")).strip().lower(), str(ct.get("artist", "")).strip().lower())
+            if ckey not in seen_client_keys:
+                seen_client_keys.add(ckey)
+                merged.append(ct)
+
+    return merged
+
 def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str], None]] = None) -> int:
     """
     Synchronizes user's Liked Songs and Spotify playlists into Spoff's local storage.
+    Preserves all client-side / YouTube Music tracks added by the user so they stay
+    client-side across syncs without being removed or overwritten.
     Returns the number of playlists synchronized.
     """
     if progress_callback:
@@ -459,21 +554,21 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
     
     # Sync Liked Songs if present
     if liked:
-        liked_pl = {
-            "id": "spotify_liked_songs",
-            "name": "Liked Songs",
-            "url": "",
-            "tracks": liked
-        }
-        # Update or add
         found = False
         for p in existing_playlists:
             if p.get("id") == "spotify_liked_songs" or p.get("name") == "Liked Songs":
-                p["tracks"] = liked
+                existing_tracks = p.get("tracks", [])
+                p["tracks"] = merge_spotify_and_client_tracks(liked, existing_tracks)
+                p["id"] = "spotify_liked_songs"
                 found = True
                 break
         if not found:
-            existing_playlists.insert(0, liked_pl)
+            existing_playlists.insert(0, {
+                "id": "spotify_liked_songs",
+                "name": "Liked Songs",
+                "url": "",
+                "tracks": liked
+            })
         synced_count += 1
 
     # Sync User Playlists
@@ -490,10 +585,19 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
         tracks = fetch_playlist_tracks(token, p_id)
         found = False
         for p in existing_playlists:
-            if p.get("id") == p_id:
+            matches = (
+                p.get("id") == p_id
+                or (p.get("spotify_id") and p.get("spotify_id") == p_id)
+                or (p.get("id", "").startswith("local_") and p.get("name", "").strip().lower() == p_name.strip().lower())
+            )
+            if matches:
                 p["name"] = p_name
-                p["tracks"] = tracks
-                p["url"] = pl.get("url", "")
+                existing_tracks = p.get("tracks", [])
+                p["tracks"] = merge_spotify_and_client_tracks(tracks, existing_tracks)
+                if not p.get("url"):
+                    p["url"] = pl.get("url", "")
+                if p.get("id") != p_id and not p.get("spotify_id"):
+                    p["spotify_id"] = p_id
                 found = True
                 break
         if not found:
@@ -637,6 +741,9 @@ def add_track_to_spotify_account(
     Handles Liked Songs, existing Spotify playlists, and local playlists (matching or creating them on Spotify).
     Returns (success, status_message).
     """
+    if is_client_side_track(track):
+        return False, "Client-side track only (not synced to Spotify)"
+
     if not token:
         token = get_valid_token()
     if not token:
@@ -718,6 +825,9 @@ def remove_track_from_spotify_account(
     """
     Syncs the removal of a track from the user's Spotify account.
     """
+    if is_client_side_track(track):
+        return False, "Client-side track only (not present on Spotify)"
+
     if not token:
         token = get_valid_token()
     if not token:
