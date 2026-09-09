@@ -59,11 +59,14 @@ def fetch_spotify_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
             "uri": item.get("uri") or "",
         })
 
+    cover_sources = entity.get("coverArt", {}).get("sources", []) if entity.get("coverArt") else []
+    cover_url = cover_sources[0].get("url") if cover_sources and len(cover_sources) > 0 and isinstance(cover_sources[0], dict) else None
+
     return {
         "id": p_id,
         "name": entity.get("name") or "Spotify Playlist",
         "description": entity.get("subtitle") or "",
-        "cover_url": entity.get("coverArt", {}).get("sources", [{}])[0].get("url") if entity.get("coverArt") else None,
+        "cover_url": cover_url,
         "tracks": tracks
     }
 

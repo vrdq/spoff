@@ -4,7 +4,7 @@ import urllib.parse
 import urllib.request
 import json
 from pathlib import Path
-from typing import List, Dict, Optional, Any, Tuple
+from typing import List, Dict, Optional, Any, Tuple, cast
 
 try:
     from ytmusicapi import YTMusic
@@ -196,13 +196,15 @@ def fetch_ytmusic_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
             "quiet": True,
             "no_warnings": True,
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
             full_url = f"https://www.youtube.com/playlist?list={p_id}"
             res = ydl.extract_info(full_url, download=False)
             if res:
                 tracks = []
-                for e in res.get("entries", []):
-                    if not e or not e.get("id"):
+                entries: Any = res.get("entries")
+                entry_list = list(entries) if entries else []
+                for e in entry_list:
+                    if not e or not isinstance(e, dict) or not e.get("id"):
                         continue
                     v_id = e["id"]
                     uploader = e.get("uploader") or e.get("channel") or "Unknown Artist"
@@ -325,7 +327,7 @@ def fetch_ytmusic_track(video_id_or_url: str) -> Optional[Dict[str, Any]]:
     try:
         import yt_dlp
         ydl_opts = {"extract_flat": True, "quiet": True, "no_warnings": True}
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
             res = ydl.extract_info(f"https://www.youtube.com/watch?v={v_id}", download=False)
             if res:
                 return {
@@ -394,11 +396,14 @@ def search_ytmusic_tracks(query: str, limit: int = 25) -> List[Dict[str, Any]]:
             "no_warnings": True,
             "noplaylist": True,
         }
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
             res = ydl.extract_info(f"ytsearch{limit}:{q}", download=False)
-            entries = res.get("entries", [])
-            for e in entries:
-                if not e or not e.get("id"):
+            if not res:
+                return tracks
+            entries: Any = res.get("entries")
+            entry_list = list(entries) if entries else []
+            for e in entry_list:
+                if not e or not isinstance(e, dict) or not e.get("id"):
                     continue
                 t_id = e["id"]
                 title = e.get("title") or "Unknown Track"

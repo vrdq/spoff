@@ -9,6 +9,7 @@ import logging
 import threading
 import urllib.request
 import urllib.parse
+import urllib.error
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, Any, List, Callable, Tuple
 
@@ -331,7 +332,13 @@ def spotify_api_request(
             try:
                 err_body = e.read().decode("utf-8")
                 err_json = json.loads(err_body)
-                msg = err_json.get("error", {}).get("message", str(e))
+                err_val = err_json.get("error") if isinstance(err_json, dict) else None
+                if isinstance(err_val, dict):
+                    msg = str(err_val.get("message") or err_val.get("description") or e)
+                elif isinstance(err_val, str):
+                    msg = err_val
+                else:
+                    msg = f"HTTP {e.code}: {e.reason}"
             except Exception:
                 msg = f"HTTP {e.code}: {e.reason}"
 
@@ -577,8 +584,10 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
     
     user_pls = fetch_user_playlists(token)
     for idx, pl in enumerate(user_pls):
-        p_id = pl["id"]
-        p_name = pl["name"]
+        p_id = pl.get("id")
+        p_name = pl.get("name", "Playlist")
+        if not p_id:
+            continue
         if progress_callback:
             progress_callback(f"Syncing playlist ({idx+1}/{len(user_pls)}): '{p_name}'...")
         
@@ -741,6 +750,9 @@ def add_track_to_spotify_account(
     Handles Liked Songs, existing Spotify playlists, and local playlists (matching or creating them on Spotify).
     Returns (success, status_message).
     """
+    if not playlist_id:
+        return False, "Invalid playlist ID"
+
     if is_client_side_track(track):
         return False, "Client-side track only (not synced to Spotify)"
 
@@ -825,6 +837,9 @@ def remove_track_from_spotify_account(
     """
     Syncs the removal of a track from the user's Spotify account.
     """
+    if not playlist_id:
+        return False, "Invalid playlist ID"
+
     if is_client_side_track(track):
         return False, "Client-side track only (not present on Spotify)"
 
@@ -884,6 +899,9 @@ def reorder_spotify_playlist_track(
     """
     Syncs track reordering to the user's Spotify playlist.
     """
+    if not playlist_id:
+        return False, "Invalid playlist ID"
+
     if not token:
         token = get_valid_token()
     if not token:
@@ -924,6 +942,9 @@ def delete_spotify_playlist(
     """
     Syncs the deletion / unfollowing of a playlist from the user's Spotify account.
     """
+    if not playlist_id:
+        return False, "Invalid playlist ID"
+
     if not token:
         token = get_valid_token()
     if not token:

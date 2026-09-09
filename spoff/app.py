@@ -346,6 +346,10 @@ class SettingsModal(ModalScreen[None]):
         self.is_rebinding: bool = False
         self.rebinding_action: Optional[str] = None
 
+    @property
+    def spoff_app(self) -> Any:
+        return self.app
+
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-dialog"):
             with Horizontal(id="settings-header"):
@@ -376,7 +380,7 @@ class SettingsModal(ModalScreen[None]):
 
         for act_id in ACTION_INFO.keys():
             cat, title = ACTION_INFO[act_id]
-            cur_key = self.app.keybindings.get(act_id, "")
+            cur_key = self.spoff_app.keybindings.get(act_id, "")
             is_default = (cur_key == DEFAULT_KEYBINDINGS.get(act_id))
             status_str = "[dim]Default[/dim]" if is_default else "[bold #569f68]Custom[/]"
             table.add_row(cat, title, format_key_display(cur_key), status_str, key=act_id)
@@ -389,7 +393,7 @@ class SettingsModal(ModalScreen[None]):
     def update_toggle_ui(self) -> None:
         try:
             adv_toggle = self.query_one("#adv-mode-toggle", AdvModeToggle)
-            if getattr(self.app, "advanced_mode", False):
+            if getattr(self.spoff_app, "advanced_mode", False):
                 adv_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]Advanced Mode[/]  [dim]— Keybind strings & HUD hints hidden[/dim]")
                 self.query_one("#settings-footer", Static).update("")
                 self.query_one("#settings-close-hint", Static).update("")
@@ -399,69 +403,69 @@ class SettingsModal(ModalScreen[None]):
                 self.query_one("#settings-close-hint", Static).update("[dim]Esc / q to close[/dim]")
 
             trans_toggle = self.query_one("#transparency-toggle", TransparencyToggle)
-            if getattr(self.app, "transparency", True):
+            if getattr(self.spoff_app, "transparency", True):
                 trans_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]UI Transparency[/]  [dim]— Terminal background & blur shines through[/dim]")
             else:
                 trans_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]UI Transparency[/]  [dim]— Solid dark opaque background[/dim]")
 
             instant_toggle = self.query_one("#instant-search-toggle", InstantSearchToggle)
-            if getattr(self.app, "instant_search", True):
+            if getattr(self.spoff_app, "instant_search", True):
                 instant_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]Instant Search[/]  [dim]— Search bar is immediately ready to type on Search tab[/dim]")
             else:
                 instant_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]Instant Search[/]  [dim]— Track table focused; press / to activate search bar[/dim]")
 
             eng_toggle = self.query_one("#engine-toggle", SearchEngineToggle)
-            if getattr(self.app, "search_engine", "ytmusic") == "spotify":
+            if getattr(self.spoff_app, "search_engine", "ytmusic") == "spotify":
                 eng_toggle.update("[bold #569f68]● SPOTIFY[/]   [#ffffff]Search Engine[/]  [dim]— Official Spotify catalogue (syncs with Spotify)[/dim]")
             else:
                 eng_toggle.update("[bold #ffffff]● YT MUSIC[/]  [#cccccc]Search Engine[/]  [dim]— YouTube Music streams (local playlists only)[/dim]")
 
             vis_style_toggle = self.query_one("#vis-style-toggle", VisualizerStyleToggle)
-            style_name = self.app.visualizer.get_style_name() if hasattr(self.app, "visualizer") else "Studio Bars"
+            style_name = self.spoff_app.visualizer.get_style_name() if hasattr(self.spoff_app, "visualizer") else "Studio Bars"
             vis_style_toggle.update(f"[bold #569f68]● {style_name.upper()}[/]   [#ffffff]Visualizer Style[/]  [dim]— Bars, Braille EQ, Mirrored, Wave, Matrix (v)[/dim]")
 
             vis_color_toggle = self.query_one("#vis-color-toggle", VisualizerColorToggle)
-            color_name = self.app.visualizer.get_color_name() if hasattr(self.app, "visualizer") else "Emerald"
+            color_name = self.spoff_app.visualizer.get_color_name() if hasattr(self.spoff_app, "visualizer") else "Emerald"
             vis_color_toggle.update(f"[bold #569f68]● {color_name.upper()}[/]   [#ffffff]Visualizer Theme[/]  [dim]— Spotify Emerald, Cyber Cyan, Amber, Mono (C)[/dim]")
         except Exception:
             pass
 
     def toggle_advanced_mode(self) -> None:
-        new_state = self.app.toggle_advanced_mode()
+        new_state = self.spoff_app.toggle_advanced_mode()
         self.update_toggle_ui()
         state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
         self.query_one("#settings-status-line", Static).update(f"Advanced Mode {state_text}.")
 
     def toggle_transparency(self) -> None:
-        new_state = self.app.toggle_transparency()
+        new_state = self.spoff_app.toggle_transparency()
         self.update_toggle_ui()
         state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
         self.query_one("#settings-status-line", Static).update(f"UI Transparency {state_text}.")
 
     def toggle_instant_search(self) -> None:
-        new_state = self.app.toggle_instant_search()
+        new_state = self.spoff_app.toggle_instant_search()
         self.update_toggle_ui()
         state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
         self.query_one("#settings-status-line", Static).update(f"Instant Search {state_text}.")
 
     def toggle_search_engine(self) -> None:
-        new_engine = self.app.toggle_search_engine()
+        new_engine = self.spoff_app.toggle_search_engine()
         self.update_toggle_ui()
         label = "Spotify" if new_engine == "spotify" else "YouTube Music"
         self.query_one("#settings-status-line", Static).update(f"Search engine set to {label}.")
 
     def cycle_visualizer_style(self) -> None:
-        if hasattr(self.app, "cycle_visualizer_style"):
-            self.app.cycle_visualizer_style()
+        if hasattr(self.spoff_app, "cycle_visualizer_style"):
+            self.spoff_app.cycle_visualizer_style()
         self.update_toggle_ui()
-        style_name = self.app.visualizer.get_style_name() if hasattr(self.app, "visualizer") else ""
+        style_name = self.spoff_app.visualizer.get_style_name() if hasattr(self.spoff_app, "visualizer") else ""
         self.query_one("#settings-status-line", Static).update(f"Visualizer style set to [bold #ffffff]{style_name}[/].")
 
     def cycle_visualizer_color(self) -> None:
-        if hasattr(self.app, "cycle_visualizer_color"):
-            self.app.cycle_visualizer_color()
+        if hasattr(self.spoff_app, "cycle_visualizer_color"):
+            self.spoff_app.cycle_visualizer_color()
         self.update_toggle_ui()
-        color_name = self.app.visualizer.get_color_name() if hasattr(self.app, "visualizer") else ""
+        color_name = self.spoff_app.visualizer.get_color_name() if hasattr(self.spoff_app, "visualizer") else ""
         self.query_one("#settings-status-line", Static).update(f"Visualizer theme set to [bold #ffffff]{color_name}[/].")
 
     def start_rebinding(self, act_id: str) -> None:
@@ -484,7 +488,7 @@ class SettingsModal(ModalScreen[None]):
         _, act_title = ACTION_INFO.get(act_id, ("General", act_id))
 
         conflicting_act = None
-        for other_id, bound in self.app.keybindings.items():
+        for other_id, bound in self.spoff_app.keybindings.items():
             if other_id != act_id and bound == new_key:
                 conflicting_act = other_id
                 break
@@ -492,11 +496,11 @@ class SettingsModal(ModalScreen[None]):
         status_msg = f"Bound [bold #ffffff]'{act_title}'[/] to [bold #569f68]{format_key_display(new_key)}[/]."
         if conflicting_act:
             _, conf_title = ACTION_INFO.get(conflicting_act, ("General", conflicting_act))
-            self.app.set_custom_keybinding(conflicting_act, "")
+            self.spoff_app.set_custom_keybinding(conflicting_act, "")
             status_msg += f" [dim](Unbound conflicting '{conf_title}')[/dim]"
             self._refresh_row(conflicting_act)
 
-        self.app.set_custom_keybinding(act_id, new_key)
+        self.spoff_app.set_custom_keybinding(act_id, new_key)
         self._refresh_row(act_id)
         self.query_one("#settings-status-line", Static).update(status_msg)
 
@@ -511,7 +515,7 @@ class SettingsModal(ModalScreen[None]):
     def _refresh_row(self, act_id: str, key_override: Optional[str] = None) -> None:
         table = self.query_one("#settings-table", DataTable)
         cat, title = ACTION_INFO.get(act_id, ("General", act_id))
-        cur_key = self.app.keybindings.get(act_id, "")
+        cur_key = self.spoff_app.keybindings.get(act_id, "")
         is_default = (cur_key == DEFAULT_KEYBINDINGS.get(act_id))
 
         if key_override:
@@ -535,7 +539,7 @@ class SettingsModal(ModalScreen[None]):
         table = self.query_one("#settings-table", DataTable)
         if table.cursor_row is not None and table.row_count > 0:
             act_id = list(ACTION_INFO.keys())[table.cursor_row]
-            self.app.reset_keybinding(act_id)
+            self.spoff_app.reset_keybinding(act_id)
             self._refresh_row(act_id)
             _, title = ACTION_INFO.get(act_id, ("General", act_id))
             def_key = DEFAULT_KEYBINDINGS.get(act_id, "")
@@ -546,7 +550,7 @@ class SettingsModal(ModalScreen[None]):
     def action_reset_all_keys(self) -> None:
         if self.is_rebinding:
             return
-        self.app.reset_all_keybindings()
+        self.spoff_app.reset_all_keybindings()
         for act_id in ACTION_INFO.keys():
             self._refresh_row(act_id)
         self.query_one("#settings-status-line", Static).update("All keybindings reset to factory defaults.")
@@ -969,7 +973,7 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
             if not user or not user.get("display_name"):
                 def _fetch_bg():
                     tok = get_valid_token()
-                    if tok:
+                    if tok and self.auth_session is not None:
                         prof = fetch_current_user_profile(tok)
                         if prof:
                             self.auth_session["user"] = prof
@@ -1064,7 +1068,7 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
         buttons = [b for b in self.query(Button) if b.display]
         if not buttons:
             return
-        if self.focused in buttons:
+        if isinstance(self.focused, Button) and self.focused in buttons:
             idx = buttons.index(self.focused)
             prev_idx = (idx - 1) % len(buttons)
             buttons[prev_idx].focus()
@@ -1075,7 +1079,7 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
         buttons = [b for b in self.query(Button) if b.display]
         if not buttons:
             return
-        if self.focused in buttons:
+        if isinstance(self.focused, Button) and self.focused in buttons:
             idx = buttons.index(self.focused)
             next_idx = (idx + 1) % len(buttons)
             buttons[next_idx].focus()
@@ -1180,6 +1184,7 @@ class UpdateModal(ModalScreen[bool]):
         super().__init__()
         self.update_info = update_info
         self.is_updating = False
+        self._update_complete = False
 
     def compose(self) -> ComposeResult:
         with Vertical(id="update-dialog"):
@@ -1345,38 +1350,47 @@ class ScrubBar(ProgressBar):
     ]
 
     def action_scrub_bwd(self) -> None:
-        self.app.action_seek_bwd()
+        app: Any = self.app
+        app.action_seek_bwd()
 
     def action_scrub_fwd(self) -> None:
-        self.app.action_seek_fwd()
+        app: Any = self.app
+        app.action_seek_fwd()
 
     def action_scrub_bwd_fast(self) -> None:
-        self.app.player.seek(-15)
-        self.app.update_player_hud()
+        app: Any = self.app
+        app.player.seek(-15)
+        app.update_player_hud()
 
     def action_scrub_fwd_fast(self) -> None:
-        self.app.player.seek(15)
-        self.app.update_player_hud()
+        app: Any = self.app
+        app.player.seek(15)
+        app.update_player_hud()
 
     def action_return_to_table(self) -> None:
-        if self.app.active_tab == "lyrics":
-            self.app.query_one("#lyrics-table", DataTable).focus()
+        app: Any = self.app
+        if app.active_tab == "lyrics":
+            app.query_one("#lyrics-table", DataTable).focus()
         else:
-            self.app.query_one("#track-table", DataTable).focus()
+            app.query_one("#track-table", DataTable).focus()
 
     def action_toggle_play(self) -> None:
-        self.app.action_toggle_play()
+        app: Any = self.app
+        app.action_toggle_play()
 
     def on_focus(self) -> None:
-        self.app.update_player_hud()
+        app: Any = self.app
+        app.update_player_hud()
 
     def on_blur(self) -> None:
-        self.app.update_player_hud()
+        app: Any = self.app
+        app.update_player_hud()
 
     def on_key(self, event: events.Key) -> None:
         if event.key in "0123456789":
             pct = int(event.key) / 10.0
-            self.app.seek_to_percent(pct)
+            app: Any = self.app
+            app.seek_to_percent(pct)
             event.prevent_default()
             event.stop()
 
@@ -1384,7 +1398,8 @@ class ScrubBar(ProgressBar):
         self.focus()
         if self.total and self.total > 0 and self.size.width > 0:
             pct = max(0.0, min(1.0, event.x / float(self.size.width)))
-            self.app.seek_to_percent(pct)
+            app: Any = self.app
+            app.seek_to_percent(pct)
             event.prevent_default()
             event.stop()
 
@@ -1454,7 +1469,9 @@ class SidebarSplitter(Widget):
                 save_sidebar_width(44)
             except Exception:
                 pass
-            self.app.notify_user("Playlists sidebar width reset to default (44).")
+            app: Any = self.app
+            if hasattr(app, "notify_user"):
+                app.notify_user("Playlists sidebar width reset to default (44).")
             event.prevent_default()
             event.stop()
 
@@ -1462,8 +1479,9 @@ class SearchEnginePill(Static):
     can_focus = False
 
     def on_click(self) -> None:
-        if hasattr(self.app, "toggle_search_engine"):
-            self.app.toggle_search_engine()
+        app: Any = self.app
+        if hasattr(app, "toggle_search_engine"):
+            app.toggle_search_engine()
 
 class SpoffTUI(App):
     CSS = """
@@ -3610,7 +3628,7 @@ class SpoffTUI(App):
 
     def action_check_update(self):
         if self.update_info:
-            def _handle(confirmed):
+            def _handle(confirmed: Optional[bool]):
                 if confirmed:
                     self.notify_user("Updated to latest version! Please restart Spoff.")
                     try:
@@ -3856,7 +3874,7 @@ class SpoffTUI(App):
                 self.playlists = load_saved_playlists()
                 pl_name = val
                 for p in self.playlists:
-                    if p["id"] == val:
+                    if p.get("id") == val:
                         pl_name = p.get("name", "Playlist")
                         if self.active_tab == "playlist" and self.current_playlist_id == val:
                             self.current_playlist_tracks = list(p.get("tracks", []))
@@ -3889,7 +3907,7 @@ class SpoffTUI(App):
         target_idx = None
 
         # 1. If focused on side-table, use sidebar cursor
-        if self.focused and self.focused.id == "side-table":
+        if self.focused and self.focused.id == "side-table" and isinstance(self.focused, DataTable):
             row_idx = self.focused.cursor_row
             if row_idx is not None and 0 <= row_idx < len(self.playlists):
                 target_idx = row_idx
@@ -3916,9 +3934,12 @@ class SpoffTUI(App):
             return
 
         pname = target_pl.get("name", "Playlist")
-        pl_id = target_pl.get("id")
+        pl_id = str(target_pl.get("id") or target_pl.get("name") or "")
+        if not pl_id:
+            self.notify_user("Cannot delete playlist: missing playlist ID.")
+            return
 
-        def handle_delete_confirm(confirmed: bool) -> None:
+        def handle_delete_confirm(confirmed: Optional[bool]) -> None:
             if not confirmed:
                 return
             remove_saved_playlist(pl_id)
@@ -3969,7 +3990,7 @@ class SpoffTUI(App):
             self.action_delete_playlist()
             return
 
-        elif f and f.id == "track-table":
+        elif f and f.id == "track-table" and isinstance(f, DataTable):
             row_idx = f.cursor_row
             if self.active_tab == "playlist":
                 # If playlist is empty, delete the playlist itself
@@ -3981,12 +4002,15 @@ class SpoffTUI(App):
                 t = self.current_playlist_tracks[row_idx]
                 t_title = t.get("title", "Track")
                 pl_id = self.current_playlist_id
+                if not pl_id:
+                    self.notify_user("No playlist currently active.")
+                    return
                 pl_name = next((p.get("name", "Playlist") for p in self.playlists if p.get("id") == pl_id), "Playlist")
 
                 target_track = t
                 target_track_id = t.get("id")
 
-                def handle_remove_track_confirm(confirmed: bool) -> None:
+                def handle_remove_track_confirm(confirmed: Optional[bool]) -> None:
                     if not confirmed:
                         return
                     found_idx = None
@@ -3997,13 +4021,13 @@ class SpoffTUI(App):
                             if item.get("id") == target_track_id:
                                 found_idx = idx
                                 break
-                    elif 0 <= row_idx < len(self.current_playlist_tracks):
+                    elif row_idx is not None and 0 <= row_idx < len(self.current_playlist_tracks):
                         found_idx = row_idx
 
                     if found_idx is not None and 0 <= found_idx < len(self.current_playlist_tracks):
                         removed_track = self.current_playlist_tracks.pop(found_idx)
                         self.render_tracks(self.current_playlist_tracks)
-                        if self.current_playlist_tracks:
+                        if self.current_playlist_tracks and isinstance(f, DataTable):
                             new_row = max(0, min(found_idx, len(self.current_playlist_tracks) - 1))
                             f.move_cursor(row=new_row)
                         if pl_id:
@@ -4039,7 +4063,7 @@ class SpoffTUI(App):
                         delete_cached_track(t["id"])
                     remaining = list(load_offline_index().values())
                     self.render_tracks(remaining)
-                    if remaining:
+                    if remaining and isinstance(f, DataTable):
                         new_row = max(0, min(row_idx, len(remaining) - 1))
                         f.move_cursor(row=new_row)
                     self.notify_user(f"Removed '{t_title}' from offline disk cache.")
@@ -4048,7 +4072,7 @@ class SpoffTUI(App):
                 if row_idx is not None and 0 <= row_idx < len(self.search_results):
                     t = self.search_results.pop(row_idx)
                     self.render_tracks(self.search_results)
-                    if self.search_results:
+                    if self.search_results and isinstance(f, DataTable):
                         new_row = max(0, min(row_idx, len(self.search_results) - 1))
                         f.move_cursor(row=new_row)
                     self.notify_user(f"Removed '{t.get('title')}' from search results.")

@@ -8,10 +8,13 @@ logger = logging.getLogger("mpris")
 try:
     from pydbus import SessionBus
     from pydbus.generic import signal
-    from gi.repository import GLib
+    from gi.repository import GLib  # type: ignore
     HAS_DBUS = True
 except Exception as e:
     logger.debug(f"pydbus or GLib not available: {e}")
+    SessionBus = None  # type: ignore
+    signal = None  # type: ignore
+    GLib = None  # type: ignore
     HAS_DBUS = False
 
 class SpoffMPRISDbus:
@@ -64,7 +67,7 @@ class SpoffMPRISDbus:
         </interface>
     </node>
     """
-    if HAS_DBUS:
+    if HAS_DBUS and signal:
         PropertiesChanged = signal()
 
     # Root Interface
@@ -89,6 +92,7 @@ class SpoffMPRISDbus:
         self.CanSeek = True
         self.CanGoNext = True
         self.CanGoPrevious = True
+        self.Metadata: Dict[str, Any] = {}
 
     @property
     def Volume(self) -> float:
@@ -172,12 +176,13 @@ class MPRISService:
         self._started = False
 
     def start(self) -> bool:
-        if not HAS_DBUS or self._started:
+        if not HAS_DBUS or self._started or GLib is None or SessionBus is None:
             return False
 
         try:
-            self.loop = GLib.MainLoop()
-            self._thread = threading.Thread(target=self.loop.run, daemon=True)
+            loop = GLib.MainLoop()
+            self.loop = loop
+            self._thread = threading.Thread(target=loop.run, daemon=True)
             self._thread.start()
 
             bus = SessionBus()
@@ -202,24 +207,27 @@ class MPRISService:
             self.dbus_obj = None
             return False
 
-    def update_track(self, track: Optional[Dict[str, Any]], duration_sec: float = 0.0) -> None:
+    def _emit_changed(self, props: Dict[str, Any]) -> None:
         if not self.dbus_obj:
+            return
+        prop_sig = getattr(self.dbus_obj, "PropertiesChanged", None)
+        if callable(prop_sig):
+            try:
+                prop_sig("org.mpris.MediaPlayer2.Player", props, [])
+            except Exception as e:
+                logger.debug(f"Error emitting MPRIS PropertiesChanged: {e}")
+
+    def update_track(self, track: Optional[Dict[str, Any]], duration_sec: float = 0.0) -> None:
+        if not HAS_DBUS or not self.dbus_obj or GLib is None:
             return
 
         if not track:
             self.dbus_obj.Metadata = {}
             self.dbus_obj.PlaybackStatus = "Stopped"
-            try:
-                self.dbus_obj.PropertiesChanged(
-                    "org.mpris.MediaPlayer2.Player",
-                    {
-                        "Metadata": GLib.Variant("a{sv}", {}),
-                        "PlaybackStatus": GLib.Variant("s", "Stopped"),
-                    },
-                    []
-                )
-            except Exception:
-                pass
+            self._emit_changed({
+                "Metadata": GLib.Variant("a{sv}", {}),
+                "PlaybackStatus": GLib.Variant("s", "Stopped"),
+            })
             return
 
         raw_id = str(track.get("id") or hash(track.get("title", "") + track.get("artist", "")))
@@ -252,20 +260,13 @@ class MPRISService:
         self.dbus_obj.Metadata = meta
         self.dbus_obj.PlaybackStatus = "Playing"
 
-        try:
-            self.dbus_obj.PropertiesChanged(
-                "org.mpris.MediaPlayer2.Player",
-                {
-                    "Metadata": GLib.Variant("a{sv}", meta),
-                    "PlaybackStatus": GLib.Variant("s", "Playing"),
-                },
-                []
-            )
-        except Exception as e:
-            logger.debug(f"Error emitting MPRIS PropertiesChanged: {e}")
+        self._emit_changed({
+            "Metadata": GLib.Variant("a{sv}", meta),
+            "PlaybackStatus": GLib.Variant("s", "Playing"),
+        })
 
     def update_status(self, is_playing: bool, is_paused: bool) -> None:
-        if not self.dbus_obj:
+        if not HAS_DBUS or not self.dbus_obj or GLib is None:
             return
 
         status = "Playing" if is_playing and not is_paused else ("Paused" if is_playing and is_paused else "Stopped")
@@ -273,14 +274,7 @@ class MPRISService:
             return
 
         self.dbus_obj.PlaybackStatus = status
-        try:
-            self.dbus_obj.PropertiesChanged(
-                "org.mpris.MediaPlayer2.Player",
-                {"PlaybackStatus": GLib.Variant("s", status)},
-                []
-            )
-        except Exception:
-            pass
+        self._emit_changed({"PlaybackStatus": GLib.Variant("s", status)})
 
     def update_position(self, pos_sec: float) -> None:
         if not self.dbus_obj:
@@ -288,18 +282,11 @@ class MPRISService:
         self.dbus_obj.Position = int(pos_sec * 1_000_000)
 
     def update_volume(self, vol_int: int) -> None:
-        if not self.dbus_obj:
+        if not HAS_DBUS or not self.dbus_obj or GLib is None:
             return
         vol_float = max(0.0, min(1.0, float(vol_int) / 100.0))
         self.dbus_obj._volume = vol_float
-        try:
-            self.dbus_obj.PropertiesChanged(
-                "org.mpris.MediaPlayer2.Player",
-                {"Volume": GLib.Variant("d", vol_float)},
-                []
-            )
-        except Exception:
-            pass
+        self._emit_changed({"Volume": GLib.Variant("d", vol_float)})
 
     def stop(self) -> None:
         if self.publication:

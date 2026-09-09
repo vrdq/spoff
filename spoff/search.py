@@ -3,7 +3,7 @@ import re
 import logging
 import urllib.request
 import urllib.parse
-from typing import List, Dict, Any
+from typing import List, Dict, Any, cast
 import yt_dlp
 
 try:
@@ -59,11 +59,14 @@ def live_search_tracks(query: str, limit: int = 25) -> List[Dict[str, Any]]:
     
     tracks: List[Dict[str, Any]] = []
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
             res = ydl.extract_info(f"ytsearch{limit}:{query.strip()}", download=False)
-            entries = res.get("entries", [])
-            for e in entries:
-                if not e:
+            if not res:
+                return tracks
+            entries: Any = res.get("entries")
+            entry_list = list(entries) if entries else []
+            for e in entry_list:
+                if not e or not isinstance(e, dict):
                     continue
                 t_id = e.get("id")
                 title = e.get("title") or "Unknown Track"

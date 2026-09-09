@@ -1,7 +1,7 @@
 import re
 import logging
 import threading
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, cast
 import yt_dlp
 try:
     from .storage import CACHE_DIR, register_cached_track
@@ -57,16 +57,19 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
         ])
     ydl_opts = get_base_ydl_opts()
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
             item = None
             for query in queries:
                 try:
                     res = ydl.extract_info(query, download=False)
                     if res:
-                        if "entries" in res and res["entries"]:
-                            item = res["entries"][0]
-                            break
-                        elif not res.get("entries"):
+                        entries: Any = res.get("entries")
+                        if entries:
+                            entry_list = list(entries) if not isinstance(entries, list) else entries
+                            if entry_list:
+                                item = entry_list[0]
+                                break
+                        else:
                             item = res
                             break
                 except Exception as ex:
@@ -79,9 +82,11 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
             stream_url = item.get("url")
             # If item is a manifest or has multiple formats, pick bestaudio
             if not stream_url and "formats" in item:
-                audio_formats = [f for f in item["formats"] if f.get("acodec") != "none" and f.get("url")]
-                if audio_formats:
-                    stream_url = audio_formats[-1].get("url")
+                formats = item.get("formats")
+                if formats:
+                    audio_formats = [f for f in formats if isinstance(f, dict) and f.get("acodec") != "none" and f.get("url")]
+                    if audio_formats:
+                        stream_url = audio_formats[-1].get("url")
 
             if not stream_url and item.get("webpage_url"):
                 stream_url = item.get("webpage_url")
@@ -136,7 +141,7 @@ def download_track_to_cache(track_id: str, title: str, artist: str, on_complete=
                 "outtmpl": f"{str(temp_path)}.%(ext)s",
                 "overwrites": True
             })
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
                 ydl.download([query])
 
             for f in CACHE_DIR.glob(f"{track_id}_dl.*"):

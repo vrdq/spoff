@@ -319,8 +319,9 @@ def save_saved_playlists(playlists: List[Dict[str, Any]]):
 
 def add_saved_playlist(playlist: Dict[str, Any]):
     existing = load_saved_playlists()
+    target_id = playlist.get("id")
     for p in existing:
-        if p["id"] == playlist["id"]:
+        if target_id and p.get("id") == target_id:
             p.update(playlist)
             save_saved_playlists(existing)
             return
@@ -341,9 +342,11 @@ def create_local_playlist(name: str) -> Dict[str, Any]:
     return playlist
 
 def add_track_to_playlist(playlist_id: str, track: Dict[str, Any]) -> bool:
+    if not playlist_id:
+        return False
     existing = load_saved_playlists()
     for p in existing:
-        if p["id"] == playlist_id:
+        if p.get("id") == playlist_id:
             if "tracks" not in p or not isinstance(p["tracks"], list):
                 p["tracks"] = []
             for t in p["tracks"]:
@@ -357,9 +360,11 @@ def add_track_to_playlist(playlist_id: str, track: Dict[str, Any]) -> bool:
     return False
 
 def remove_track_from_playlist(playlist_id: str, track_id: str) -> bool:
+    if not playlist_id:
+        return False
     existing = load_saved_playlists()
     for p in existing:
-        if p["id"] == playlist_id:
+        if p.get("id") == playlist_id:
             if "tracks" in p and isinstance(p["tracks"], list):
                 original_len = len(p["tracks"])
                 p["tracks"] = [t for t in p["tracks"] if t.get("id") != track_id]
@@ -369,16 +374,20 @@ def remove_track_from_playlist(playlist_id: str, track_id: str) -> bool:
     return False
 
 def update_playlist_tracks(playlist_id: str, tracks: List[Dict[str, Any]]):
+    if not playlist_id:
+        return
     existing = load_saved_playlists()
     for p in existing:
-        if p["id"] == playlist_id:
+        if p.get("id") == playlist_id:
             p["tracks"] = list(tracks)
             save_saved_playlists(existing)
             return
 
 def remove_saved_playlist(playlist_id: str) -> bool:
+    if not playlist_id:
+        return False
     existing = load_saved_playlists()
-    filtered = [p for p in existing if p["id"] != playlist_id]
+    filtered = [p for p in existing if p.get("id") != playlist_id]
     if len(filtered) != len(existing):
         save_saved_playlists(filtered)
         logger.info(f"Deleted playlist: {playlist_id}")
