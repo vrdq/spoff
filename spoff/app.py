@@ -38,8 +38,8 @@ try:
         delete_cached_track, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
-        get_saved_transparency, save_transparency, get_saved_visualizer_style,
-        save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
+        get_saved_transparency, save_transparency, get_saved_instant_search, save_instant_search,
+        get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache
@@ -70,8 +70,8 @@ except ImportError:
         delete_cached_track, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
-        get_saved_transparency, save_transparency, get_saved_visualizer_style,
-        save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
+        get_saved_transparency, save_transparency, get_saved_instant_search, save_instant_search,
+        get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings
     )
     from streamer import search_and_resolve_stream, download_track_to_cache
@@ -297,6 +297,13 @@ class TransparencyToggle(Static):
         if isinstance(self.screen, SettingsModal):
             self.screen.toggle_transparency()
 
+class InstantSearchToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_instant_search()
+
 class SearchEngineToggle(Static):
     can_focus = True
 
@@ -348,6 +355,7 @@ class SettingsModal(ModalScreen[None]):
             with Vertical(id="settings-options-container"):
                 yield AdvModeToggle(id="adv-mode-toggle", classes="setting-toggle-item")
                 yield TransparencyToggle(id="transparency-toggle", classes="setting-toggle-item")
+                yield InstantSearchToggle(id="instant-search-toggle", classes="setting-toggle-item")
                 yield SearchEngineToggle(id="engine-toggle", classes="setting-toggle-item")
                 yield VisualizerStyleToggle(id="vis-style-toggle", classes="setting-toggle-item")
                 yield VisualizerColorToggle(id="vis-color-toggle", classes="setting-toggle-item")
@@ -373,7 +381,10 @@ class SettingsModal(ModalScreen[None]):
             status_str = "[dim]Default[/dim]" if is_default else "[bold #569f68]Custom[/]"
             table.add_row(cat, title, format_key_display(cur_key), status_str, key=act_id)
 
-        table.focus()
+        try:
+            self.query_one("#adv-mode-toggle", AdvModeToggle).focus()
+        except Exception:
+            table.focus()
 
     def update_toggle_ui(self) -> None:
         try:
@@ -392,6 +403,12 @@ class SettingsModal(ModalScreen[None]):
                 trans_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]UI Transparency[/]  [dim]— Terminal background & blur shines through[/dim]")
             else:
                 trans_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]UI Transparency[/]  [dim]— Solid dark opaque background[/dim]")
+
+            instant_toggle = self.query_one("#instant-search-toggle", InstantSearchToggle)
+            if getattr(self.app, "instant_search", True):
+                instant_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]Instant Search[/]  [dim]— Search bar is immediately ready to type on Search tab[/dim]")
+            else:
+                instant_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]Instant Search[/]  [dim]— Track table focused; press / to activate search bar[/dim]")
 
             eng_toggle = self.query_one("#engine-toggle", SearchEngineToggle)
             if getattr(self.app, "search_engine", "ytmusic") == "spotify":
@@ -420,6 +437,12 @@ class SettingsModal(ModalScreen[None]):
         self.update_toggle_ui()
         state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
         self.query_one("#settings-status-line", Static).update(f"UI Transparency {state_text}.")
+
+    def toggle_instant_search(self) -> None:
+        new_state = self.app.toggle_instant_search()
+        self.update_toggle_ui()
+        state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
+        self.query_one("#settings-status-line", Static).update(f"Instant Search {state_text}.")
 
     def toggle_search_engine(self) -> None:
         new_engine = self.app.toggle_search_engine()
@@ -537,7 +560,7 @@ class SettingsModal(ModalScreen[None]):
     def action_switch_focus(self) -> None:
         if self.is_rebinding:
             return
-        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle"]
+        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "instant-search-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle"]
         focused_id = self.focused.id if self.focused else None
         if focused_id in toggle_ids:
             idx = toggle_ids.index(focused_id)
@@ -556,6 +579,8 @@ class SettingsModal(ModalScreen[None]):
             self.toggle_advanced_mode()
         elif focused_id == "transparency-toggle":
             self.toggle_transparency()
+        elif focused_id == "instant-search-toggle":
+            self.toggle_instant_search()
         elif focused_id == "engine-toggle":
             self.toggle_search_engine()
         elif focused_id == "vis-style-toggle":
@@ -591,7 +616,7 @@ class SettingsModal(ModalScreen[None]):
             return
 
         table = self.query_one("#settings-table", DataTable)
-        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle"]
+        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "instant-search-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle"]
         focused_id = self.focused.id if self.focused else None
 
         if focused_id in toggle_ids:
@@ -615,6 +640,8 @@ class SettingsModal(ModalScreen[None]):
                     self.toggle_advanced_mode()
                 elif focused_id == "transparency-toggle":
                     self.toggle_transparency()
+                elif focused_id == "instant-search-toggle":
+                    self.toggle_instant_search()
                 elif focused_id == "engine-toggle":
                     self.toggle_search_engine()
                 elif focused_id == "vis-style-toggle":
@@ -2098,7 +2125,8 @@ class SpoffTUI(App):
         width: 88;
         max-width: 96%;
         height: auto;
-        max-height: 44;
+        max-height: 94%;
+        overflow-y: auto;
         background: #141414;
         border: solid #2a2a2a;
         padding: 1 2;
@@ -2321,6 +2349,7 @@ class SpoffTUI(App):
         self.last_browsing_tab: str = "playlist"
         self.search_engine: str = get_saved_search_engine()
         self.transparency: bool = get_saved_transparency()
+        self.instant_search: bool = get_saved_instant_search()
         self.player.playback_finished_callback = self.on_track_finished
         atexit.register(self._cleanup_on_exit)
 
@@ -2340,6 +2369,15 @@ class SpoffTUI(App):
         save_transparency(self.transparency)
         self.apply_transparency()
         return self.transparency
+
+    def toggle_instant_search(self) -> bool:
+        self.instant_search = not self.instant_search
+        save_instant_search(self.instant_search)
+        return self.instant_search
+
+    def set_instant_search(self, enabled: bool) -> None:
+        self.instant_search = bool(enabled)
+        save_instant_search(self.instant_search)
 
     def apply_transparency(self) -> None:
         bg_val = "ansi_default" if self.transparency else "#121212"
@@ -2635,6 +2673,26 @@ class SpoffTUI(App):
             elif event.widget.id == "rep-pill":
                 self.action_toggle_repeat()
                 return
+            elif event.widget.id == "nav-bar":
+                tabs = [
+                    ("search", "nav_search", "Search"),
+                    ("playlist", "nav_playlist", "Playlists"),
+                    ("offline", "nav_offline", "Offline"),
+                    ("lyrics", "nav_lyrics", "Lyrics"),
+                ]
+                cur_x = 0
+                for mode, act_id, label in tabs:
+                    if self.advanced_mode:
+                        lbl = label
+                    else:
+                        k = format_key_display(self.keybindings.get(act_id, ""))
+                        lbl = f"[{k}] {label}"
+                    tab_w = len(lbl) + 4
+                    if cur_x <= event.x < cur_x + tab_w:
+                        self.switch_view(mode)
+                        return
+                    cur_x += tab_w
+                return
         if self.focused is None or not getattr(self.focused, "can_focus", False):
             if self.active_tab == "lyrics":
                 self.query_one("#lyrics-table", DataTable).focus()
@@ -2903,10 +2961,19 @@ class SpoffTUI(App):
 
         if view == "search":
             self.render_tracks(self.search_results)
-            if not (self.focused and self.focused.id == "side-table"):
-                track_table.focus()
+            if getattr(self, "instant_search", True):
+                try:
+                    self.query_one("#search-box", Input).focus()
+                except Exception:
+                    track_table.focus()
+            else:
+                if not (self.focused and self.focused.id == "side-table"):
+                    track_table.focus()
             if not self.search_results:
-                self.notify_user("" if self.advanced_mode else "Search: Press / or Up arrow to type query")
+                if getattr(self, "instant_search", True):
+                    self.notify_user("" if self.advanced_mode else "Search: Type query and press Enter")
+                else:
+                    self.notify_user("" if self.advanced_mode else "Search: Press / or Up arrow to type query")
             else:
                 self.notify_user("")
         elif view == "playlist":

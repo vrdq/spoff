@@ -204,6 +204,24 @@ def save_transparency(enabled: bool):
     except Exception as e:
         logger.error(f"Error saving transparency setting: {e}")
 
+def get_saved_instant_search() -> bool:
+    """Retrieves whether instant search is enabled, defaulting to True."""
+    try:
+        cfg = load_config()
+        return bool(cfg.get("instant_search", True))
+    except Exception as e:
+        logger.error(f"Error reading instant search setting: {e}")
+        return True
+
+def save_instant_search(enabled: bool):
+    """Persists instant search setting to config."""
+    try:
+        cfg = load_config()
+        cfg["instant_search"] = bool(enabled)
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving instant search setting: {e}")
+
 def get_saved_visualizer_style() -> str:
     """Retrieves active visualizer style ('bars', 'braille', 'stereo', 'wave', 'dots'), defaulting to 'bars'."""
     try:
