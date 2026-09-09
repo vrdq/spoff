@@ -3048,7 +3048,7 @@ class SpoffTUI(App):
         table.clear()
         is_compact = self.size.width < 115
         spot_name = "spot" if is_compact else "Spotify"
-        ytm_name = "ytm" if is_compact else "YT Music"
+        ytm_name = "ytm" if is_compact else "YTMusic"
         loc_name = "local" if is_compact else "Local disk"
 
         for idx, t in enumerate(tracks):
