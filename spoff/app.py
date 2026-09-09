@@ -3064,15 +3064,15 @@ class SpoffTUI(App):
             else:
                 src = raw_src or "remote"
 
-            dot = "[dim #555555] · [/]"
+            sep = "[dim #555555] | [/]"
             if src == "local":
                 type_tag = f"[#569f68]{loc_name}[/]"
             elif src == "spotify":
                 status = "[#569f68]offline[/]" if is_cached else "[#c4a768]stream[/]"
-                type_tag = f"[#569f68]{spot_name}[/]{dot}{status}"
+                type_tag = f"[#569f68]{spot_name}[/]{sep}{status}"
             elif src == "ytmusic":
                 status = "[#569f68]offline[/]" if is_cached else "[#c4a768]stream[/]"
-                type_tag = f"[#e06c75]{ytm_name}[/]{dot}{status}"
+                type_tag = f"[#e06c75]{ytm_name}[/]{sep}{status}"
             else:
                 type_tag = "[#569f68]offline[/]" if is_cached else "[dim]remote[/dim]"
 
