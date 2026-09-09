@@ -2641,6 +2641,17 @@ class SpoffTUI(App):
             else:
                 self.query_one("#track-table", DataTable).focus()
 
+    def on_resize(self, event: events.Resize) -> None:
+        last_w = getattr(self, "_last_rendered_width", None)
+        self._last_rendered_width = event.size.width
+        if last_w is not None:
+            was_compact = last_w < 115
+            is_compact = event.size.width < 115
+            if was_compact != is_compact:
+                tracks = self._get_active_tracks()
+                if tracks:
+                    self.render_tracks(tracks)
+
     def on_key(self, event) -> None:
         if self.focused is None:
             if self.active_tab == "lyrics":
@@ -3026,17 +3037,38 @@ class SpoffTUI(App):
         table = self.query_one("#track-table", DataTable)
         old_cursor = table.cursor_row
         table.clear()
+        is_compact = self.size.width < 115
+        spot_name = "SPOT" if is_compact else "SPOTIFY"
+        ytm_name = "YTM" if is_compact else "YT MUSIC"
+
         for idx, t in enumerate(tracks):
             t_id = t.get("id") or str(hash(t.get("title", "") + t.get("artist", "")))
             is_cached = get_cached_track_path(t_id) is not None if t_id else False
-            if is_cached:
-                type_tag = "[bold #569f68]OFFLINE[/]"
-            elif t.get("source") == "spotify":
-                type_tag = "[bold #569f68]SPOT[/]"
-            elif t.get("source") in ("ytmusic", "youtube") or self.active_tab == "search":
-                type_tag = "[#888888]YTM[/]"
+            raw_src = str(t.get("source", "")).lower()
+            if raw_src == "local" or str(t.get("filepath", "")).startswith("/"):
+                src = "local"
+            elif raw_src == "spotify" or (not raw_src and t_id and len(t_id) == 22 and not t.get("url")):
+                src = "spotify"
+            elif raw_src in ("ytmusic", "youtube") or (not raw_src and (len(t_id) == 11 or "youtube.com" in str(t.get("url", "")) or "youtu.be" in str(t.get("url", "")))) or self.active_tab == "search":
+                src = "ytmusic"
             else:
-                type_tag = "[dim]REMOTE[/dim]"
+                src = raw_src or "remote"
+
+            if src == "local":
+                type_tag = "[bold #569f68]LOCAL DISK[/]"
+            elif src == "spotify":
+                if is_cached:
+                    type_tag = f"[bold #569f68]{spot_name}[/] [dim #767676]·[/] [bold #569f68]OFFLINE[/]"
+                else:
+                    type_tag = f"[bold #569f68]{spot_name}[/] [dim #767676]·[/] [#c4a768]STREAM[/]"
+            elif src == "ytmusic":
+                if is_cached:
+                    type_tag = f"[bold #e06c75]{ytm_name}[/] [dim #767676]·[/] [bold #569f68]OFFLINE[/]"
+                else:
+                    type_tag = f"[#888888]{ytm_name}[/] [dim #767676]·[/] [#c4a768]STREAM[/]"
+            else:
+                type_tag = "[bold #569f68]OFFLINE[/]" if is_cached else "[dim]REMOTE[/dim]"
+
             dur_ms = t.get("duration_ms") or 0
             dur = format_time(dur_ms / 1000)
             table.add_row(type_tag, escape(t.get("title", "")), escape(t.get("artist", "")), dur, key=str(idx))
