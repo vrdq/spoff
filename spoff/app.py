@@ -2798,6 +2798,22 @@ class SpoffTUI(App):
                     event.prevent_default()
                     event.stop()
                     return
+            elif event.key in ("shift+tab", "backtab"):
+                if self.focused.id == "search-box":
+                    self.query_one("#side-table", DataTable).focus()
+                    event.prevent_default()
+                    event.stop()
+                    return
+                elif self.focused.id == "sidebar-import-input":
+                    self.query_one("#track-table", DataTable).focus()
+                    event.prevent_default()
+                    event.stop()
+                    return
+            elif event.key == "left" and self.focused.id == "search-box" and not self.focused.value.strip():
+                self.action_focus_sidebar()
+                event.prevent_default()
+                event.stop()
+                return
             elif event.key == "escape":
                 self.action_clear_or_unfocus()
                 event.prevent_default()
@@ -2891,9 +2907,9 @@ class SpoffTUI(App):
                 matched_action = "cursor_down"
             elif event.key in ("k", "up") or event.character == "k":
                 matched_action = "cursor_up"
-            elif (event.key == "h" or event.character == "h") and not isinstance(self.focused, Input):
+            elif (event.key in ("h", "left") or event.character == "h") and not isinstance(self.focused, Input):
                 matched_action = "focus_sidebar"
-            elif (event.key == "l" or event.character == "l") and not isinstance(self.focused, Input):
+            elif (event.key in ("l", "right") or event.character == "l") and not isinstance(self.focused, Input):
                 matched_action = "focus_tracks"
             elif (event.key in ("J", "shift+down") or event.character == "J") and not isinstance(self.focused, Input):
                 matched_action = "move_item_down"
@@ -2929,7 +2945,7 @@ class SpoffTUI(App):
                 return
 
     def action_nav_search(self): self.switch_view("search")
-    def action_nav_playlist(self): self.switch_view("playlist")
+    def action_nav_playlist(self): self.switch_view("playlist", focus_sidebar=True)
     def action_nav_offline(self): self.switch_view("offline")
     def action_nav_lyrics(self): self.action_toggle_lyrics()
 
@@ -2964,7 +2980,7 @@ class SpoffTUI(App):
         self.notify_user(f"Repeat: {labels[self.repeat_mode]}")
         self.update_player_hud()
 
-    def switch_view(self, view: str):
+    def switch_view(self, view: str, focus_sidebar: Optional[bool] = None):
         self.active_tab = view
         search_row = self.query_one("#search-header-row", Horizontal)
         track_table = self.query_one("#track-table", DataTable)
@@ -2996,8 +3012,24 @@ class SpoffTUI(App):
                 self.notify_user("")
         elif view == "playlist":
             self.render_tracks(self.current_playlist_tracks)
-            if not (self.focused and self.focused.id == "side-table"):
+            st = self.query_one("#side-table", DataTable)
+            should_focus_sidebar = focus_sidebar if focus_sidebar is not None else True
+            if should_focus_sidebar:
+                if self.playlists:
+                    st.focus()
+                    if st.cursor_row is None and self.current_playlist_id:
+                        for p_idx, p in enumerate(self.playlists):
+                            if p.get("id") == self.current_playlist_id:
+                                try:
+                                    st.move_cursor(row=p_idx)
+                                except Exception:
+                                    pass
+                                break
+                else:
+                    self.query_one("#sidebar-import-input", Input).focus()
+            else:
                 track_table.focus()
+
             if not self.playlists:
                 self.notify_user("No playlists yet — enter name in sidebar to create")
             elif not self.current_playlist_tracks:
@@ -3188,11 +3220,25 @@ class SpoffTUI(App):
             st = self.query_one("#side-table", DataTable)
             if self.playlists:
                 st.focus()
+                if st.cursor_row is None and self.current_playlist_id:
+                    for p_idx, p in enumerate(self.playlists):
+                        if p.get("id") == self.current_playlist_id:
+                            try:
+                                st.move_cursor(row=p_idx)
+                            except Exception:
+                                pass
+                            break
             else:
                 self.query_one("#sidebar-import-input", Input).focus()
 
     def action_focus_tracks(self):
         if not isinstance(self.focused, Input):
+            if self.focused and self.focused.id == "side-table":
+                st = self.query_one("#side-table", DataTable)
+                idx = st.cursor_row
+                if idx is not None and 0 <= idx < len(self.playlists):
+                    self.load_playlist_by_index(idx, focus_tracks=True)
+                    return
             if self.active_tab == "lyrics":
                 self.query_one("#lyrics-table", DataTable).focus()
             else:
@@ -3248,10 +3294,16 @@ class SpoffTUI(App):
     def action_cursor_down(self):
         f = self.focused
         if f is None:
-            self.query_one("#track-table", DataTable).focus()
+            if self.active_tab == "playlist" and self.playlists:
+                self.action_focus_sidebar()
+            else:
+                self.query_one("#track-table", DataTable).focus()
             return
 
         if isinstance(f, DataTable):
+            if f.id == "track-table" and f.row_count == 0 and self.active_tab == "playlist":
+                self.action_focus_sidebar()
+                return
             f.action_cursor_down()
         elif isinstance(f, Input):
             if f.id == "search-box":
@@ -3262,11 +3314,17 @@ class SpoffTUI(App):
     def action_cursor_up(self):
         f = self.focused
         if f is None:
-            self.query_one("#track-table", DataTable).focus()
+            if self.active_tab == "playlist" and self.playlists:
+                self.action_focus_sidebar()
+            else:
+                self.query_one("#track-table", DataTable).focus()
             return
 
         if isinstance(f, DataTable):
             if f.id == "track-table":
+                if f.row_count == 0 and self.active_tab == "playlist":
+                    self.action_focus_sidebar()
+                    return
                 if (f.row_count == 0 or f.cursor_row == 0) and self.active_tab == "search":
                     self.query_one("#search-box", Input).focus()
                     return
@@ -3793,7 +3851,7 @@ class SpoffTUI(App):
                     self.queue = list(self.current_playlist_tracks)
                     self.current_index = -1
                 self.notify_user(f"Loaded playlist '{name}' ({len(self.current_playlist_tracks)} tracks).")
-                self.switch_view("playlist")
+                self.switch_view("playlist", focus_sidebar=not focus_tracks)
                 if focus_tracks:
                     self.query_one("#track-table", DataTable).focus()
                 else:
@@ -3807,7 +3865,7 @@ class SpoffTUI(App):
                 self.current_playlist_tracks = []
                 self.render_tracks([])
                 self.notify_user(f"Opened empty playlist '{name}'." if self.advanced_mode else f"Opened empty playlist '{name}'. Press 'a' on any song to add it.")
-                self.switch_view("playlist")
+                self.switch_view("playlist", focus_sidebar=not focus_tracks)
                 if focus_tracks:
                     self.query_one("#track-table", DataTable).focus()
                 else:
@@ -4318,16 +4376,58 @@ class SpoffTUI(App):
         def _update():
             self.refresh_side_table()
             self.notify_user(f"Imported '{name}' ({len(tracks)} tracks).")
-            self.switch_view("playlist")
+            self.switch_view("playlist", focus_sidebar=False)
             self.query_one("#track-table", DataTable).focus()
         self.call_from_thread(_update)
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if not getattr(self, "is_mounted", False):
+            return
+        table_id = event.data_table.id
+        if table_id == "side-table":
+            idx = event.cursor_row
+            if idx is not None and 0 <= idx < len(self.playlists):
+                self._on_sidebar_playlist_highlighted(idx)
+
+    def _on_sidebar_playlist_highlighted(self, idx: int) -> None:
+        if not (0 <= idx < len(self.playlists)):
+            return
+        pl = self.playlists[idx]
+        pl_id = pl.get("id")
+        name = pl.get("name", "Playlist")
+
+        # If user is in another tab and focused on side-table, switch to playlist view
+        if self.focused and self.focused.id == "side-table" and self.active_tab != "playlist":
+            self.switch_view("playlist", focus_sidebar=True)
+
+        if self.active_tab == "playlist":
+            if self.current_playlist_id == pl_id and self.current_playlist_tracks is not None:
+                return
+            self.current_playlist_id = pl_id
+            tracks = pl.get("tracks")
+            if tracks is not None:
+                self.current_playlist_tracks = list(tracks)
+                self.render_tracks(self.current_playlist_tracks)
+                count = len(self.current_playlist_tracks)
+                if not self.advanced_mode:
+                    self.notify_user(f"Selected '{name}' ({count} tracks). Press Enter or 'l' to browse.")
+                else:
+                    self.notify_user(f"Selected '{name}' ({count} tracks).")
+            elif pl.get("url"):
+                self.current_playlist_tracks = []
+                self.render_tracks([])
+                self.notify_user(f"Selected '{name}'. Press Enter to load tracks from URL.")
+            else:
+                self.current_playlist_tracks = []
+                self.render_tracks([])
+                self.notify_user(f"Selected '{name}' (empty). Press 'a' in Search to add songs.")
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         table_id = event.data_table.id
         if table_id == "side-table":
             idx = event.cursor_row
             if idx is not None and 0 <= idx < len(self.playlists):
-                self.load_playlist_by_index(idx, focus_tracks=False)
+                self.load_playlist_by_index(idx, focus_tracks=True)
         elif table_id == "track-table":
             self.play_current_table_row(event.cursor_row)
         elif table_id == "lyrics-table":
