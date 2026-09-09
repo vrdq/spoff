@@ -38,8 +38,9 @@ try:
         delete_cached_track, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
-        get_saved_transparency, save_transparency, get_custom_keybindings,
-        save_custom_keybindings, reset_custom_keybindings
+        get_saved_transparency, save_transparency, get_saved_visualizer_style,
+        save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
+        get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache
     from .search import live_search_tracks
@@ -69,8 +70,9 @@ except ImportError:
         delete_cached_track, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
-        get_saved_transparency, save_transparency, get_custom_keybindings,
-        save_custom_keybindings, reset_custom_keybindings
+        get_saved_transparency, save_transparency, get_saved_visualizer_style,
+        save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
+        get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings
     )
     from streamer import search_and_resolve_stream, download_track_to_cache
     from search import live_search_tracks
@@ -135,6 +137,8 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "move_item_up": "K",
     "move_item_down": "J",
     "switch_engine": "ctrl+e",
+    "toggle_visualizer": "v",
+    "cycle_vis_color": "C",
 }
 
 ACTION_INFO: Dict[str, Tuple[str, str]] = {
@@ -162,6 +166,8 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "nav_offline": ("Navigation", "Switch to Offline"),
     "nav_lyrics": ("Navigation", "Synchronized Lyrics"),
     "switch_engine": ("Navigation", "Switch Search Engine (YTM/Spotify)"),
+    "toggle_visualizer": ("Visualizer", "Cycle Visualizer Style (v)"),
+    "cycle_vis_color": ("Visualizer", "Cycle Visualizer Color (C)"),
     "open_settings": ("General", "Settings & Keybinds"),
     "show_help": ("General", "Help & Reference"),
     "check_update": ("General", "Check for Updates"),
@@ -298,6 +304,20 @@ class SearchEngineToggle(Static):
         if isinstance(self.screen, SettingsModal):
             self.screen.toggle_search_engine()
 
+class VisualizerStyleToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.cycle_visualizer_style()
+
+class VisualizerColorToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.cycle_visualizer_color()
+
 class SettingsModal(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "dismiss_or_cancel", "Close", priority=True),
@@ -329,6 +349,8 @@ class SettingsModal(ModalScreen[None]):
                 yield AdvModeToggle(id="adv-mode-toggle", classes="setting-toggle-item")
                 yield TransparencyToggle(id="transparency-toggle", classes="setting-toggle-item")
                 yield SearchEngineToggle(id="engine-toggle", classes="setting-toggle-item")
+                yield VisualizerStyleToggle(id="vis-style-toggle", classes="setting-toggle-item")
+                yield VisualizerColorToggle(id="vis-color-toggle", classes="setting-toggle-item")
 
             yield Static("REBINDABLE ACTIONS", id="settings-table-title")
             yield DataTable(id="settings-table", cursor_type="row", show_header=True)
@@ -376,6 +398,14 @@ class SettingsModal(ModalScreen[None]):
                 eng_toggle.update("[bold #569f68]● SPOTIFY[/]   [#ffffff]Search Engine[/]  [dim]— Official Spotify catalogue (syncs with Spotify)[/dim]")
             else:
                 eng_toggle.update("[bold #ffffff]● YT MUSIC[/]  [#cccccc]Search Engine[/]  [dim]— YouTube Music streams (local playlists only)[/dim]")
+
+            vis_style_toggle = self.query_one("#vis-style-toggle", VisualizerStyleToggle)
+            style_name = self.app.visualizer.get_style_name() if hasattr(self.app, "visualizer") else "Studio Bars"
+            vis_style_toggle.update(f"[bold #569f68]● {style_name.upper()}[/]   [#ffffff]Visualizer Style[/]  [dim]— Bars, Braille EQ, Mirrored, Wave, Matrix (v)[/dim]")
+
+            vis_color_toggle = self.query_one("#vis-color-toggle", VisualizerColorToggle)
+            color_name = self.app.visualizer.get_color_name() if hasattr(self.app, "visualizer") else "Emerald"
+            vis_color_toggle.update(f"[bold #569f68]● {color_name.upper()}[/]   [#ffffff]Visualizer Theme[/]  [dim]— Spotify Emerald, Cyber Cyan, Amber, Mono (C)[/dim]")
         except Exception:
             pass
 
@@ -396,6 +426,20 @@ class SettingsModal(ModalScreen[None]):
         self.update_toggle_ui()
         label = "Spotify" if new_engine == "spotify" else "YouTube Music"
         self.query_one("#settings-status-line", Static).update(f"Search engine set to {label}.")
+
+    def cycle_visualizer_style(self) -> None:
+        if hasattr(self.app, "cycle_visualizer_style"):
+            self.app.cycle_visualizer_style()
+        self.update_toggle_ui()
+        style_name = self.app.visualizer.get_style_name() if hasattr(self.app, "visualizer") else ""
+        self.query_one("#settings-status-line", Static).update(f"Visualizer style set to [bold #ffffff]{style_name}[/].")
+
+    def cycle_visualizer_color(self) -> None:
+        if hasattr(self.app, "cycle_visualizer_color"):
+            self.app.cycle_visualizer_color()
+        self.update_toggle_ui()
+        color_name = self.app.visualizer.get_color_name() if hasattr(self.app, "visualizer") else ""
+        self.query_one("#settings-status-line", Static).update(f"Visualizer theme set to [bold #ffffff]{color_name}[/].")
 
     def start_rebinding(self, act_id: str) -> None:
         self.is_rebinding = True
@@ -493,7 +537,7 @@ class SettingsModal(ModalScreen[None]):
     def action_switch_focus(self) -> None:
         if self.is_rebinding:
             return
-        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "engine-toggle"]
+        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle"]
         focused_id = self.focused.id if self.focused else None
         if focused_id in toggle_ids:
             idx = toggle_ids.index(focused_id)
@@ -514,6 +558,10 @@ class SettingsModal(ModalScreen[None]):
             self.toggle_transparency()
         elif focused_id == "engine-toggle":
             self.toggle_search_engine()
+        elif focused_id == "vis-style-toggle":
+            self.cycle_visualizer_style()
+        elif focused_id == "vis-color-toggle":
+            self.cycle_visualizer_color()
         elif self.focused and self.focused.id == "settings-table":
             table = self.query_one("#settings-table", DataTable)
             if table.cursor_row is not None and table.row_count > 0:
@@ -527,7 +575,7 @@ class SettingsModal(ModalScreen[None]):
     def action_cursor_up(self) -> None:
         table = self.query_one("#settings-table", DataTable)
         if table.row_count == 0 or table.cursor_row == 0:
-            self.query_one("#engine-toggle", SearchEngineToggle).focus()
+            self.query_one("#vis-color-toggle", VisualizerColorToggle).focus()
         else:
             table.action_cursor_up()
 
@@ -543,7 +591,7 @@ class SettingsModal(ModalScreen[None]):
             return
 
         table = self.query_one("#settings-table", DataTable)
-        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "engine-toggle"]
+        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle"]
         focused_id = self.focused.id if self.focused else None
 
         if focused_id in toggle_ids:
@@ -569,6 +617,10 @@ class SettingsModal(ModalScreen[None]):
                     self.toggle_transparency()
                 elif focused_id == "engine-toggle":
                     self.toggle_search_engine()
+                elif focused_id == "vis-style-toggle":
+                    self.cycle_visualizer_style()
+                elif focused_id == "vis-color-toggle":
+                    self.cycle_visualizer_color()
                 event.prevent_default()
                 event.stop()
                 return
@@ -585,7 +637,7 @@ class SettingsModal(ModalScreen[None]):
                 return
             elif event.key in ("k", "up") or event.character == "k":
                 if table.row_count == 0 or table.cursor_row == 0:
-                    self.query_one("#engine-toggle", SearchEngineToggle).focus()
+                    self.query_one("#vis-color-toggle", VisualizerColorToggle).focus()
                 else:
                     table.action_cursor_up()
                 event.prevent_default()
@@ -1193,6 +1245,8 @@ class HelpModal(ModalScreen[None]):
             ("r", "Cycle repeat (off / all / 1)"),
             ("p / n, Fn+F7/F9", "Previous / Next track"),
             ("Left / Right", "Seek -/+ 5 seconds"),
+            ("v / Click", "Cycle visualizer mode"),
+            ("C", "Cycle visualizer color theme"),
             ("F1", "Mute / Unmute audio"),
             ("F2 / F3", "Volume down / up 5%"),
         ]
@@ -2029,7 +2083,7 @@ class SpoffTUI(App):
     }
 
     #deck-visualizer {
-        width: 14;
+        width: 24;
         height: 1;
         margin-right: 2;
     }
@@ -2044,7 +2098,7 @@ class SpoffTUI(App):
         width: 88;
         max-width: 96%;
         height: auto;
-        max-height: 34;
+        max-height: 44;
         background: #141414;
         border: solid #2a2a2a;
         padding: 1 2;
@@ -2234,7 +2288,9 @@ class SpoffTUI(App):
         self.custom_keybindings: Dict[str, str] = get_custom_keybindings()
         self.keybindings: Dict[str, str] = {**DEFAULT_KEYBINDINGS, **self.custom_keybindings}
         self.player = MPVController(initial_volume=self.volume)
-        self.visualizer = CavaVisualizer(bars=14)
+        self.vis_style: str = get_saved_visualizer_style()
+        self.vis_color: str = get_saved_visualizer_color()
+        self.visualizer = CavaVisualizer(bars=24, style=self.vis_style, color=self.vis_color)
         mpris_callbacks = {
             "play_pause": lambda: self.call_from_thread(self.action_toggle_play),
             "play": lambda: self.call_from_thread(self._mpris_play),
@@ -2359,6 +2415,34 @@ class SpoffTUI(App):
 
     def action_switch_engine(self) -> None:
         self.toggle_search_engine()
+
+    def action_toggle_visualizer(self) -> None:
+        self.cycle_visualizer_style()
+        style_name = self.visualizer.get_style_name()
+        self.notify_user(f"Visualizer: {style_name}")
+
+    def action_cycle_vis_color(self) -> None:
+        self.cycle_visualizer_color()
+        color_name = self.visualizer.get_color_name()
+        self.notify_user(f"Visualizer Theme: {color_name}")
+
+    def cycle_visualizer_style(self) -> str:
+        new_style = self.visualizer.cycle_style()
+        self.vis_style = new_style
+        save_visualizer_style(new_style)
+        return new_style
+
+    def cycle_visualizer_color(self) -> str:
+        new_color = self.visualizer.cycle_color()
+        self.vis_color = new_color
+        save_visualizer_color(new_color)
+        return new_color
+
+    def save_visualizer_preferences(self) -> None:
+        self.vis_style = self.visualizer.style
+        self.vis_color = self.visualizer.color
+        save_visualizer_style(self.vis_style)
+        save_visualizer_color(self.vis_color)
 
     def set_custom_keybinding(self, action_id: str, new_key: str) -> None:
         if not new_key or new_key == DEFAULT_KEYBINDINGS.get(action_id):
@@ -3974,12 +4058,13 @@ class SpoffTUI(App):
                 shuf_k = format_key_display(self.keybindings.get("toggle_shuffle", "s"))
                 rep_k = format_key_display(self.keybindings.get("toggle_repeat", "r"))
                 lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
+                vis_k = format_key_display(self.keybindings.get("toggle_visualizer", "v"))
                 seek_k = format_key_display(self.keybindings.get("focus_bar", "b"))
                 sett_k = format_key_display(self.keybindings.get("open_settings", ","))
                 help_k = format_key_display(self.keybindings.get("show_help", ":"))
                 help_label = ": help" if help_k in (":", "colon") else f"{help_k}: help"
                 quit_k = format_key_display(self.keybindings.get("quit_app", "q"))
-                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {seek_k}: seek  |  {sett_k}: set  |  {help_label}  |  {quit_k}: quit"
+                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {vis_k}: vis  |  {seek_k}: seek  |  {sett_k}: set  |  {help_label}  |  {quit_k}: quit"
             try:
                 deck_l3 = self.query_one("#deck-line-3", Static)
                 deck_l3.update(escape(hints))

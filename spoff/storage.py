@@ -204,6 +204,48 @@ def save_transparency(enabled: bool):
     except Exception as e:
         logger.error(f"Error saving transparency setting: {e}")
 
+def get_saved_visualizer_style() -> str:
+    """Retrieves active visualizer style ('bars', 'braille', 'stereo', 'wave', 'dots'), defaulting to 'bars'."""
+    try:
+        cfg = load_config()
+        style = cfg.get("visualizer_style", "bars")
+        if style in ("bars", "braille", "stereo", "wave", "dots"):
+            return style
+    except Exception as e:
+        logger.error(f"Error reading visualizer style: {e}")
+    return "bars"
+
+def save_visualizer_style(style: str):
+    """Persists visualizer style choice to config."""
+    try:
+        cfg = load_config()
+        if style in ("bars", "braille", "stereo", "wave", "dots"):
+            cfg["visualizer_style"] = style
+            save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving visualizer style: {e}")
+
+def get_saved_visualizer_color() -> str:
+    """Retrieves active visualizer color theme ('green', 'cyan', 'amber', 'mono'), defaulting to 'green'."""
+    try:
+        cfg = load_config()
+        color = cfg.get("visualizer_color", "green")
+        if color in ("green", "cyan", "amber", "mono"):
+            return color
+    except Exception as e:
+        logger.error(f"Error reading visualizer color: {e}")
+    return "green"
+
+def save_visualizer_color(color: str):
+    """Persists visualizer color theme to config."""
+    try:
+        cfg = load_config()
+        if color in ("green", "cyan", "amber", "mono"):
+            cfg["visualizer_color"] = color
+            save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving visualizer color: {e}")
+
 def get_custom_keybindings() -> Dict[str, str]:
     """Retrieves custom keybindings mapping action_name -> key_string."""
     try:
