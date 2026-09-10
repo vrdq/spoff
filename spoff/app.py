@@ -391,6 +391,10 @@ def normalize_captured_key(event_key: str, event_char: Optional[str]) -> str:
     ec = str(event_char or "")
     ek_lower = ek.lower()
 
+    # Ignore lone modifier keys waiting for combinations
+    if ek_lower in ("ctrl", "control", "shift", "alt", "meta", "super", "hyper", "fn"):
+        return ""
+
     # Audio / Hardware media keys
     if ek_lower in ("audio_play", "audio_pause", "mediaplaypause"):
         return "f8"
@@ -477,15 +481,7 @@ def key_matches(event_key: str, event_char: Optional[str], bound_key: str) -> bo
             return True
         return False
 
-    # 4. Multi-key / modifier combos
-    if "+" in c_bound or "+" in c_ek:
-        if c_ek.lower() == c_bound.lower():
-            return True
-        if c_bound in ("ctrl+space", "ctrl+@") and c_ek in ("ctrl+space", "ctrl+@"):
-            return True
-        return False
-
-    # 5. Punctuation aliases
+    # 4. Punctuation aliases (checked before generic + combos so shift+semicolon / shift+slash resolve properly)
     punct_map = {
         "comma": ",", ",": "comma",
         "slash": "/", "/": "slash",
@@ -499,10 +495,22 @@ def key_matches(event_key: str, event_char: Optional[str], bound_key: str) -> bo
         target = punct_map[c_bound]
         if ek == target or ec == target or c_ek == target:
             return True
-    if ek == "colon" and c_bound in (":", "colon"): return True
-    if ek == "shift+semicolon" and c_bound in (":", "colon"): return True
-    if ek == "shift+slash" and c_bound in ("?", "question_mark"): return True
-    if c_bound in ("space", " ") and (ek == "space" or ec == " "): return True
+    if c_bound in (":", "colon") and (ek in ("colon", ":", "shift+semicolon") or ec == ":"):
+        return True
+    if c_bound in ("?", "question_mark") and (ek in ("question_mark", "?", "shift+slash") or ec == "?"):
+        return True
+    if c_bound in ("+", "plus") and (ek in ("plus", "+", "shift+equal") or ec == "+"):
+        return True
+    if c_bound in ("space", " ") and (ek == "space" or ec == " "):
+        return True
+
+    # 5. Multi-key / modifier combos
+    if "+" in c_bound or "+" in c_ek:
+        if c_ek.lower() == c_bound.lower():
+            return True
+        if c_bound in ("ctrl+space", "ctrl+@") and c_ek in ("ctrl+space", "ctrl+@"):
+            return True
+        return False
 
     return ek.lower() == bound_key.lower() or ec == bound_key
 
@@ -1699,18 +1707,26 @@ class HelpModal(ModalScreen[None]):
             ("b / Esc / k", "Return to table"),
         ]
 
+        k_spot = format_key_display(kb.get("open_spotify_auth", "L"))
+        k_add = format_key_display(kb.get("add_to_playlist", "a"))
+        k_del = format_key_display(kb.get("delete_item", "d"))
+        k_del_pl = format_key_display(kb.get("delete_playlist", "D"))
+        k_imp = format_key_display(kb.get("focus_import", "i"))
+        k_upd = format_key_display(kb.get("check_update", "u"))
+        k_quit = format_key_display(kb.get("quit_app", "q"))
+
         playlist_rows = [
             ("J / K, Shift+↑↓", "Reorder songs in playlist"),
-            ("a, +", "Add track to playlist"),
-            ("i", "New playlist / import link"),
-            ("Shift+L, S", "Spotify login & sync"),
+            (f"{k_add}, +", "Add track to playlist"),
+            (f"{k_imp}", "New playlist / import link"),
+            (f"{k_spot}", "Spotify login & sync"),
             (f"{k_sett}", "Settings & Rebind keys"),
             (f"{k_srch}", "Focus search box"),
-            ("Del, d, x", "Remove track / playlist"),
-            ("D, Shift+Del", "Delete whole playlist"),
+            (f"{k_del}, Del", "Remove track / playlist"),
+            (f"{k_del_pl}, Shift+Del", "Delete whole playlist"),
             (f"{k_eng}", "Switch Engine (YTM/Spotify)"),
-            ("u / U", "Check / pull updates"),
-            ("q", "Quit Spoff"),
+            (f"{k_upd}", "Check / pull updates"),
+            (f"{k_quit}", "Quit Spoff"),
         ]
 
         with Vertical(id="help-dialog"):
@@ -2919,12 +2935,10 @@ class SpoffTUI(App):
         Binding("r", "toggle_repeat", "Repeat"),
         Binding("L", "open_spotify_auth", "Spotify", show=False),
         Binding("shift+l", "open_spotify_auth", "Spotify", show=False),
-        Binding("S", "open_spotify_auth", "Spotify", show=False),
         Binding("u", "check_update", "Update", show=False),
         Binding("U", "check_update", "Update", show=False),
         Binding("colon", "show_help", "Help", show=False),
         Binding("shift+semicolon", "show_help", "Help", show=False),
-        Binding("question_mark", "show_help", "Help", show=False),
         Binding("comma", "open_settings", "Settings", show=False),
         Binding("1", "nav_search", "Search"),
         Binding("2", "nav_playlist", "Playlist"),
@@ -2953,6 +2967,7 @@ class SpoffTUI(App):
 
     def __init__(self):
         super().__init__()
+        self._is_ready: bool = False
         self.volume: int = get_saved_volume()
         self.advanced_mode: bool = get_saved_advanced_mode()
         self.custom_keybindings: Dict[str, str] = get_custom_keybindings()
@@ -3176,10 +3191,9 @@ class SpoffTUI(App):
             self._bindings.bind("shift+down", "move_item_down", show=False)
             self._bindings.bind("shift+up", "move_item_up", show=False)
             self._bindings.bind("shift+delete", "delete_playlist", show=False)
-            self._bindings.bind("x", "delete_item", show=False)
             self._bindings.bind("+", "add_to_playlist", show=False)
-            self._bindings.bind("shift+l", "open_spotify_auth", show=False)
-            self._bindings.bind("S", "open_spotify_auth", show=False)
+            if self.keybindings.get("open_spotify_auth") == "L":
+                self._bindings.bind("shift+l", "open_spotify_auth", show=False)
 
             # Dual playback & volume secondary bindings (hardware Fn & primary keys)
             self._bindings.bind("space", "toggle_play", show=False)
@@ -3329,6 +3343,11 @@ class SpoffTUI(App):
             if not load_spotify_auth():
                 self.call_after_refresh(lambda: self.action_open_spotify_auth(first_run=True))
 
+        self.call_after_refresh(self._mark_ready)
+
+    def _mark_ready(self) -> None:
+        self._is_ready = True
+
     def notify_user(self, text: str):
         def _update():
             try:
@@ -3400,6 +3419,9 @@ class SpoffTUI(App):
         self._last_rendered_width = event.size.width
 
     def on_key(self, event) -> None:
+        if not getattr(self, "_is_ready", False):
+            return
+
         if self.focused is None:
             if self.active_tab == "lyrics":
                 self.query_one("#lyrics-table", DataTable).focus()
@@ -3560,10 +3582,9 @@ class SpoffTUI(App):
             event.stop()
             return
 
-        # 4. Jump up into Input from row 0 of DataTable on k / Up
+        # 4. Jump up into Input from row 0 of DataTable on Up / cursor_up key
         is_up_key = (
-            event.key in ("up", "k")
-            or event.character == "k"
+            event.key in ("up",)
             or key_matches(event.key, getattr(event, "character", None), self.keybindings.get("cursor_up", "k"))
         )
         if is_up_key and self.focused and self.focused.id == "track-table":
@@ -3588,49 +3609,43 @@ class SpoffTUI(App):
                 matched_action = act_id
                 break
 
-        # Fallback secondary aliases
+        # Fallback secondary aliases (hardware/arrow keys only, never letter keys)
         if not matched_action:
-            if event.key in ("j", "down") or event.character == "j":
+            if event.key in ("down",) and self.keybindings.get("cursor_down") != "":
                 matched_action = "cursor_down"
-            elif event.key in ("k", "up") or event.character == "k":
+            elif event.key in ("up",) and self.keybindings.get("cursor_up") != "":
                 matched_action = "cursor_up"
-            elif (event.key in ("h", "left") or event.character == "h") and not isinstance(self.focused, Input):
+            elif (event.key in ("left",)) and not isinstance(self.focused, Input) and self.keybindings.get("focus_sidebar") != "":
                 matched_action = "focus_sidebar"
-            elif (event.key in ("l", "right") or event.character == "l") and not isinstance(self.focused, Input):
+            elif (event.key in ("right",)) and not isinstance(self.focused, Input) and self.keybindings.get("focus_tracks") != "":
                 matched_action = "focus_tracks"
-            elif (event.key in ("J", "shift+down") or event.character == "J") and not isinstance(self.focused, Input):
+            elif (event.key in ("shift+down",)) and not isinstance(self.focused, Input) and self.keybindings.get("move_item_down") != "":
                 matched_action = "move_item_down"
-            elif (event.key in ("K", "shift+up") or event.character == "K") and not isinstance(self.focused, Input):
+            elif (event.key in ("shift+up",)) and not isinstance(self.focused, Input) and self.keybindings.get("move_item_up") != "":
                 matched_action = "move_item_up"
-            elif (event.key in ("colon", ":", "shift+semicolon", "question_mark") or event.character in (":", "?")) and not isinstance(self.focused, Input):
-                matched_action = "show_help"
-            elif event.key in ("ctrl+comma",) and not isinstance(self.focused, Input):
+            elif event.key in ("ctrl+comma",) and not isinstance(self.focused, Input) and self.keybindings.get("open_settings") != "":
                 matched_action = "open_settings"
-            elif (event.key in ("S", "shift+s") or event.character == "S") and self.keybindings.get("open_spotify_auth") == "L":
-                matched_action = "open_spotify_auth"
-            elif (event.key in ("shift+delete",) or event.character == "D") and self.keybindings.get("delete_playlist") == "D":
+            elif event.key in ("shift+delete",) and self.keybindings.get("delete_playlist") != "":
                 matched_action = "delete_playlist"
-            elif (event.key in ("x", "delete") or event.character in ("x", "d")) and self.keybindings.get("delete_item") == "d":
+            elif event.key in ("delete",) and self.keybindings.get("delete_item") != "":
                 matched_action = "delete_item"
-            elif (event.key == "+" or event.character in ("+", "a")) and self.keybindings.get("add_to_playlist") == "a":
+            elif event.key == "+" and self.keybindings.get("add_to_playlist") != "":
                 matched_action = "add_to_playlist"
-            elif (event.key in ("U",) or event.character in ("u", "U")) and self.keybindings.get("check_update") == "u":
-                matched_action = "check_update"
             elif event.key in ("f1",):
                 matched_action = "vol_mute"
             elif event.key in ("f2",):
                 matched_action = "vol_down"
             elif event.key in ("f3",):
                 matched_action = "vol_up"
-            # Dual playback key support: F7/F8/F9 and Space/n/p always work
+            # Dual playback key support: F7/F8/F9 and Space/n/p always work if not unbound
             elif (event.key in ("f8", "space") or event.character == " ") and not isinstance(self.focused, Input):
-                if not any(key_matches(event.key, getattr(event, "character", None), b) for act, b in self.keybindings.items() if act != "toggle_play" and b):
+                if self.keybindings.get("toggle_play") != "" and not any(key_matches(event.key, getattr(event, "character", None), b) for act, b in self.keybindings.items() if act != "toggle_play" and b):
                     matched_action = "toggle_play"
             elif (event.key in ("f9", "n") or event.character == "n") and not isinstance(self.focused, Input):
-                if not any(key_matches(event.key, getattr(event, "character", None), b) for act, b in self.keybindings.items() if act != "next_track" and b):
+                if self.keybindings.get("next_track") != "" and not any(key_matches(event.key, getattr(event, "character", None), b) for act, b in self.keybindings.items() if act != "next_track" and b):
                     matched_action = "next_track"
             elif (event.key in ("f7", "p") or event.character == "p") and not isinstance(self.focused, Input):
-                if not any(key_matches(event.key, getattr(event, "character", None), b) for act, b in self.keybindings.items() if act != "prev_track" and b):
+                if self.keybindings.get("prev_track") != "" and not any(key_matches(event.key, getattr(event, "character", None), b) for act, b in self.keybindings.items() if act != "prev_track" and b):
                     matched_action = "prev_track"
 
         if matched_action:
