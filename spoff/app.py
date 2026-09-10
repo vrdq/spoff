@@ -3774,13 +3774,22 @@ class SpoffTUI(App):
             else:
                 self.notify_user("")
         elif view == "playlist":
+            if self.current_playlist_id:
+                for p in self.playlists:
+                    if p.get("id") == self.current_playlist_id:
+                        self.current_playlist_tracks = list(p.get("tracks", []))
+                        break
+            elif self.playlists:
+                self.current_playlist_id = self.playlists[0].get("id")
+                self.current_playlist_tracks = list(self.playlists[0].get("tracks", []))
+
             self.render_tracks(self.current_playlist_tracks)
             st = self.query_one("#side-table", DataTable)
             should_focus_sidebar = focus_sidebar if focus_sidebar is not None else True
             if should_focus_sidebar:
                 if self.playlists:
                     st.focus()
-                    if st.cursor_row is None and self.current_playlist_id:
+                    if self.current_playlist_id:
                         for p_idx, p in enumerate(self.playlists):
                             if p.get("id") == self.current_playlist_id:
                                 try:
@@ -4601,7 +4610,10 @@ class SpoffTUI(App):
             self.play_index(row_idx)
 
     def refresh_side_table(self):
-        st = self.query_one("#side-table", DataTable)
+        try:
+            st = self.query_one("#side-table", DataTable)
+        except Exception:
+            return
         st.clear()
         selected_idx = 0
         for idx, p in enumerate(self.playlists):
@@ -4704,7 +4716,11 @@ class SpoffTUI(App):
                 new_pl = create_local_playlist(val)
                 add_track_to_playlist(new_pl["id"], track)
                 self.playlists = load_saved_playlists()
+                self.current_playlist_id = new_pl["id"]
+                self.current_playlist_tracks = [track]
                 self.refresh_side_table()
+                if self.active_tab == "playlist":
+                    self.render_tracks(self.current_playlist_tracks)
                 self.notify_user(f"Created playlist '{val}' and added '{t_title}'.")
 
                 # Asynchronous two-way sync to Spotify account (Spotify tracks only)
@@ -4713,8 +4729,17 @@ class SpoffTUI(App):
                         ok, msg = add_track_to_spotify_account(new_pl["id"], val, track)
                         if ok:
                             self.call_from_thread(self.notify_user, f"'{t_title}' synced to Spotify playlist '{val}'.")
-                            self.playlists = load_saved_playlists()
-                            self.call_from_thread(self.refresh_side_table)
+                            def _refresh_after_create_sync():
+                                self.playlists = load_saved_playlists()
+                                self.refresh_side_table()
+                                if self.current_playlist_id == new_pl["id"]:
+                                    for p_sync in self.playlists:
+                                        if p_sync.get("id") == new_pl["id"]:
+                                            self.current_playlist_tracks = list(p_sync.get("tracks", []))
+                                            if self.active_tab == "playlist":
+                                                self.render_tracks(self.current_playlist_tracks)
+                                            break
+                            self.call_from_thread(_refresh_after_create_sync)
                         elif msg and not msg.startswith("Not logged in"):
                             logger.info(f"Spotify sync notice: {msg}")
                             if "permission" in msg.lower() or "re-link" in msg.lower():
@@ -4728,8 +4753,9 @@ class SpoffTUI(App):
                 for p in self.playlists:
                     if p.get("id") == val:
                         pl_name = p.get("name", "Playlist")
-                        if self.active_tab == "playlist" and self.current_playlist_id == val:
-                            self.current_playlist_tracks = list(p.get("tracks", []))
+                        self.current_playlist_id = val
+                        self.current_playlist_tracks = list(p.get("tracks", []))
+                        if self.active_tab == "playlist":
                             self.render_tracks(self.current_playlist_tracks)
                         break
                 if added:
@@ -4740,6 +4766,17 @@ class SpoffTUI(App):
                             ok, msg = add_track_to_spotify_account(val, pl_name, track)
                             if ok:
                                 self.call_from_thread(self.notify_user, f"'{t_title}' synced to Spotify playlist '{pl_name}'.")
+                                self.playlists = load_saved_playlists()
+                                def _refresh_after_sync():
+                                    self.refresh_side_table()
+                                    if self.current_playlist_id == val:
+                                        for p_sync in self.playlists:
+                                            if p_sync.get("id") == val:
+                                                self.current_playlist_tracks = list(p_sync.get("tracks", []))
+                                                if self.active_tab == "playlist":
+                                                    self.render_tracks(self.current_playlist_tracks)
+                                                break
+                                self.call_from_thread(_refresh_after_sync)
                             elif msg and not msg.startswith("Not logged in"):
                                 logger.info(f"Spotify sync notice: {msg}")
                                 if "permission" in msg.lower() or "re-link" in msg.lower():
@@ -5257,10 +5294,10 @@ class SpoffTUI(App):
             self.switch_view("playlist", focus_sidebar=True)
 
         if self.active_tab == "playlist":
-            if self.current_playlist_id == pl_id and self.current_playlist_tracks is not None:
+            tracks = pl.get("tracks")
+            if self.current_playlist_id == pl_id and tracks is not None and self.current_playlist_tracks == tracks:
                 return
             self.current_playlist_id = pl_id
-            tracks = pl.get("tracks")
             if tracks is not None:
                 self.current_playlist_tracks = list(tracks)
                 self.render_tracks(self.current_playlist_tracks)
