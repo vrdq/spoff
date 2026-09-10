@@ -2262,7 +2262,7 @@ class SpoffTUI(App):
     /* TOAST / NOTIFICATION POPUPS */
     ToastRack {
         dock: bottom;
-        align: left bottom;
+        align: right bottom;
         margin-bottom: 5;
         width: 1fr;
         max-width: 100%;
@@ -2271,7 +2271,7 @@ class SpoffTUI(App):
     }
 
     ToastHolder {
-        align-horizontal: left;
+        align-horizontal: right;
         width: 1fr;
         height: auto;
     }
@@ -2287,7 +2287,7 @@ class SpoffTUI(App):
         border-left: solid #569f68;
         padding: 0 2;
         margin-top: 1;
-        margin-left: 0;
+        margin-right: 0;
     }
 
     Toast .toast--title {
