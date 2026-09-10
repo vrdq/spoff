@@ -2268,6 +2268,8 @@ class SpoffTUI(App):
         max-width: 100%;
         height: auto;
         background: transparent;
+        overflow-y: hidden;
+        scrollbar-size-vertical: 0;
     }
 
     ToastHolder {
