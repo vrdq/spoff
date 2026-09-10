@@ -95,15 +95,17 @@ except ImportError:
 
 logger = logging.getLogger("spoff")
 
-def format_time(seconds: Optional[float]) -> str:
-    if seconds is None or seconds <= 0:
+def format_time(seconds: Any) -> str:
+    if seconds is None:
         return "00:00"
     try:
-        sec = int(seconds)
+        sec = int(float(seconds))
+        if sec <= 0:
+            return "00:00"
         m = sec // 60
         s = sec % 60
         return f"{m:02d}:{s:02d}"
-    except (ValueError, OverflowError):
+    except (ValueError, TypeError, OverflowError):
         return "00:00"
 
 DEFAULT_KEYBINDINGS: Dict[str, str] = {
@@ -3072,10 +3074,13 @@ class SpoffTUI(App):
                 bar.update(escape(text))
             except Exception:
                 pass
-        try:
-            self.call_from_thread(_update)
-        except Exception:
+        if threading.get_ident() == getattr(self, "_thread_id", None):
             _update()
+        else:
+            try:
+                self.call_from_thread(_update)
+            except Exception:
+                _update()
 
     def on_click(self, event) -> None:
         if getattr(event, "widget", None):
@@ -3631,8 +3636,11 @@ class SpoffTUI(App):
             else:
                 type_tag = "[#569f68]offline[/]" if is_cached else "[dim]remote[/dim]"
 
-            dur_ms = t.get("duration_ms") or 0
-            dur = format_time(dur_ms / 1000)
+            try:
+                dur_ms = float(t.get("duration_ms") or 0)
+            except (ValueError, TypeError):
+                dur_ms = 0.0
+            dur = format_time(dur_ms / 1000.0)
             table.add_row(type_tag, escape(t.get("title", "")), escape(t.get("artist", "")), dur, key=str(idx))
         if tracks:
             if select_row is not None:
@@ -4519,7 +4527,7 @@ class SpoffTUI(App):
             row_idx = f.cursor_row
             if self.active_tab == "playlist":
                 # If playlist is empty, delete the playlist itself
-                if not self.current_playlist_tracks or row_idx is None or row_idx >= len(self.current_playlist_tracks):
+                if not self.current_playlist_tracks or row_idx is None or row_idx < 0 or row_idx >= len(self.current_playlist_tracks):
                     self.action_delete_playlist()
                     return
 
@@ -4942,7 +4950,10 @@ class SpoffTUI(App):
         threading.Thread(target=_fetch_lyr_bg, daemon=True).start()
 
         if self.mpris:
-            dur_sec = float(track.get("duration_ms", 0)) / 1000.0
+            try:
+                dur_sec = float(track.get("duration_ms") or 0) / 1000.0
+            except (ValueError, TypeError):
+                dur_sec = 0.0
             self.mpris.update_track(track, dur_sec)
 
         cached = get_cached_track_path(t_id)

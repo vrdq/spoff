@@ -144,9 +144,14 @@ def download_track_to_cache(track_id: str, title: str, artist: str, on_complete=
             with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
                 ydl.download([query])
 
+            valid_exts = (".m4a", ".opus", ".mp3", ".webm", ".ogg", ".flac")
             for f in CACHE_DIR.glob(f"{track_id}_dl.*"):
-                if f.is_file() and f.stat().st_size > 10000:
-                    ext = f.suffix
+                if not f.is_file():
+                    continue
+                if f.name.endswith((".part", ".ytdl", ".temp", ".aria2")):
+                    continue
+                ext = f.suffix.lower()
+                if ext in valid_exts and f.stat().st_size > 10000:
                     final_path = CACHE_DIR / f"{track_id}{ext}"
                     if f != final_path:
                         f.replace(final_path)

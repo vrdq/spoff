@@ -106,7 +106,7 @@ def check_for_updates() -> Optional[Dict[str, Any]]:
         return None
 
     remote_sha = get_remote_commit_sha()
-    if not remote_sha or remote_sha.lower() == local_sha.lower():
+    if not remote_sha or remote_sha.lower() == local_sha.lower() or remote_sha.lower().startswith(local_sha.lower()) or local_sha.lower().startswith(remote_sha.lower()):
         return None
 
     # Verify remote_sha is not already an ancestor of local HEAD (e.g. local is ahead of remote)

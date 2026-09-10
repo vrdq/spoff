@@ -14,7 +14,7 @@ def parse_spotify_url(url_or_id: str) -> Optional[tuple[str, str]]:
         if len(parts) >= 3:
             return parts[1], parts[2]
     
-    match = re.search(r'open\.spotify\.com/(playlist|album|track)/([a-zA-Z0-9]+)', url_or_id)
+    match = re.search(r'open\.spotify\.com/(?:[a-zA-Z0-9_-]+/)*(playlist|album|track)/([a-zA-Z0-9]+)', url_or_id)
     if match:
         return match.group(1), match.group(2)
         

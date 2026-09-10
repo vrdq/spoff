@@ -66,7 +66,10 @@ class CavaVisualizer:
         color: str = "green"
     ):
         if fps is None:
-            fps = max(60, int(os.environ.get("SPOFF_VISUALIZER_FPS", os.environ.get("TEXTUAL_FPS", "60"))))
+            try:
+                fps = max(60, int(os.environ.get("SPOFF_VISUALIZER_FPS", os.environ.get("TEXTUAL_FPS", "60"))))
+            except (ValueError, TypeError):
+                fps = 60
         self.bars_count = bars
         self.fps = fps
         self.style = style if style in STYLE_NAMES else "bars"
@@ -363,7 +366,10 @@ bit_format = 8bit
                 self.proc.terminate()
                 self.proc.wait(timeout=0.2)
             except Exception:
-                pass
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
             self.proc = None
 
         if self.conf_path and os.path.exists(self.conf_path):

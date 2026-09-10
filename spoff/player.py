@@ -131,7 +131,10 @@ class MPVController:
         self.current_track = track_meta
         self.is_paused = False
         self._last_pos = 0.0
-        self._duration = float(track_meta.get("duration_ms", 0)) / 1000.0
+        try:
+            self._duration = float(track_meta.get("duration_ms") or 0) / 1000.0
+        except (ValueError, TypeError):
+            self._duration = 0.0
         self._send_command(["loadfile", source_path_or_url, "replace"])
         self._send_command(["set_property", "pause", False])
 

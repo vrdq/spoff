@@ -447,11 +447,15 @@ def get_cached_track_path(track_id: str) -> Optional[Path]:
 
 def register_cached_track(track_id: str, meta: Dict[str, Any], filepath: Path):
     index = load_offline_index()
+    try:
+        dur_ms = int(float(meta.get("duration_ms") or 0))
+    except (ValueError, TypeError):
+        dur_ms = 0
     index[track_id] = {
         "id": track_id,
         "title": meta.get("title", "Unknown"),
         "artist": meta.get("artist", "Unknown"),
-        "duration_ms": meta.get("duration_ms", 0),
+        "duration_ms": dur_ms,
         "filepath": str(filepath.resolve()),
         "size_bytes": filepath.stat().st_size if filepath.exists() else 0
     }

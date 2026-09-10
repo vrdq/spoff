@@ -239,7 +239,10 @@ class MPRISService:
         artists_list = [a.strip() for a in artist.split(",") if a.strip()] or [artist]
         dur_us = int(duration_sec * 1_000_000)
         if dur_us <= 0:
-            dur_ms = track.get("duration_ms") or 0
+            try:
+                dur_ms = float(track.get("duration_ms") or 0)
+            except (ValueError, TypeError):
+                dur_ms = 0.0
             dur_us = int(dur_ms * 1000)
 
         meta: Dict[str, Any] = {

@@ -187,11 +187,12 @@ def fetch_lyrics(title: str, artist: str = "", duration_ms: Optional[int] = None
                     if pl_line.strip()
                 ]
 
-    # Cache result to disk
-    try:
-        _atomic_json_dump(cache_file, result_data)
-    except Exception as e:
-        logger.warning(f"Could not cache lyrics to {cache_file}: {e}")
+    # Cache result to disk only if we obtained lyrics or confirmed instrumental (avoid caching network dropouts)
+    if result_data.get("lines") or result_data.get("instrumental"):
+        try:
+            _atomic_json_dump(cache_file, result_data)
+        except Exception as e:
+            logger.warning(f"Could not cache lyrics to {cache_file}: {e}")
 
     return result_data
 
