@@ -1,3 +1,4 @@
+import os
 import sys
 import json
 import shutil
@@ -12,6 +13,8 @@ logger = logging.getLogger("updater")
 GITHUB_REPO = "vrdq/spoff"
 API_COMMITS_URL = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
 
+_SAFE_SUBPROCESS_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
 def get_local_commit() -> Optional[str]:
     """Retrieves the local git commit SHA if running in a git clone or PEP 610 direct_url metadata."""
     repo_root = Path(__file__).resolve().parent.parent
@@ -20,7 +23,9 @@ def get_local_commit() -> Optional[str]:
         out = subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
             cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=_SAFE_SUBPROCESS_ENV,
             timeout=3
         ).decode().strip()
         if out:
@@ -52,7 +57,9 @@ def get_remote_commit_sha() -> Optional[str]:
         out = subprocess.check_output(
             ["git", "ls-remote", "origin", "refs/heads/main"],
             cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=_SAFE_SUBPROCESS_ENV,
             timeout=4
         ).decode().strip()
         if out:
@@ -66,7 +73,9 @@ def get_remote_commit_sha() -> Optional[str]:
     try:
         out = subprocess.check_output(
             ["git", "ls-remote", f"https://github.com/{GITHUB_REPO}.git", "refs/heads/main"],
+            stdin=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=_SAFE_SUBPROCESS_ENV,
             timeout=4
         ).decode().strip()
         if out:
@@ -115,8 +124,10 @@ def check_for_updates() -> Optional[Dict[str, Any]]:
         is_already_contained = subprocess.call(
             ["git", "merge-base", "--is-ancestor", remote_sha, "HEAD"],
             cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
+            env=_SAFE_SUBPROCESS_ENV
         ) == 0
         if is_already_contained:
             return None
@@ -169,8 +180,10 @@ def perform_update() -> Tuple[bool, str]:
         is_git = subprocess.call(
             ["git", "rev-parse", "--is-inside-work-tree"],
             cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
+            stderr=subprocess.DEVNULL,
+            env=_SAFE_SUBPROCESS_ENV
         ) == 0
     except Exception:
         is_git = False
@@ -180,17 +193,27 @@ def perform_update() -> Tuple[bool, str]:
         pull_res = subprocess.run(
             ["git", "pull", "--autostash", "--rebase", "origin", "main"],
             cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
             capture_output=True,
-            text=True
+            text=True,
+            env=_SAFE_SUBPROCESS_ENV
         )
         if pull_res.returncode != 0:
             # Fallback to fetch + fast-forward merge
-            subprocess.run(["git", "fetch", "origin", "main"], cwd=str(repo_root), capture_output=True)
+            subprocess.run(
+                ["git", "fetch", "origin", "main"],
+                cwd=str(repo_root),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                env=_SAFE_SUBPROCESS_ENV
+            )
             merge_res = subprocess.run(
                 ["git", "merge", "--ff-only", "FETCH_HEAD"],
                 cwd=str(repo_root),
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
-                text=True
+                text=True,
+                env=_SAFE_SUBPROCESS_ENV
             )
             if merge_res.returncode != 0:
                 err = pull_res.stderr.strip() or merge_res.stderr.strip()
@@ -203,8 +226,10 @@ def perform_update() -> Tuple[bool, str]:
             res = subprocess.run(
                 [uv_bin, "pip", "install", "--python", python_bin, "-e", "."],
                 cwd=str(repo_root),
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
-                text=True
+                text=True,
+                env=_SAFE_SUBPROCESS_ENV
             )
             installed = (res.returncode == 0)
 
@@ -212,8 +237,10 @@ def perform_update() -> Tuple[bool, str]:
             res = subprocess.run(
                 [python_bin, "-m", "pip", "install", "-e", "."],
                 cwd=str(repo_root),
+                stdin=subprocess.DEVNULL,
                 capture_output=True,
-                text=True
+                text=True,
+                env=_SAFE_SUBPROCESS_ENV
             )
             if res.returncode != 0:
                 return False, f"Reinstallation failed: {res.stderr.strip()}"
@@ -226,8 +253,10 @@ def perform_update() -> Tuple[bool, str]:
     if pipx_bin:
         res = subprocess.run(
             [pipx_bin, "install", "--force", f"git+https://github.com/{GITHUB_REPO}.git"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
-            text=True
+            text=True,
+            env=_SAFE_SUBPROCESS_ENV
         )
         if res.returncode == 0:
             return True, "Successfully updated Spoff via pipx."
@@ -236,16 +265,20 @@ def perform_update() -> Tuple[bool, str]:
     if uv_bin:
         res = subprocess.run(
             [uv_bin, "tool", "install", "--force", f"git+https://github.com/{GITHUB_REPO}.git"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
-            text=True
+            text=True,
+            env=_SAFE_SUBPROCESS_ENV
         )
         if res.returncode == 0:
             return True, "Successfully updated Spoff via uv."
 
     pip_res = subprocess.run(
         [python_bin, "-m", "pip", "install", "--upgrade", f"git+https://github.com/{GITHUB_REPO}.git"],
+        stdin=subprocess.DEVNULL,
         capture_output=True,
-        text=True
+        text=True,
+        env=_SAFE_SUBPROCESS_ENV
     )
     if pip_res.returncode == 0:
         return True, "Successfully updated Spoff via pip."

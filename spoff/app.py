@@ -3345,7 +3345,8 @@ class SpoffTUI(App):
             if not load_spotify_auth():
                 self.call_after_refresh(lambda: self.action_open_spotify_auth(first_run=True))
 
-        self.call_after_refresh(self._mark_ready)
+        self._mount_time = time.monotonic()
+        self.set_timer(0.45, self._mark_ready)
 
     def _mark_ready(self) -> None:
         self._is_ready = True
@@ -3421,7 +3422,10 @@ class SpoffTUI(App):
         self._last_rendered_width = event.size.width
 
     def on_key(self, event) -> None:
-        if not getattr(self, "_is_ready", False):
+        now = time.monotonic()
+        if not getattr(self, "_is_ready", False) or (now - getattr(self, "_mount_time", now) < 0.45):
+            event.prevent_default()
+            event.stop()
             return
 
         if self.focused is None:
@@ -3657,6 +3661,10 @@ class SpoffTUI(App):
                 event.prevent_default()
                 event.stop()
                 return
+        else:
+            if not isinstance(self.focused, Input):
+                event.prevent_default()
+                event.stop()
 
     def action_nav_search(self): self.switch_view("search")
     def action_nav_playlist(self): self.switch_view("playlist", focus_sidebar=True)
