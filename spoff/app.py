@@ -2967,8 +2967,16 @@ class SpoffTUI(App):
         except Exception as e:
             logger.error(f"Error dispatching MPRIS callback: {e}")
 
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        now = time.monotonic()
+        if not getattr(self, "_is_ready", False) or (now - getattr(self, "_mount_time", now) < 0.45):
+            return False
+        return super().check_action(action, parameters)
+
     def __init__(self):
         super().__init__()
+        self._thread_id: int = threading.get_ident()
+        self._mount_time: float = time.monotonic()
         self._is_ready: bool = False
         self.volume: int = get_saved_volume()
         self.advanced_mode: bool = get_saved_advanced_mode()
@@ -3089,10 +3097,10 @@ class SpoffTUI(App):
             pill = self.query_one("#engine-selector-pill", SearchEnginePill)
             s_box = self.query_one("#search-box", Input)
             if self.search_engine == "spotify":
-                pill.update("[#767676]YTM[/]  [bold #569f68 on #18271c] SPOTIFY [/]")
+                pill.update("[#767676]YTMusic[/]  [bold #569f68 on #18271c] SPOTIFY [/]")
                 s_box.placeholder = "Search Spotify (artists, tracks)..."
             else:
-                pill.update("[bold #ffffff on #2e2e2e] YT MUSIC [/]  [#767676]SPOT[/]")
+                pill.update("[bold #ffffff on #2e2e2e] YTMUSIC [/]  [#767676]Spotify[/]")
                 s_box.placeholder = "Search YouTube Music (artists, tracks)..."
         except Exception:
             pass
@@ -3187,39 +3195,43 @@ class SpoffTUI(App):
             for act_id, key in self.keybindings.items():
                 if key:
                     self._bindings.bind(key, act_id, show=False)
+
+            assigned_keys = {k.lower() for k in self.keybindings.values() if k}
+
+            def bind_secondary(key: str, act_id: str):
+                if self.keybindings.get(act_id) != "" and key.lower() not in assigned_keys:
+                    self._bindings.bind(key, act_id, show=False)
+
             # Secondary navigational and helper bindings
-            self._bindings.bind("down", "cursor_down", show=False)
-            self._bindings.bind("up", "cursor_up", show=False)
-            self._bindings.bind("shift+down", "move_item_down", show=False)
-            self._bindings.bind("shift+up", "move_item_up", show=False)
-            self._bindings.bind("shift+delete", "delete_playlist", show=False)
-            self._bindings.bind("+", "add_to_playlist", show=False)
-            if self.keybindings.get("open_spotify_auth") == "L":
-                self._bindings.bind("shift+l", "open_spotify_auth", show=False)
+            bind_secondary("down", "cursor_down")
+            bind_secondary("up", "cursor_up")
+            bind_secondary("shift+down", "move_item_down")
+            bind_secondary("shift+up", "move_item_up")
+            bind_secondary("shift+delete", "delete_playlist")
+            bind_secondary("+", "add_to_playlist")
+            if self.keybindings.get("open_spotify_auth") in ("L", "shift+l"):
+                bind_secondary("shift+l", "open_spotify_auth")
 
-            # Dual playback & volume secondary bindings (hardware Fn & primary keys)
-            self._bindings.bind("space", "toggle_play", show=False)
-            self._bindings.bind("f8", "toggle_play", show=False)
-            self._bindings.bind("audio_play", "toggle_play", show=False)
-            self._bindings.bind("audio_pause", "toggle_play", show=False)
-            self._bindings.bind("mediaplaypause", "toggle_play", show=False)
+            # Dual playback & volume secondary bindings (hardware Fn & dedicated media keys only)
+            bind_secondary("f8", "toggle_play")
+            bind_secondary("audio_play", "toggle_play")
+            bind_secondary("audio_pause", "toggle_play")
+            bind_secondary("mediaplaypause", "toggle_play")
 
-            self._bindings.bind("n", "next_track", show=False)
-            self._bindings.bind("f9", "next_track", show=False)
-            self._bindings.bind("audio_next", "next_track", show=False)
-            self._bindings.bind("medianexttrack", "next_track", show=False)
+            bind_secondary("f9", "next_track")
+            bind_secondary("audio_next", "next_track")
+            bind_secondary("medianexttrack", "next_track")
 
-            self._bindings.bind("p", "prev_track", show=False)
-            self._bindings.bind("f7", "prev_track", show=False)
-            self._bindings.bind("audio_prev", "prev_track", show=False)
-            self._bindings.bind("mediaprevioustrack", "prev_track", show=False)
+            bind_secondary("f7", "prev_track")
+            bind_secondary("audio_prev", "prev_track")
+            bind_secondary("mediaprevioustrack", "prev_track")
 
-            self._bindings.bind("f1", "vol_mute", show=False)
-            self._bindings.bind("audio_mute", "vol_mute", show=False)
-            self._bindings.bind("f2", "vol_down", show=False)
-            self._bindings.bind("audio_lower_volume", "vol_down", show=False)
-            self._bindings.bind("f3", "vol_up", show=False)
-            self._bindings.bind("audio_raise_volume", "vol_up", show=False)
+            bind_secondary("f1", "vol_mute")
+            bind_secondary("audio_mute", "vol_mute")
+            bind_secondary("f2", "vol_down")
+            bind_secondary("audio_lower_volume", "vol_down")
+            bind_secondary("f3", "vol_up")
+            bind_secondary("audio_raise_volume", "vol_up")
         except Exception:
             pass
         self._update_nav_bar()
@@ -3449,32 +3461,32 @@ class SpoffTUI(App):
                     f_custom_action = act
                     break
 
-        if k in ("audio_prev", "mediaprevioustrack") or name in ("audio_prev", "mediaprevioustrack") or (k == "f7" and f_custom_action in (None, "prev_track")):
+        if self.keybindings.get("prev_track") != "" and (k in ("audio_prev", "mediaprevioustrack") or name in ("audio_prev", "mediaprevioustrack") or (k == "f7" and f_custom_action in (None, "prev_track"))):
             self.action_prev_track()
             event.prevent_default()
             event.stop()
             return
-        elif k in ("audio_play", "audio_pause", "mediaplaypause") or name in ("audio_play", "audio_pause", "mediaplaypause") or (k == "f8" and f_custom_action in (None, "toggle_play")):
+        elif self.keybindings.get("toggle_play") != "" and (k in ("audio_play", "audio_pause", "mediaplaypause") or name in ("audio_play", "audio_pause", "mediaplaypause") or (k == "f8" and f_custom_action in (None, "toggle_play"))):
             self.action_toggle_play()
             event.prevent_default()
             event.stop()
             return
-        elif k in ("audio_next", "medianexttrack") or name in ("audio_next", "medianexttrack") or (k == "f9" and f_custom_action in (None, "next_track")):
+        elif self.keybindings.get("next_track") != "" and (k in ("audio_next", "medianexttrack") or name in ("audio_next", "medianexttrack") or (k == "f9" and f_custom_action in (None, "next_track"))):
             self.action_next_track()
             event.prevent_default()
             event.stop()
             return
-        elif k in ("audio_mute",) or name in ("audio_mute",) or (k == "f1" and f_custom_action in (None, "vol_mute")):
+        elif self.keybindings.get("vol_mute") != "" and (k in ("audio_mute",) or name in ("audio_mute",) or (k == "f1" and f_custom_action in (None, "vol_mute"))):
             self.action_vol_mute()
             event.prevent_default()
             event.stop()
             return
-        elif k in ("audio_lower_volume",) or name in ("audio_lower_volume",) or (k == "f2" and f_custom_action in (None, "vol_down")):
+        elif self.keybindings.get("vol_down") != "" and (k in ("audio_lower_volume",) or name in ("audio_lower_volume",) or (k == "f2" and f_custom_action in (None, "vol_down"))):
             self.action_vol_down()
             event.prevent_default()
             event.stop()
             return
-        elif k in ("audio_raise_volume",) or name in ("audio_raise_volume",) or (k == "f3" and f_custom_action in (None, "vol_up")):
+        elif self.keybindings.get("vol_up") != "" and (k in ("audio_raise_volume",) or name in ("audio_raise_volume",) or (k == "f3" and f_custom_action in (None, "vol_up"))):
             self.action_vol_up()
             event.prevent_default()
             event.stop()
@@ -3485,12 +3497,6 @@ class SpoffTUI(App):
         if "+" in ek_lower or ek_lower.startswith("ctrl+") or ek_lower.startswith("alt+"):
             is_input = isinstance(self.focused, Input)
             readline_input_keys = {"ctrl+a", "ctrl+u", "ctrl+k", "ctrl+w", "ctrl+c", "ctrl+v", "ctrl+x", "ctrl+z"}
-
-            if key_matches(event.key, getattr(event, "character", None), self.keybindings.get("switch_engine", "ctrl+e")):
-                self.action_switch_engine()
-                event.prevent_default()
-                event.stop()
-                return
 
             if not (is_input and ek_lower in readline_input_keys):
                 for act_id, bound in self.keybindings.items():
@@ -3682,22 +3688,12 @@ class SpoffTUI(App):
                 matched_action = "delete_item"
             elif event.key == "+" and self.keybindings.get("add_to_playlist") != "":
                 matched_action = "add_to_playlist"
-            elif event.key in ("f1",):
+            elif event.key in ("f1",) and self.keybindings.get("vol_mute") != "":
                 matched_action = "vol_mute"
-            elif event.key in ("f2",):
+            elif event.key in ("f2",) and self.keybindings.get("vol_down") != "":
                 matched_action = "vol_down"
-            elif event.key in ("f3",):
+            elif event.key in ("f3",) and self.keybindings.get("vol_up") != "":
                 matched_action = "vol_up"
-            # Dual playback key support: F7/F8/F9 and Space/n/p always work if not unbound
-            elif (event.key in ("f8", "space") or event.character == " ") and not isinstance(self.focused, Input):
-                if self.keybindings.get("toggle_play") != "" and not any(key_matches(event.key, getattr(event, "character", None), b) for act, b in self.keybindings.items() if act != "toggle_play" and b):
-                    matched_action = "toggle_play"
-            elif (event.key in ("f9", "n") or event.character == "n") and not isinstance(self.focused, Input):
-                if self.keybindings.get("next_track") != "" and not any(key_matches(event.key, getattr(event, "character", None), b) for act, b in self.keybindings.items() if act != "next_track" and b):
-                    matched_action = "next_track"
-            elif (event.key in ("f7", "p") or event.character == "p") and not isinstance(self.focused, Input):
-                if self.keybindings.get("prev_track") != "" and not any(key_matches(event.key, getattr(event, "character", None), b) for act, b in self.keybindings.items() if act != "prev_track" and b):
-                    matched_action = "prev_track"
 
         if matched_action:
             act_method = getattr(self, f"action_{matched_action}", None)
@@ -4162,6 +4158,11 @@ class SpoffTUI(App):
                 elif self.current_index == new_idx:
                     self.current_index = idx
 
+                if self.queue and len(self.queue) == len(self.current_playlist_tracks):
+                    if 0 <= idx < len(self.queue) and 0 <= new_idx < len(self.queue):
+                        q_item = self.queue.pop(idx)
+                        self.queue.insert(new_idx, q_item)
+
                 self.render_tracks(self.current_playlist_tracks, select_row=new_idx)
                 tt.focus()
                 return
@@ -4219,6 +4220,11 @@ class SpoffTUI(App):
                 elif self.current_index == new_idx:
                     self.current_index = idx
 
+                if self.queue and len(self.queue) == len(self.current_playlist_tracks):
+                    if 0 <= idx < len(self.queue) and 0 <= new_idx < len(self.queue):
+                        q_item = self.queue.pop(idx)
+                        self.queue.insert(new_idx, q_item)
+
                 self.render_tracks(self.current_playlist_tracks, select_row=new_idx)
                 tt.focus()
                 return
@@ -4253,9 +4259,15 @@ class SpoffTUI(App):
 
     def _sync_table_cursor_to_index(self, idx: int):
         try:
-            tt = self.query_one("#track-table", DataTable)
-            if 0 <= idx < tt.row_count:
-                tt.move_cursor(row=idx)
+            view_tracks = self._get_current_view_tracks()
+            if view_tracks and len(view_tracks) == len(self.queue):
+                if 0 <= idx < len(view_tracks) and 0 <= idx < len(self.queue):
+                    v_tr = view_tracks[idx]
+                    q_tr = self.queue[idx]
+                    if v_tr == q_tr or (v_tr.get("id") and v_tr.get("id") == q_tr.get("id")):
+                        tt = self.query_one("#track-table", DataTable)
+                        if 0 <= idx < tt.row_count:
+                            tt.move_cursor(row=idx)
         except Exception:
             pass
 
@@ -4311,6 +4323,8 @@ class SpoffTUI(App):
             self.player.set_volume(self.volume)
             save_volume(self.volume)
             self.notify_user(f"Volume: {self.volume}%")
+        if self.mpris:
+            self.mpris.update_volume(self.volume)
         self.update_player_hud()
 
     def action_vol_up(self):
@@ -4318,6 +4332,8 @@ class SpoffTUI(App):
         self.player.set_volume(self.volume)
         save_volume(self.volume)
         self.notify_user(f"Volume: {self.volume}%")
+        if self.mpris:
+            self.mpris.update_volume(self.volume)
         self.update_player_hud()
 
     def action_vol_down(self):
@@ -4325,9 +4341,13 @@ class SpoffTUI(App):
         self.player.set_volume(self.volume)
         save_volume(self.volume)
         self.notify_user(f"Volume: {self.volume}%")
+        if self.mpris:
+            self.mpris.update_volume(self.volume)
         self.update_player_hud()
 
     def action_show_help(self):
+        if not getattr(self, "_is_ready", False):
+            return
         self.push_screen(HelpModal())
 
     def update_spotify_pill(self):
@@ -4532,6 +4552,8 @@ class SpoffTUI(App):
         if self.shuffle_mode and len(self.queue) > 1:
             if self.current_index >= 0:
                 self._shuffle_history.append(self.current_index)
+                if len(self._shuffle_history) > 200:
+                    self._shuffle_history = self._shuffle_history[-200:]
             candidates = [i for i in range(len(self.queue)) if i != self.current_index]
             next_idx = random.choice(candidates)
             self.play_index(next_idx)
@@ -4789,6 +4811,8 @@ class SpoffTUI(App):
         self.push_screen(AddToPlaylistModal(track, self.playlists), handle_modal_result)
 
     def action_share_track(self):
+        if not getattr(self, "_is_ready", False):
+            return
         f = None
         try:
             f = self.focused
@@ -4991,6 +5015,26 @@ class SpoffTUI(App):
                                         self.call_from_thread(self.notify_user, f"Removed '{t_title}' from Spotify playlist '{pl_name}'.")
                                 threading.Thread(target=_sync_remove_bg, daemon=True).start()
 
+                        if self.queue:
+                            q_idx = None
+                            if 0 <= found_idx < len(self.queue) and (self.queue[found_idx] == removed_track or (removed_track.get("id") and self.queue[found_idx].get("id") == removed_track.get("id"))):
+                                q_idx = found_idx
+                            else:
+                                for i, q_item in enumerate(self.queue):
+                                    if q_item == removed_track or (removed_track.get("id") and q_item.get("id") == removed_track.get("id")):
+                                        q_idx = i
+                                        break
+                            if q_idx is not None:
+                                self.queue.pop(q_idx)
+                                if self.current_index > q_idx:
+                                    self.current_index -= 1
+                                elif self.current_index == q_idx:
+                                    if self.current_index >= len(self.queue):
+                                        self.current_index = len(self.queue) - 1
+                                if not self.queue:
+                                    self.current_index = -1
+                                self.update_player_hud()
+
                         self.notify_user(f"Removed '{t_title}' from playlist '{pl_name}'.")
 
                 self.push_screen(
@@ -5015,6 +5059,25 @@ class SpoffTUI(App):
                     if remaining and isinstance(f, DataTable):
                         new_row = max(0, min(row_idx, len(remaining) - 1))
                         f.move_cursor(row=new_row)
+                    if self.queue:
+                        q_idx = None
+                        if 0 <= row_idx < len(self.queue) and (self.queue[row_idx] == t or (t.get("id") and self.queue[row_idx].get("id") == t.get("id"))):
+                            q_idx = row_idx
+                        else:
+                            for i, q_item in enumerate(self.queue):
+                                if q_item == t or (t.get("id") and q_item.get("id") == t.get("id")):
+                                    q_idx = i
+                                    break
+                        if q_idx is not None:
+                            self.queue.pop(q_idx)
+                            if self.current_index > q_idx:
+                                self.current_index -= 1
+                            elif self.current_index == q_idx:
+                                if self.current_index >= len(self.queue):
+                                    self.current_index = len(self.queue) - 1
+                            if not self.queue:
+                                self.current_index = -1
+                            self.update_player_hud()
                     self.notify_user(f"Removed '{t_title}' from offline disk cache.")
 
             elif self.active_tab == "search":
@@ -5024,6 +5087,25 @@ class SpoffTUI(App):
                     if self.search_results and isinstance(f, DataTable):
                         new_row = max(0, min(row_idx, len(self.search_results) - 1))
                         f.move_cursor(row=new_row)
+                    if self.queue:
+                        q_idx = None
+                        if 0 <= row_idx < len(self.queue) and (self.queue[row_idx] == t or (t.get("id") and self.queue[row_idx].get("id") == t.get("id"))):
+                            q_idx = row_idx
+                        else:
+                            for i, q_item in enumerate(self.queue):
+                                if q_item == t or (t.get("id") and q_item.get("id") == t.get("id")):
+                                    q_idx = i
+                                    break
+                        if q_idx is not None:
+                            self.queue.pop(q_idx)
+                            if self.current_index > q_idx:
+                                self.current_index -= 1
+                            elif self.current_index == q_idx:
+                                if self.current_index >= len(self.queue):
+                                    self.current_index = len(self.queue) - 1
+                            if not self.queue:
+                                self.current_index = -1
+                            self.update_player_hud()
                     self.notify_user(f"Removed '{t.get('title')}' from search results.")
         else:
             if self.active_tab == "playlist":
@@ -5036,14 +5118,19 @@ class SpoffTUI(App):
             self.call_from_thread(self.action_next_track)
 
     def update_player_hud(self):
-        pos, dur = self.player.get_progress()
-        self.query_one("#time-elapsed", Static).update(format_time(pos))
-        self.query_one("#time-total", Static).update(format_time(dur) if dur > 0 else "--:--")
+        if not getattr(self, "is_mounted", False):
+            return
+        try:
+            pos, dur = self.player.get_progress()
+            self.query_one("#time-elapsed", Static).update(format_time(pos))
+            self.query_one("#time-total", Static).update(format_time(dur) if dur > 0 else "--:--")
 
-        bar = self.query_one("#playback-bar", ScrubBar)
-        if dur > 0:
-            bar.total = dur
-            bar.progress = pos
+            bar = self.query_one("#playback-bar", ScrubBar)
+            if dur > 0:
+                bar.total = dur
+                bar.progress = pos
+        except Exception:
+            return
 
         curr = self.player.current_track
         is_scrubbing = (self.focused and self.focused.id == "playback-bar")

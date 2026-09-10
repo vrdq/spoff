@@ -368,9 +368,9 @@ def add_track_to_playlist(playlist_id: str, track: Dict[str, Any]) -> bool:
             if "tracks" not in p or not isinstance(p["tracks"], list):
                 p["tracks"] = []
             for t in p["tracks"]:
-                if t.get("id") and t.get("id") == track.get("id"):
+                if t.get("id") and track.get("id") and t.get("id") == track.get("id"):
                     return False
-                if t.get("title") == track.get("title") and t.get("artist") == track.get("artist"):
+                if t.get("title") and track.get("title") and t.get("title") == track.get("title") and t.get("artist") == track.get("artist"):
                     return False
             p["tracks"].append(track)
             save_saved_playlists(existing)
