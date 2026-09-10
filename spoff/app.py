@@ -539,6 +539,7 @@ class SettingsModal(ModalScreen[None]):
 
     def __init__(self):
         super().__init__()
+        self.is_rebinding: bool = False
 
     @property
     def spoff_app(self) -> Any:
@@ -676,6 +677,8 @@ class SettingsModal(ModalScreen[None]):
         self.query_one("#settings-status-line", Static).update(f"Visualizer theme set to [bold #ffffff]{color_name}[/].")
 
     def start_rebinding(self, act_id: str) -> None:
+        if isinstance(self.app.screen, RebindKeyModal):
+            return
         cat, title = ACTION_INFO.get(act_id, ("General", act_id))
         cur_key = self.spoff_app.keybindings.get(act_id, "")
         def_key = DEFAULT_KEYBINDINGS.get(act_id, "")
@@ -894,9 +897,8 @@ class SettingsModal(ModalScreen[None]):
                 return
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        if not self.is_rebinding:
-            act_id = str(event.row_key.value)
-            self.start_rebinding(act_id)
+        act_id = str(event.row_key.value)
+        self.start_rebinding(act_id)
 
 class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
     BINDINGS = [
