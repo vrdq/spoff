@@ -182,6 +182,41 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "move_item_down": ("Playlists", "Reorder Song Down (J)"),
 }
 
+def canonicalize_key(k: str) -> str:
+    """Normalizes any user-typed or string-represented key into a canonical form."""
+    if not k:
+        return ""
+    s = k.strip()
+    if len(s) == 1:
+        return s
+    s_lower = s.lower()
+    for sep in ("+", "-"):
+        if sep in s_lower and len(s_lower) > 1:
+            parts = [p.strip() for p in s_lower.split(sep) if p.strip()]
+            norm_parts = []
+            for p in parts:
+                if p in ("cntrl", "control"): norm_parts.append("ctrl")
+                elif p in ("opt", "option"): norm_parts.append("alt")
+                elif p in ("cmd", "command"): norm_parts.append("ctrl")
+                elif p == "esc": norm_parts.append("escape")
+                elif p == "return": norm_parts.append("enter")
+                elif p == "one": norm_parts.append("1")
+                elif p == "two": norm_parts.append("2")
+                elif p == "three": norm_parts.append("3")
+                elif p == "four": norm_parts.append("4")
+                elif p == "five": norm_parts.append("5")
+                elif p == "six": norm_parts.append("6")
+                elif p == "seven": norm_parts.append("7")
+                elif p == "eight": norm_parts.append("8")
+                elif p == "nine": norm_parts.append("9")
+                elif p == "zero": norm_parts.append("0")
+                else: norm_parts.append(p)
+            return "+".join(norm_parts)
+    if s_lower in ("cntrl", "control"): return "ctrl"
+    if s_lower == "esc": return "escape"
+    if s_lower == "return": return "enter"
+    return s_lower
+
 def format_key_display(k: str) -> str:
     if not k:
         return "[dim]None[/dim]"
@@ -211,7 +246,7 @@ def format_key_display(k: str) -> str:
         if lower in special_labels:
             res.append(special_labels[lower])
         elif len(p) == 1:
-            res.append(p)
+            res.append(p.upper() if len(parts) > 1 else p)
         elif lower.startswith("f") and lower[1:].isdigit():
             res.append(lower.upper())
         else:
@@ -219,72 +254,107 @@ def format_key_display(k: str) -> str:
     return "+".join(res)
 
 def normalize_captured_key(event_key: str, event_char: Optional[str]) -> str:
+    ek = str(event_key or "").strip()
+    ec = str(event_char or "")
+    ek_lower = ek.lower()
+
+    # 1. Modifiers combinations (ctrl+1, ctrl+shift+a, alt+up, shift+tab)
+    if "+" in ek_lower or ek_lower.startswith("ctrl+") or ek_lower.startswith("alt+"):
+        parts = [p.strip() for p in ek_lower.split("+") if p.strip()]
+        # Shift + single letter -> uppercase letter
+        if len(parts) == 2 and parts[0] == "shift" and len(parts[1]) == 1 and parts[1].isalpha():
+            return parts[1].upper()
+        if ek_lower == "shift+semicolon": return ":"
+        if ek_lower == "shift+slash": return "?"
+        if ek_lower == "shift+equal": return "+"
+        if ek_lower == "ctrl+@": return "ctrl+space"
+        return ek_lower
+
+    # 2. Named special keys
     named_keys = {
         "space", "enter", "tab", "escape", "backspace", "delete",
         "up", "down", "left", "right",
         "home", "end", "pageup", "pagedown",
     }
-    ek_lower = str(event_key or "").lower()
     if ek_lower in named_keys:
         return ek_lower
+
+    # 3. Function keys
     if ek_lower.startswith("f") and ek_lower[1:].isdigit():
         return ek_lower
 
-    ec = str(event_char or "")
-    if ec and len(ec) == 1:
-        if ec in (",", "/", ":", ";", "?", "+", "-"):
-            return ec
-        if ec.isupper():
-            return ec
+    # 4. Punctuation symbols
+    if ec in (",", "/", ":", ";", "?", "+", "-"):
         return ec
-    return str(event_key or "")
+    if ek_lower == "slash": return "/"
+    if ek_lower == "comma": return ","
+    if ek_lower == "colon": return ":"
+    if ek_lower == "semicolon": return ";"
+    if ek_lower == "question_mark": return "?"
+
+    # 5. Printable single characters
+    if ec and len(ec) == 1 and ec.isprintable() and not ec.isspace():
+        return ec
+
+    if len(ek) == 1:
+        return ek
+
+    return ek_lower
 
 def key_matches(event_key: str, event_char: Optional[str], bound_key: str) -> bool:
     if not bound_key:
         return False
-    bound = bound_key.strip()
+    c_bound = canonicalize_key(bound_key)
+    if not c_bound:
+        return False
     ek = str(event_key or "").strip()
     ec = str(event_char or "")
+    c_ek = canonicalize_key(ek)
 
-    if ek == bound:
+    # 1. Exact canonical match
+    if c_ek == c_bound:
         return True
 
+    # 2. Single uppercase letter bound (e.g. 'D', 'K', 'J')
+    if len(bound_key) == 1 and bound_key.isupper():
+        if ec == bound_key or ek == bound_key or ek == f"shift+{bound_key.lower()}" or c_ek == f"shift+{bound_key.lower()}":
+            return True
+        return False
+
+    # 3. Single lowercase letter bound (e.g. 'd', 'k', 'j')
+    if len(bound_key) == 1 and bound_key.islower():
+        if (ec == bound_key or ek == bound_key) and (not ec or not ec.isupper()):
+            return True
+        return False
+
+    # 4. Multi-key / modifier combos
+    if "+" in c_bound or "+" in c_ek:
+        if c_ek.lower() == c_bound.lower():
+            return True
+        if c_bound in ("ctrl+space", "ctrl+@") and c_ek in ("ctrl+space", "ctrl+@"):
+            return True
+        return False
+
+    # 5. Punctuation aliases
     punct_map = {
-        "comma": ",",
-        ",": "comma",
-        "slash": "/",
-        "/": "slash",
-        "colon": ":",
-        ":": "colon",
-        "semicolon": ";",
-        ";": "semicolon",
-        "question_mark": "?",
-        "?": "question_mark",
-        "plus": "+",
-        "+": "plus",
-        "minus": "-",
-        "-": "minus",
+        "comma": ",", ",": "comma",
+        "slash": "/", "/": "slash",
+        "colon": ":", ":": "colon",
+        "semicolon": ";", ";": "semicolon",
+        "question_mark": "?", "?": "question_mark",
+        "plus": "+", "+": "plus",
+        "minus": "-", "-": "minus",
     }
-    if bound in punct_map:
-        target = punct_map[bound]
-        if ek == target or ec == target or ec == bound:
+    if c_bound in punct_map:
+        target = punct_map[c_bound]
+        if ek == target or ec == target or c_ek == target:
             return True
-    if ek == "colon" and bound in (":", "colon"):
-        return True
-    if ek == "shift+semicolon" and bound in (":", "colon"):
-        return True
+    if ek == "colon" and c_bound in (":", "colon"): return True
+    if ek == "shift+semicolon" and c_bound in (":", "colon"): return True
+    if ek == "shift+slash" and c_bound in ("?", "question_mark"): return True
+    if c_bound in ("space", " ") and (ek == "space" or ec == " "): return True
 
-    if bound in ("space", " ") and (ek == "space" or ec == " "):
-        return True
-
-    if len(bound) == 1 and bound.isupper():
-        if ec == bound or ek == f"shift+{bound.lower()}" or ek == bound:
-            return True
-    elif len(bound) == 1 and bound.islower():
-        if (ec == bound or ek == bound) and (not ec or not ec.isupper()):
-            return True
-
-    return False
+    return ek.lower() == bound_key.lower() or ec == bound_key
 
 class AdvModeToggle(Static):
     can_focus = True
@@ -335,6 +405,122 @@ class VisualizerColorToggle(Static):
         if isinstance(self.screen, SettingsModal):
             self.screen.cycle_visualizer_color()
 
+class RebindKeyModal(ModalScreen[Optional[str]]):
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel", priority=True),
+    ]
+
+    def __init__(
+        self,
+        action_id: str,
+        action_category: str,
+        action_title: str,
+        current_key: str,
+        default_key: str,
+        existing_bindings: Dict[str, str],
+    ):
+        super().__init__()
+        self.action_id = action_id
+        self.action_category = action_category
+        self.action_title = action_title
+        self.current_key = current_key
+        self.default_key = default_key
+        self.existing_bindings = existing_bindings
+
+    def compose(self) -> ComposeResult:
+        cur_disp = format_key_display(self.current_key)
+        def_disp = format_key_display(self.default_key)
+        with Vertical(id="rebind-dialog"):
+            with Horizontal(id="rebind-header"):
+                yield Static("REBIND SHORTCUT", id="rebind-title")
+                yield Static("[dim]Esc to cancel[/dim]", id="rebind-close-hint")
+
+            yield Static(f"Action: [bold #ffffff]{self.action_title}[/]  [dim]({self.action_category})[/dim]", id="rebind-action-info")
+            yield Static(f"Current: [bold #569f68]{cur_disp}[/]  |  Default: [dim]{def_disp}[/dim]", id="rebind-curr-info")
+            yield Static(
+                "[dim]Press key combination (e.g. [/][bold #ffffff]Ctrl+1[/][dim], [/][bold #ffffff]Alt+1[/][dim], [/][bold #ffffff]Space[/][dim]) or type it below:[/dim]",
+                id="rebind-inst"
+            )
+            yield Input(value=self.current_key, placeholder="e.g. ctrl+1, alt+k, space", id="rebind-input")
+            yield Static("", id="rebind-preview")
+            with Horizontal(id="rebind-buttons"):
+                yield Button("Save Keybind", variant="primary", id="rebind-btn-save")
+                yield Button("Reset Default", id="rebind-btn-default")
+                yield Button("Cancel", variant="error", id="rebind-btn-cancel")
+
+    def on_mount(self) -> None:
+        self._update_preview(self.current_key)
+        try:
+            inp = self.query_one("#rebind-input", Input)
+            inp.focus()
+            inp.action_end()
+        except Exception:
+            pass
+
+    def _update_preview(self, val: str) -> None:
+        c_key = canonicalize_key(val)
+        if not c_key:
+            prev_text = "[dim]Formatted:[/] [bold #888888]Unbound (None)[/]"
+        else:
+            prev_text = f"[dim]Formatted:[/] [bold #569f68]{format_key_display(c_key)}[/]"
+
+        if c_key:
+            conflicting_act = None
+            for other_id, bound in self.existing_bindings.items():
+                if other_id != self.action_id and canonicalize_key(bound) == c_key:
+                    conflicting_act = other_id
+                    break
+            if conflicting_act:
+                _, conf_title = ACTION_INFO.get(conflicting_act, ("General", conflicting_act))
+                prev_text += f"   [bold #c4a768]⚠ Replaces '{conf_title}'[/]"
+
+        try:
+            self.query_one("#rebind-preview", Static).update(prev_text)
+        except Exception:
+            pass
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "rebind-input":
+            self._update_preview(event.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "rebind-input":
+            c_key = canonicalize_key(event.value)
+            self.dismiss(c_key)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "rebind-btn-save":
+            inp = self.query_one("#rebind-input", Input)
+            self.dismiss(canonicalize_key(inp.value))
+        elif event.button.id == "rebind-btn-default":
+            self.dismiss(self.default_key)
+        elif event.button.id == "rebind-btn-cancel":
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key == "escape":
+            self.dismiss(None)
+            event.prevent_default()
+            event.stop()
+            return
+
+        ek_lower = (event.key or "").lower()
+        has_modifier = ("+" in ek_lower) or ek_lower.startswith("ctrl+") or ek_lower.startswith("alt+")
+        is_fn = ek_lower.startswith("f") and ek_lower[1:].isdigit()
+        is_special = ek_lower in ("space", "tab", "backspace", "delete", "up", "down", "left", "right", "home", "end", "pageup", "pagedown")
+
+        if (has_modifier or is_fn or is_special) and ek_lower not in ("enter", "return"):
+            captured = normalize_captured_key(event.key, getattr(event, "character", None))
+            inp = self.query_one("#rebind-input", Input)
+            inp.value = captured
+            self._update_preview(captured)
+            event.prevent_default()
+            event.stop()
+            return
+
 class SettingsModal(ModalScreen[None]):
     BINDINGS = [
         Binding("escape", "dismiss_or_cancel", "Close", priority=True),
@@ -353,8 +539,6 @@ class SettingsModal(ModalScreen[None]):
 
     def __init__(self):
         super().__init__()
-        self.is_rebinding: bool = False
-        self.rebinding_action: Optional[str] = None
 
     @property
     def spoff_app(self) -> Any:
@@ -492,31 +676,42 @@ class SettingsModal(ModalScreen[None]):
         self.query_one("#settings-status-line", Static).update(f"Visualizer theme set to [bold #ffffff]{color_name}[/].")
 
     def start_rebinding(self, act_id: str) -> None:
-        self.is_rebinding = True
-        self.rebinding_action = act_id
-        _, act_title = ACTION_INFO.get(act_id, ("General", act_id))
-        self.query_one("#settings-status-line", Static).update(
-            f"[bold #569f68]► Press any key to bind to '{act_title}' (Esc to cancel)...[/]"
+        cat, title = ACTION_INFO.get(act_id, ("General", act_id))
+        cur_key = self.spoff_app.keybindings.get(act_id, "")
+        def_key = DEFAULT_KEYBINDINGS.get(act_id, "")
+
+        def _on_rebind_done(new_key: Optional[str]) -> None:
+            if new_key is not None:
+                self.apply_rebound_key(act_id, new_key)
+            else:
+                self.query_one("#settings-status-line", Static).update("[dim]Rebinding cancelled.[/dim]")
+            try:
+                table = self.query_one("#settings-table", DataTable)
+                table.focus()
+            except Exception:
+                pass
+
+        self.app.push_screen(
+            RebindKeyModal(act_id, cat, title, cur_key, def_key, self.spoff_app.keybindings),
+            _on_rebind_done
         )
-        self._refresh_row(act_id, key_override="[bold #569f68]PRESS KEY...[/]")
 
-    def apply_rebound_key(self, new_key: str) -> None:
-        act_id = self.rebinding_action
-        self.is_rebinding = False
-        self.rebinding_action = None
-
+    def apply_rebound_key(self, act_id: str, new_key: str) -> None:
         if not act_id:
             return
 
         _, act_title = ACTION_INFO.get(act_id, ("General", act_id))
+        new_key = canonicalize_key(new_key)
 
         conflicting_act = None
-        for other_id, bound in self.spoff_app.keybindings.items():
-            if other_id != act_id and bound == new_key:
-                conflicting_act = other_id
-                break
+        if new_key:
+            for other_id, bound in self.spoff_app.keybindings.items():
+                if other_id != act_id and canonicalize_key(bound) == new_key:
+                    conflicting_act = other_id
+                    break
 
-        status_msg = f"Bound [bold #ffffff]'{act_title}'[/] to [bold #569f68]{format_key_display(new_key)}[/]."
+        disp_key = format_key_display(new_key)
+        status_msg = f"Bound [bold #ffffff]'{act_title}'[/] to [bold #569f68]{disp_key}[/]."
         if conflicting_act:
             _, conf_title = ACTION_INFO.get(conflicting_act, ("General", conflicting_act))
             self.spoff_app.set_custom_keybinding(conflicting_act, "")
@@ -526,14 +721,6 @@ class SettingsModal(ModalScreen[None]):
         self.spoff_app.set_custom_keybinding(act_id, new_key)
         self._refresh_row(act_id)
         self.query_one("#settings-status-line", Static).update(status_msg)
-
-    def cancel_rebinding(self) -> None:
-        act_id = self.rebinding_action
-        self.is_rebinding = False
-        self.rebinding_action = None
-        if act_id:
-            self._refresh_row(act_id)
-        self.query_one("#settings-status-line", Static).update("[dim]Rebinding cancelled.[/dim]")
 
     def _refresh_row(self, act_id: str, key_override: Optional[str] = None) -> None:
         table = self.query_one("#settings-table", DataTable)
@@ -557,8 +744,6 @@ class SettingsModal(ModalScreen[None]):
             pass
 
     def action_reset_selected_key(self) -> None:
-        if self.is_rebinding:
-            return
         table = self.query_one("#settings-table", DataTable)
         if table.cursor_row is not None and table.row_count > 0:
             act_id = list(ACTION_INFO.keys())[table.cursor_row]
@@ -571,23 +756,16 @@ class SettingsModal(ModalScreen[None]):
             )
 
     def action_reset_all_keys(self) -> None:
-        if self.is_rebinding:
-            return
         self.spoff_app.reset_all_keybindings()
         for act_id in ACTION_INFO.keys():
             self._refresh_row(act_id)
         self.query_one("#settings-status-line", Static).update("All keybindings reset to factory defaults.")
 
     def action_dismiss_or_cancel(self) -> None:
-        if self.is_rebinding:
-            self.cancel_rebinding()
-        else:
-            self.dismiss(None)
+        self.dismiss(None)
 
     def action_switch_focus(self) -> None:
-        if self.is_rebinding:
-            return
-        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "instant-search-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle"]
+        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "instant-search-toggle", "auto-update-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle"]
         focused_id = self.focused.id if self.focused else None
         if focused_id in toggle_ids:
             idx = toggle_ids.index(focused_id)
@@ -599,8 +777,6 @@ class SettingsModal(ModalScreen[None]):
             self.query_one("#adv-mode-toggle", AdvModeToggle).focus()
 
     def action_select_or_toggle(self) -> None:
-        if self.is_rebinding:
-            return
         focused_id = self.focused.id if self.focused else None
         if focused_id == "adv-mode-toggle":
             self.toggle_advanced_mode()
@@ -634,16 +810,6 @@ class SettingsModal(ModalScreen[None]):
             table.action_cursor_up()
 
     def on_key(self, event: events.Key) -> None:
-        if self.is_rebinding:
-            event.prevent_default()
-            event.stop()
-            if event.key in ("escape",):
-                self.cancel_rebinding()
-            else:
-                new_key = normalize_captured_key(event.key, event.character)
-                self.apply_rebound_key(new_key)
-            return
-
         table = self.query_one("#settings-table", DataTable)
         toggle_ids = ["adv-mode-toggle", "transparency-toggle", "instant-search-toggle", "auto-update-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle"]
         focused_id = self.focused.id if self.focused else None
@@ -1284,9 +1450,23 @@ class HelpModal(ModalScreen[None]):
                 t.add_row(k, d)
             return t
 
+        kb = getattr(self.app, "keybindings", {})
+        k_s1 = format_key_display(kb.get("nav_search", "1"))
+        k_s2 = format_key_display(kb.get("nav_playlist", "2"))
+        k_s3 = format_key_display(kb.get("nav_offline", "3"))
+        k_s4 = format_key_display(kb.get("nav_lyrics", "4"))
+        k_sett = format_key_display(kb.get("open_settings", ","))
+        k_srch = format_key_display(kb.get("focus_search", "/"))
+        k_play = format_key_display(kb.get("toggle_play", "space"))
+        k_shuf = format_key_display(kb.get("toggle_shuffle", "s"))
+        k_rep = format_key_display(kb.get("toggle_repeat", "r"))
+        k_prev = format_key_display(kb.get("prev_track", "p"))
+        k_next = format_key_display(kb.get("next_track", "n"))
+        k_eng = format_key_display(kb.get("switch_engine", "ctrl+e"))
+
         nav_rows = [
-            ("1 / 2 / 3", "Search / Playlists / Offline"),
-            ("4", "Synchronized lyrics view"),
+            (f"{k_s1} / {k_s2} / {k_s3}", "Search / Playlists / Offline"),
+            (f"{k_s4}", "Synchronized lyrics view"),
             ("h / l", "Switch Sidebar / Main pane"),
             ("j / k, Arrows", "Navigate table rows"),
             ("gg / Home", "Jump to top row"),
@@ -1299,10 +1479,10 @@ class HelpModal(ModalScreen[None]):
         ]
 
         playback_rows = [
-            ("Space, Fn+F8", "Play / Pause toggle"),
-            ("s", "Toggle shuffle mode"),
-            ("r", "Cycle repeat (off / all / 1)"),
-            ("p / n, Fn+F7/F9", "Previous / Next track"),
+            (f"{k_play}, Fn+F8", "Play / Pause toggle"),
+            (f"{k_shuf}", "Toggle shuffle mode"),
+            (f"{k_rep}", "Cycle repeat (off / all / 1)"),
+            (f"{k_prev} / {k_next}, Fn+F7/F9", "Previous / Next track"),
             ("Left / Right", "Seek -/+ 5 seconds"),
             ("v / Click", "Cycle visualizer mode"),
             ("C", "Cycle visualizer color theme"),
@@ -1324,10 +1504,11 @@ class HelpModal(ModalScreen[None]):
             ("a, +", "Add track to playlist"),
             ("i", "New playlist / import link"),
             ("Shift+L, S", "Spotify login & sync"),
-            (",", "Settings & Rebind keys"),
-            ("/", "Focus search box"),
+            (f"{k_sett}", "Settings & Rebind keys"),
+            (f"{k_srch}", "Focus search box"),
             ("Del, d, x", "Remove track / playlist"),
             ("D, Shift+Del", "Delete whole playlist"),
+            (f"{k_eng}", "Switch Engine (YTM/Spotify)"),
             ("u / U", "Check / pull updates"),
             ("q", "Quit Spoff"),
         ]
@@ -2161,6 +2342,126 @@ class SpoffTUI(App):
     }
 
     /* MODAL: SETTINGS & KEYBINDS */
+    RebindKeyModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.75);
+    }
+
+    #rebind-dialog {
+        width: 70;
+        max-width: 92%;
+        height: auto;
+        background: #141414;
+        border: solid #2a2a2a;
+        padding: 1 2;
+    }
+
+    #rebind-header {
+        height: 2;
+        width: 100%;
+        border-bottom: solid #222222;
+        margin-bottom: 1;
+    }
+
+    #rebind-title {
+        width: 1fr;
+        text-style: bold;
+        color: #ffffff;
+    }
+
+    #rebind-close-hint {
+        width: auto;
+        color: #555555;
+    }
+
+    #rebind-action-info {
+        height: 1;
+        margin-bottom: 0;
+    }
+
+    #rebind-curr-info {
+        height: 1;
+        color: #888888;
+        margin-bottom: 1;
+    }
+
+    #rebind-inst {
+        height: auto;
+        color: #767676;
+        margin-bottom: 1;
+    }
+
+    #rebind-input {
+        background: #1a1a1a;
+        border: solid #282828;
+        color: #ffffff;
+        margin-bottom: 1;
+    }
+
+    #rebind-input:focus {
+        border: solid #569f68;
+    }
+
+    #rebind-preview {
+        height: 1;
+        margin-bottom: 1;
+    }
+
+    #rebind-buttons {
+        height: 3;
+        width: 100%;
+        align: right middle;
+    }
+
+    #rebind-buttons > Button {
+        margin-left: 1;
+        height: 3;
+        min-width: 14;
+        background: #222222;
+        color: #e2e2e2;
+        border: tall #333333;
+        padding: 0 1;
+    }
+
+    #rebind-buttons > Button:hover {
+        background: #2d2d2d;
+        border: tall #569f68;
+        color: #ffffff;
+    }
+
+    #rebind-buttons > Button:focus {
+        background: #333333;
+        border: tall #569f68;
+        color: #ffffff;
+        text-style: bold;
+    }
+
+    #rebind-buttons > Button.-primary {
+        background: #18271c;
+        color: #569f68;
+        border: tall #36603e;
+    }
+
+    #rebind-buttons > Button.-primary:focus {
+        background: #569f68;
+        color: #131313;
+        border: tall #72b984;
+        text-style: bold;
+    }
+
+    #rebind-buttons > Button.-error {
+        background: #261717;
+        color: #c47676;
+        border: tall #562525;
+    }
+
+    #rebind-buttons > Button.-error:focus {
+        background: #c47676;
+        color: #131313;
+        border: tall #df8888;
+        text-style: bold;
+    }
+
     SettingsModal {
         align: center middle;
         background: rgba(0, 0, 0, 0.75);
@@ -2821,12 +3122,28 @@ class SpoffTUI(App):
             event.stop()
             return
 
-        # Switch engine shortcut (e.g. Ctrl+E, accessible even when typing)
-        if key_matches(event.key, getattr(event, "character", None), self.keybindings.get("switch_engine", "ctrl+e")):
-            self.action_switch_engine()
-            event.prevent_default()
-            event.stop()
-            return
+        # Global modifier/compound shortcuts (e.g. Ctrl+1, Ctrl+2, Ctrl+E) accessible even when typing in an Input
+        ek_lower = (event.key or "").lower()
+        if "+" in ek_lower or ek_lower.startswith("ctrl+") or ek_lower.startswith("alt+"):
+            is_input = isinstance(self.focused, Input)
+            readline_input_keys = {"ctrl+a", "ctrl+u", "ctrl+k", "ctrl+w", "ctrl+c", "ctrl+v", "ctrl+x", "ctrl+z"}
+
+            if key_matches(event.key, getattr(event, "character", None), self.keybindings.get("switch_engine", "ctrl+e")):
+                self.action_switch_engine()
+                event.prevent_default()
+                event.stop()
+                return
+
+            if not (is_input and ek_lower in readline_input_keys):
+                for act_id, bound in self.keybindings.items():
+                    if bound and ("+" in bound or bound.startswith("ctrl+") or bound.startswith("alt+")):
+                        if key_matches(event.key, getattr(event, "character", None), bound):
+                            act_method = getattr(self, f"action_{act_id}", None)
+                            if callable(act_method):
+                                act_method()
+                                event.prevent_default()
+                                event.stop()
+                                return
 
         # 2. Input widget handling: type text, leave on down/tab, unfocus on escape
         if isinstance(self.focused, Input):
