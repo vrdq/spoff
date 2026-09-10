@@ -2247,7 +2247,7 @@ class SpoffTUI(App):
     ToastRack {
         dock: bottom;
         align: right bottom;
-        margin-bottom: 6;
+        margin-bottom: 5;
         width: 1fr;
         max-width: 100%;
         height: auto;
@@ -2262,14 +2262,14 @@ class SpoffTUI(App):
 
     Toast {
         width: auto;
-        min-width: 30;
-        max-width: 52;
+        min-width: 38;
+        max-width: 76;
         height: auto;
-        background: #0e0e0e;
-        color: #b0b0b0;
-        border: solid #222222;
+        background: #161616;
+        color: #d0d0d0;
+        border: solid #2c2c2c;
         border-left: solid #569f68;
-        padding: 0 1;
+        padding: 0 2;
         margin-top: 1;
         margin-right: 2;
     }
@@ -2280,10 +2280,10 @@ class SpoffTUI(App):
     }
 
     Toast.-information {
-        background: #0e0e0e;
-        border: solid #222222;
+        background: #161616;
+        border: solid #2c2c2c;
         border-left: solid #569f68;
-        color: #b0b0b0;
+        color: #d0d0d0;
     }
 
     Toast.-information .toast--title {
@@ -2292,10 +2292,10 @@ class SpoffTUI(App):
     }
 
     Toast.-warning {
-        background: #0e0e0e;
-        border: solid #222222;
+        background: #161616;
+        border: solid #2c2c2c;
         border-left: solid #c4a768;
-        color: #b0b0b0;
+        color: #d0d0d0;
     }
 
     Toast.-warning .toast--title {
@@ -2304,10 +2304,10 @@ class SpoffTUI(App):
     }
 
     Toast.-error {
-        background: #0e0e0e;
-        border: solid #222222;
+        background: #161616;
+        border: solid #2c2c2c;
         border-left: solid #e06c75;
-        color: #b0b0b0;
+        color: #d0d0d0;
     }
 
     Toast.-error .toast--title {
@@ -4745,10 +4745,10 @@ class SpoffTUI(App):
         copied = copy_to_clipboard(share_url, self)
 
         if copied:
-            self.notify_user(f"Copied {source_label} link for '{title}' to clipboard! ({share_url})")
+            self.notify_user(f"Copied {source_label} link for '{title}' to clipboard")
             try:
-                msg = f"[bold #ffffff]{escape_markup(title)}[/]  [#767676]{escape_markup(artist)}[/]\n[#555555]{escape_markup(share_url)}[/]"
-                self.notify(msg, title="COPIED TO CLIPBOARD", timeout=3.0)
+                msg = f"[bold #ffffff]{escape_markup(title)}[/]  [#666666]•[/]  [#aaaaaa]{escape_markup(artist)}[/]\n[#666666]{escape_markup(share_url)}[/]"
+                self.notify(msg, title="✓  Copied to clipboard", timeout=3.0)
             except Exception:
                 pass
         else:
