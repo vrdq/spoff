@@ -3422,6 +3422,9 @@ class SpoffTUI(App):
         self._last_rendered_width = event.size.width
 
     def on_key(self, event) -> None:
+        if isinstance(self.screen, ModalScreen):
+            return
+
         now = time.monotonic()
         if not getattr(self, "_is_ready", False) or (now - getattr(self, "_mount_time", now) < 0.45):
             event.prevent_default()
@@ -3608,7 +3611,49 @@ class SpoffTUI(App):
                 event.stop()
                 return
 
-        # 5. Dynamic match against self.keybindings
+        # 5. Enter / Return key handling (play track, open playlist, or seek lyrics)
+        if event.key in ("enter", "return"):
+            if isinstance(self.focused, DataTable):
+                if self.focused.id == "track-table":
+                    if self.focused.cursor_row is not None and self.focused.row_count > 0:
+                        self.play_current_table_row(self.focused.cursor_row)
+                    event.prevent_default()
+                    event.stop()
+                    return
+                elif self.focused.id == "side-table":
+                    idx = self.focused.cursor_row
+                    if idx is not None and 0 <= idx < len(self.playlists):
+                        self.load_playlist_by_index(idx, focus_tracks=True)
+                    event.prevent_default()
+                    event.stop()
+                    return
+                elif self.focused.id == "lyrics-table":
+                    idx = self.focused.cursor_row
+                    if self.current_lyrics and self.current_lyrics.get("lines"):
+                        lines = self.current_lyrics["lines"]
+                        if idx is not None and 0 <= idx < len(lines):
+                            t = lines[idx].get("time")
+                            if t is not None:
+                                self.player.seek_absolute(t)
+                                self.notify_user(f"Seeked to {format_time(t)}")
+                                old_idx = self._active_lyric_idx
+                                self._active_lyric_idx = idx
+                                self._highlight_lyric_line(old_idx, idx, lines)
+                    event.prevent_default()
+                    event.stop()
+                    return
+            elif not isinstance(self.focused, Button):
+                try:
+                    tt = self.query_one("#track-table", DataTable)
+                    if tt.cursor_row is not None and tt.row_count > 0:
+                        self.play_current_table_row(tt.cursor_row)
+                        event.prevent_default()
+                        event.stop()
+                        return
+                except Exception:
+                    pass
+
+        # 6. Dynamic match against self.keybindings
         matched_action = None
         for act_id, bound_key in self.keybindings.items():
             if bound_key and key_matches(event.key, getattr(event, "character", None), bound_key):
@@ -3661,10 +3706,6 @@ class SpoffTUI(App):
                 event.prevent_default()
                 event.stop()
                 return
-        else:
-            if not isinstance(self.focused, Input):
-                event.prevent_default()
-                event.stop()
 
     def action_nav_search(self): self.switch_view("search")
     def action_nav_playlist(self): self.switch_view("playlist", focus_sidebar=True)
