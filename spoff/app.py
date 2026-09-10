@@ -230,6 +230,11 @@ def copy_to_clipboard(text: str, app: Optional[Any] = None) -> bool:
     return copied
 
 
+def escape_markup(text: str) -> str:
+    """Escapes text safely for Textual markup rendering."""
+    return str(text).replace("\\", "\\\\").replace("[", "\\[")
+
+
 DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "toggle_play": "space",
     "next_track": "n",
@@ -2192,8 +2197,74 @@ class SpoffTUI(App):
 
     #notification-line {
         height: 1;
-        color: #888888;
+        color: #666666;
         text-style: italic;
+    }
+
+    /* TOAST / NOTIFICATION POPUPS */
+    ToastRack {
+        dock: bottom;
+        align: right bottom;
+        margin-bottom: 6;
+        margin-right: 2;
+        width: auto;
+        max-width: 55;
+        height: auto;
+        background: transparent;
+    }
+
+    Toast {
+        width: auto;
+        min-width: 32;
+        max-width: 54;
+        height: auto;
+        background: #0e0e0e;
+        color: #b0b0b0;
+        border: solid #222222;
+        border-left: solid #569f68;
+        padding: 0 1;
+        margin-top: 1;
+    }
+
+    Toast .toast--title {
+        color: #569f68;
+        text-style: bold;
+    }
+
+    Toast.-information {
+        background: #0e0e0e;
+        border: solid #222222;
+        border-left: solid #569f68;
+        color: #b0b0b0;
+    }
+
+    Toast.-information .toast--title {
+        color: #569f68;
+        text-style: bold;
+    }
+
+    Toast.-warning {
+        background: #0e0e0e;
+        border: solid #222222;
+        border-left: solid #c4a768;
+        color: #b0b0b0;
+    }
+
+    Toast.-warning .toast--title {
+        color: #c4a768;
+        text-style: bold;
+    }
+
+    Toast.-error {
+        background: #0e0e0e;
+        border: solid #222222;
+        border-left: solid #e06c75;
+        color: #b0b0b0;
+    }
+
+    Toast.-error .toast--title {
+        color: #e06c75;
+        text-style: bold;
     }
 
     #deck-line-1 {
@@ -4616,7 +4687,8 @@ class SpoffTUI(App):
         if copied:
             self.notify_user(f"Copied {source_label} link for '{title}' to clipboard! ({share_url})")
             try:
-                self.notify(f"{title} - {artist}\n{share_url}", title="Link Copied to Clipboard", timeout=3.5)
+                msg = f"[bold #ffffff]{escape_markup(title)}[/]  [#767676]{escape_markup(artist)}[/]\n[#555555]{escape_markup(share_url)}[/]"
+                self.notify(msg, title="COPIED TO CLIPBOARD", timeout=3.0)
             except Exception:
                 pass
         else:
