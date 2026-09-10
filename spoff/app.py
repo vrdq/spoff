@@ -2248,17 +2248,22 @@ class SpoffTUI(App):
         dock: bottom;
         align: right bottom;
         margin-bottom: 6;
-        margin-right: 2;
-        width: auto;
-        max-width: 55;
+        width: 1fr;
+        max-width: 100%;
         height: auto;
         background: transparent;
     }
 
+    ToastHolder {
+        align-horizontal: right;
+        width: 1fr;
+        height: auto;
+    }
+
     Toast {
         width: auto;
-        min-width: 32;
-        max-width: 54;
+        min-width: 30;
+        max-width: 52;
         height: auto;
         background: #0e0e0e;
         color: #b0b0b0;
@@ -2266,6 +2271,7 @@ class SpoffTUI(App):
         border-left: solid #569f68;
         padding: 0 1;
         margin-top: 1;
+        margin-right: 2;
     }
 
     Toast .toast--title {
