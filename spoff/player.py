@@ -85,6 +85,9 @@ class MPVController:
             if not os.path.exists(self.socket_path):
                 time.sleep(0.05)
                 continue
+            if self.process and self.process.poll() is not None:
+                time.sleep(0.2)
+                continue
             try:
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
                     s.connect(self.socket_path)

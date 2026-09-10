@@ -2680,6 +2680,16 @@ class SpoffTUI(App):
         Binding("tab", "toggle_focus", "Switch Pane", show=False, priority=True),
     ]
 
+    def _dispatch_mpris(self, callback, *args):
+        try:
+            loop = getattr(self, "_loop", None)
+            if loop and loop.is_running():
+                loop.call_soon_threadsafe(callback, *args)
+            else:
+                self.call_from_thread(callback, *args)
+        except Exception as e:
+            logger.error(f"Error dispatching MPRIS callback: {e}")
+
     def __init__(self):
         super().__init__()
         self.volume: int = get_saved_volume()
@@ -2691,16 +2701,16 @@ class SpoffTUI(App):
         self.vis_color: str = get_saved_visualizer_color()
         self.visualizer = CavaVisualizer(bars=24, style=self.vis_style, color=self.vis_color)
         mpris_callbacks = {
-            "play_pause": lambda: self.call_from_thread(self.action_toggle_play),
-            "play": lambda: self.call_from_thread(self._mpris_play),
-            "pause": lambda: self.call_from_thread(self._mpris_pause),
-            "next": lambda: self.call_from_thread(self.action_next_track),
-            "prev": lambda: self.call_from_thread(self.action_prev_track),
-            "stop": lambda: self.call_from_thread(self._mpris_stop),
-            "seek": lambda sec: self.call_from_thread(self._mpris_seek, sec),
-            "set_position": lambda sec: self.call_from_thread(self._mpris_set_pos, sec),
-            "set_volume": lambda vol: self.call_from_thread(self._mpris_set_vol, vol),
-            "quit": lambda: self.call_from_thread(self.action_quit_app),
+            "play_pause": lambda: self._dispatch_mpris(self.action_toggle_play),
+            "play": lambda: self._dispatch_mpris(self._mpris_play),
+            "pause": lambda: self._dispatch_mpris(self._mpris_pause),
+            "next": lambda: self._dispatch_mpris(self.action_next_track),
+            "prev": lambda: self._dispatch_mpris(self.action_prev_track),
+            "stop": lambda: self._dispatch_mpris(self._mpris_stop),
+            "seek": lambda sec: self._dispatch_mpris(self._mpris_seek, sec),
+            "set_position": lambda sec: self._dispatch_mpris(self._mpris_set_pos, sec),
+            "set_volume": lambda vol: self._dispatch_mpris(self._mpris_set_vol, vol),
+            "quit": lambda: self._dispatch_mpris(self.action_quit_app),
         }
         self.mpris = MPRISService(mpris_callbacks)
         self.update_info: Optional[Dict[str, Any]] = None
@@ -4065,6 +4075,8 @@ class SpoffTUI(App):
         if self.player.is_paused:
             self.player.toggle_pause()
             self.update_player_hud()
+        elif self.player.current_track is None:
+            self.action_toggle_play()
 
     def _mpris_pause(self):
         if not self.player.is_paused and self.player.current_track:
