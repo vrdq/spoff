@@ -222,6 +222,24 @@ def save_instant_search(enabled: bool):
     except Exception as e:
         logger.error(f"Error saving instant search setting: {e}")
 
+def get_saved_auto_update() -> bool:
+    """Retrieves whether auto-update is enabled, defaulting to True."""
+    try:
+        cfg = load_config()
+        return bool(cfg.get("auto_update", True))
+    except Exception as e:
+        logger.error(f"Error reading auto update setting: {e}")
+        return True
+
+def save_auto_update(enabled: bool):
+    """Persists auto-update setting to config."""
+    try:
+        cfg = load_config()
+        cfg["auto_update"] = bool(enabled)
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving auto update setting: {e}")
+
 def get_saved_visualizer_style() -> str:
     """Retrieves active visualizer style ('bars', 'braille', 'stereo', 'wave', 'dots'), defaulting to 'bars'."""
     try:

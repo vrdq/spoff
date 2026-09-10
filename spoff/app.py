@@ -2,6 +2,7 @@ import sys
 import os
 import re
 import signal
+import subprocess
 
 if "TEXTUAL_FPS" not in os.environ:
     os.environ["TEXTUAL_FPS"] = "60"
@@ -39,6 +40,7 @@ try:
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
         get_saved_transparency, save_transparency, get_saved_instant_search, save_instant_search,
+        get_saved_auto_update, save_auto_update,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings
     )
@@ -71,6 +73,7 @@ except ImportError:
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
         get_saved_transparency, save_transparency, get_saved_instant_search, save_instant_search,
+        get_saved_auto_update, save_auto_update,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings
     )
@@ -304,6 +307,13 @@ class InstantSearchToggle(Static):
         if isinstance(self.screen, SettingsModal):
             self.screen.toggle_instant_search()
 
+class AutoUpdateToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_auto_update()
+
 class SearchEngineToggle(Static):
     can_focus = True
 
@@ -360,6 +370,7 @@ class SettingsModal(ModalScreen[None]):
                 yield AdvModeToggle(id="adv-mode-toggle", classes="setting-toggle-item")
                 yield TransparencyToggle(id="transparency-toggle", classes="setting-toggle-item")
                 yield InstantSearchToggle(id="instant-search-toggle", classes="setting-toggle-item")
+                yield AutoUpdateToggle(id="auto-update-toggle", classes="setting-toggle-item")
                 yield SearchEngineToggle(id="engine-toggle", classes="setting-toggle-item")
                 yield VisualizerStyleToggle(id="vis-style-toggle", classes="setting-toggle-item")
                 yield VisualizerColorToggle(id="vis-color-toggle", classes="setting-toggle-item")
@@ -414,6 +425,12 @@ class SettingsModal(ModalScreen[None]):
             else:
                 instant_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]Instant Search[/]  [dim]— Track table focused; press / to activate search bar[/dim]")
 
+            autoup_toggle = self.query_one("#auto-update-toggle", AutoUpdateToggle)
+            if getattr(self.spoff_app, "auto_update", True):
+                autoup_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]Auto-Update[/]  [dim]— Automatically downloads & installs updates in background[/dim]")
+            else:
+                autoup_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]Auto-Update[/]  [dim]— Manual notification only; press 'u' to update[/dim]")
+
             eng_toggle = self.query_one("#engine-toggle", SearchEngineToggle)
             if getattr(self.spoff_app, "search_engine", "ytmusic") == "spotify":
                 eng_toggle.update("[bold #569f68]● SPOTIFY[/]   [#ffffff]Search Engine[/]  [dim]— Official Spotify catalogue (syncs with Spotify)[/dim]")
@@ -447,6 +464,12 @@ class SettingsModal(ModalScreen[None]):
         self.update_toggle_ui()
         state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
         self.query_one("#settings-status-line", Static).update(f"Instant Search {state_text}.")
+
+    def toggle_auto_update(self) -> None:
+        new_state = self.spoff_app.toggle_auto_update()
+        self.update_toggle_ui()
+        state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
+        self.query_one("#settings-status-line", Static).update(f"Auto-Update {state_text}.")
 
     def toggle_search_engine(self) -> None:
         new_engine = self.spoff_app.toggle_search_engine()
@@ -585,6 +608,8 @@ class SettingsModal(ModalScreen[None]):
             self.toggle_transparency()
         elif focused_id == "instant-search-toggle":
             self.toggle_instant_search()
+        elif focused_id == "auto-update-toggle":
+            self.toggle_auto_update()
         elif focused_id == "engine-toggle":
             self.toggle_search_engine()
         elif focused_id == "vis-style-toggle":
@@ -620,7 +645,7 @@ class SettingsModal(ModalScreen[None]):
             return
 
         table = self.query_one("#settings-table", DataTable)
-        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "instant-search-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle"]
+        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "instant-search-toggle", "auto-update-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle"]
         focused_id = self.focused.id if self.focused else None
 
         if focused_id in toggle_ids:
@@ -646,6 +671,8 @@ class SettingsModal(ModalScreen[None]):
                     self.toggle_transparency()
                 elif focused_id == "instant-search-toggle":
                     self.toggle_instant_search()
+                elif focused_id == "auto-update-toggle":
+                    self.toggle_auto_update()
                 elif focused_id == "engine-toggle":
                     self.toggle_search_engine()
                 elif focused_id == "vis-style-toggle":
@@ -1516,7 +1543,7 @@ class SpoffTUI(App):
         dock: top;
         background: transparent;
         border-bottom: solid #262626;
-        padding: 0 2;
+        padding: 1 2 0 2;
         align: left middle;
     }
 
@@ -2368,6 +2395,7 @@ class SpoffTUI(App):
         self.search_engine: str = get_saved_search_engine()
         self.transparency: bool = get_saved_transparency()
         self.instant_search: bool = get_saved_instant_search()
+        self.auto_update: bool = get_saved_auto_update()
         self.player.playback_finished_callback = self.on_track_finished
         atexit.register(self._cleanup_on_exit)
 
@@ -2397,6 +2425,15 @@ class SpoffTUI(App):
         self.instant_search = bool(enabled)
         save_instant_search(self.instant_search)
 
+    def toggle_auto_update(self) -> bool:
+        self.auto_update = not self.auto_update
+        save_auto_update(self.auto_update)
+        return self.auto_update
+
+    def set_auto_update(self, enabled: bool) -> None:
+        self.auto_update = bool(enabled)
+        save_auto_update(self.auto_update)
+
     def apply_transparency(self) -> None:
         bg_val = "ansi_default" if self.transparency else "#121212"
         self.styles.background = bg_val
@@ -2406,6 +2443,12 @@ class SpoffTUI(App):
                     s.styles.background = bg_val
         except Exception:
             pass
+        if os.environ.get("KITTY_WINDOW_ID") or os.environ.get("TERM") == "xterm-kitty":
+            try:
+                op = "0.85" if self.transparency else "1.0"
+                subprocess.run(["kitten", "@", "set-background-opacity", op], capture_output=True, timeout=0.2)
+            except Exception:
+                pass
 
     def set_search_engine(self, engine: str) -> None:
         self.search_engine = "spotify" if engine == "spotify" else "ytmusic"
@@ -3671,28 +3714,55 @@ class SpoffTUI(App):
             info = check_for_updates()
             if info and info.get("has_update"):
                 self.update_info = info
-                def _notify():
-                    try:
-                        pill_text = "[bold #c4a768]▲ Update[/]" if self.advanced_mode else "[bold #c4a768]▲ Update (u)[/]"
-                        self.query_one("#update-pill", Static).update(pill_text)
-                    except Exception:
-                        pass
-                    msg = info.get("message", "")
-                    sha = info.get("remote_sha", "")
-                    self.notify_user(f"Update available: {sha} ({msg})" if self.advanced_mode else f"Update available: {sha} ({msg}) — Press 'u' to update")
-                self.call_from_thread(_notify)
+                if self.auto_update:
+                    def _auto_start():
+                        try:
+                            self.query_one("#update-pill", Static).update("[bold #c4a768]▲ Updating...[/]")
+                        except Exception:
+                            pass
+                    self.call_from_thread(_auto_start)
+
+                    ok, msg = perform_update()
+                    def _auto_done():
+                        if ok:
+                            try:
+                                self.query_one("#update-pill", Static).update("[bold #569f68]✓ Updated[/]")
+                            except Exception:
+                                pass
+                            sha = info.get("remote_sha", "")
+                            self.notify_user(f"Spoff updated to {sha}! Restart to apply.")
+                        else:
+                            try:
+                                pill_text = "[bold #c4a768]▲ Update[/]" if self.advanced_mode else "[bold #c4a768]▲ Update (u)[/]"
+                                self.query_one("#update-pill", Static).update(pill_text)
+                            except Exception:
+                                pass
+                            self.notify_user(f"Auto-update: {msg} (Press 'u' to update)")
+                    self.call_from_thread(_auto_done)
+                else:
+                    def _notify():
+                        try:
+                            pill_text = "[bold #c4a768]▲ Update[/]" if self.advanced_mode else "[bold #c4a768]▲ Update (u)[/]"
+                            self.query_one("#update-pill", Static).update(pill_text)
+                        except Exception:
+                            pass
+                        msg = info.get("message", "")
+                        sha = info.get("remote_sha", "")
+                        self.notify_user(f"Update available: {sha} ({msg})" if self.advanced_mode else f"Update available: {sha} ({msg}) — Press 'u' to update")
+                    self.call_from_thread(_notify)
         except Exception as e:
             logger.debug(f"Background update check failed: {e}")
 
     def action_check_update(self):
+        def _handle(confirmed: Optional[bool]):
+            if confirmed:
+                self.notify_user("Updated to latest version! Please restart Spoff.")
+                try:
+                    self.query_one("#update-pill", Static).update("[bold #569f68]✓ Up to date[/]")
+                except Exception:
+                    pass
+
         if self.update_info:
-            def _handle(confirmed: Optional[bool]):
-                if confirmed:
-                    self.notify_user("Updated to latest version! Please restart Spoff.")
-                    try:
-                        self.query_one("#update-pill", Static).update("[bold #569f68]✓ Up to date[/]")
-                    except Exception:
-                        pass
             self.push_screen(UpdateModal(self.update_info), _handle)
         else:
             self.notify_user("Checking for updates on GitHub...")
@@ -3705,7 +3775,7 @@ class SpoffTUI(App):
                             self.query_one("#update-pill", Static).update("[bold #c4a768]▲ Update (u)[/]")
                         except Exception:
                             pass
-                        self.push_screen(UpdateModal(info))
+                        self.push_screen(UpdateModal(info), _handle)
                     self.call_from_thread(_show)
                 else:
                     self.notify_user("Spoff is up to date on the latest GitHub commit.")
