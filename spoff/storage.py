@@ -288,7 +288,7 @@ def get_custom_keybindings() -> Dict[str, str]:
         cfg = load_config()
         kb = cfg.get("keybindings")
         if isinstance(kb, dict):
-            return {str(k): str(v) for k, v in kb.items() if v}
+            return {str(k): str(v) for k, v in kb.items() if v is not None}
     except Exception as e:
         logger.error(f"Error reading custom keybindings: {e}")
     return {}

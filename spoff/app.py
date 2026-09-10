@@ -278,7 +278,7 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "toggle_play": ("Playback", "Play / Pause (Space / F8)"),
     "next_track": ("Playback", "Next Track (n / F9)"),
     "prev_track": ("Playback", "Previous Track (p / F7)"),
-    "share_track": ("Playback", "Copy Track Link / Share (c / y)"),
+    "share_track": ("Playback", "Copy Track Link / Share"),
     "seek_fwd": ("Playback", "Seek Forward (+5s)"),
     "seek_bwd": ("Playback", "Seek Backward (-5s)"),
     "cursor_up": ("Navigation", "Move Cursor Up (k)"),
@@ -352,7 +352,7 @@ def canonicalize_key(k: str) -> str:
 
 def format_key_display(k: str) -> str:
     if not k:
-        return "[dim]None[/dim]"
+        return "[dim]Unbound[/dim]"
     special_labels = {
         "space": "Space",
         "slash": "/",
@@ -555,11 +555,11 @@ class VisualizerColorToggle(Static):
         if isinstance(self.screen, SettingsModal):
             self.screen.cycle_visualizer_color()
 
-class RebindKeyModal(ModalScreen[Optional[str]]):
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel", priority=True),
-    ]
+class KeyCaptureBox(Static):
+    can_focus = True
 
+
+class RebindKeyModal(ModalScreen[Optional[str]]):
     def __init__(
         self,
         action_id: str,
@@ -576,100 +576,113 @@ class RebindKeyModal(ModalScreen[Optional[str]]):
         self.current_key = current_key
         self.default_key = default_key
         self.existing_bindings = existing_bindings
+        self.selected_key = current_key
 
     def compose(self) -> ComposeResult:
-        cur_disp = format_key_display(self.current_key)
-        def_disp = format_key_display(self.default_key)
+        cur_disp = format_key_display(self.current_key) if self.current_key else "[dim #888888]Unbound[/]"
+        def_disp = format_key_display(self.default_key) if self.default_key else "[dim #888888]None[/]"
         with Vertical(id="rebind-dialog"):
             with Horizontal(id="rebind-header"):
                 yield Static("REBIND SHORTCUT", id="rebind-title")
-                yield Static("[dim]Esc to cancel[/dim]", id="rebind-close-hint")
+                yield Static("[dim]Esc to unbind  |  Ctrl+C to cancel[/dim]", id="rebind-close-hint")
 
-            yield Static(f"Action: [bold #ffffff]{self.action_title}[/]  [dim]({self.action_category})[/dim]", id="rebind-action-info")
-            yield Static(f"Current: [bold #569f68]{cur_disp}[/]  |  Default: [dim]{def_disp}[/dim]", id="rebind-curr-info")
-            yield Static(
-                "[dim]Press key combination (e.g. [/][bold #ffffff]Ctrl+1[/][dim], [/][bold #ffffff]Alt+1[/][dim], [/][bold #ffffff]Space[/][dim]) or type it below:[/dim]",
-                id="rebind-inst"
-            )
-            yield Input(value=self.current_key, placeholder="e.g. ctrl+1, alt+k, space", id="rebind-input")
-            yield Static("", id="rebind-preview")
+            yield Static(f"Action: [bold #ffffff]{self.action_title}[/]  [#767676]({self.action_category})[/]", id="rebind-action-info")
+            yield Static(f"Current: [bold #569f68]{cur_disp}[/]   [#444444]•[/]   Default: [dim]{def_disp}[/dim]", id="rebind-curr-info")
+
+            with Vertical(id="rebind-capture-container"):
+                yield KeyCaptureBox(
+                    "[bold #569f68]● LISTENING FOR KEYPRESS...[/]\n[#767676]Press any key, function key, or combo (e.g. [/][bold #ffffff]y[/][#767676], [/][bold #ffffff]Space[/][#767676], [/][bold #ffffff]Ctrl+1[/][#767676])[/]",
+                    id="rebind-capture-box"
+                )
+                yield Static(f"[dim]Current:[/] [bold #569f68]{cur_disp}[/]", id="rebind-key-display")
+                yield Static("[#767676]Press Enter to keep, Esc to unbind, or press a new key to rebind[/]", id="rebind-conflict-warning")
+
             with Horizontal(id="rebind-buttons"):
-                yield Button("Save Keybind", variant="primary", id="rebind-btn-save")
+                yield Button("Save [Enter]", variant="primary", id="rebind-btn-save")
+                yield Button("Unbind [Esc]", variant="warning", id="rebind-btn-unbind")
                 yield Button("Reset Default", id="rebind-btn-default")
-                yield Button("Cancel", variant="error", id="rebind-btn-cancel")
+                yield Button("Cancel [Ctrl+C]", id="rebind-btn-cancel")
 
     def on_mount(self) -> None:
-        self._update_preview(self.current_key)
         try:
-            inp = self.query_one("#rebind-input", Input)
-            inp.focus()
-            inp.action_end()
+            box = self.query_one("#rebind-capture-box", KeyCaptureBox)
+            box.focus()
         except Exception:
             pass
 
     def _update_preview(self, val: str) -> None:
-        c_key = canonicalize_key(val)
-        if not c_key:
-            prev_text = "[dim]Formatted:[/] [bold #888888]Unbound (None)[/]"
-        else:
-            prev_text = f"[dim]Formatted:[/] [bold #569f68]{format_key_display(c_key)}[/]"
-
-        if c_key:
-            conflicting_act = None
-            for other_id, bound in self.existing_bindings.items():
-                if other_id != self.action_id and canonicalize_key(bound) == c_key:
-                    conflicting_act = other_id
-                    break
-            if conflicting_act:
-                _, conf_title = ACTION_INFO.get(conflicting_act, ("General", conflicting_act))
-                prev_text += f"   [bold #c4a768]⚠ Replaces '{conf_title}'[/]"
+        c_key = canonicalize_key(val) if val else ""
+        disp = format_key_display(c_key) if c_key else "[dim #888888]Unbound[/]"
 
         try:
-            self.query_one("#rebind-preview", Static).update(prev_text)
+            self.query_one("#rebind-capture-box", KeyCaptureBox).update(
+                "[bold #569f68]● KEY DETECTED[/]\n[#767676]Press [bold #ffffff]Enter[/] to save, [bold #ffffff]Esc[/] to unbind, or press another key to change[/]"
+            )
+            self.query_one("#rebind-key-display", Static).update(
+                f"[dim]Captured:[/] [bold #569f68]{disp}[/]"
+            )
+
+            conflicting_act = None
+            if c_key:
+                for other_id, bound in self.existing_bindings.items():
+                    if other_id != self.action_id and canonicalize_key(bound) == c_key:
+                        conflicting_act = other_id
+                        break
+
+            warning_lbl = self.query_one("#rebind-conflict-warning", Static)
+            if conflicting_act:
+                _, conf_title = ACTION_INFO.get(conflicting_act, ("General", conflicting_act))
+                warning_lbl.update(f"[bold #c4a768]⚠ Replaces existing shortcut for '{conf_title}'[/]")
+            else:
+                warning_lbl.update("[#569f68]✓ Valid shortcut. Press Enter to confirm.[/]")
         except Exception:
             pass
 
-    def on_input_changed(self, event: Input.Changed) -> None:
-        if event.input.id == "rebind-input":
-            self._update_preview(event.value)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "rebind-input":
-            c_key = canonicalize_key(event.value)
-            self.dismiss(c_key)
-
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "rebind-btn-save":
-            inp = self.query_one("#rebind-input", Input)
-            self.dismiss(canonicalize_key(inp.value))
+            self.dismiss(canonicalize_key(self.selected_key) if self.selected_key else "")
+        elif event.button.id == "rebind-btn-unbind":
+            self.dismiss("")
         elif event.button.id == "rebind-btn-default":
             self.dismiss(self.default_key)
         elif event.button.id == "rebind-btn-cancel":
             self.dismiss(None)
 
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
     def on_key(self, event: events.Key) -> None:
-        if event.key == "escape":
+        ek_lower = (event.key or "").lower()
+
+        # 1. Escape -> Unbind! (User explicitly requested: going to bind area and pressing esc unbinds)
+        if ek_lower == "escape":
+            self.dismiss("")
+            event.prevent_default()
+            event.stop()
+            return
+
+        # 2. Backspace -> Reset to default
+        if ek_lower == "backspace":
+            self.dismiss(self.default_key)
+            event.prevent_default()
+            event.stop()
+            return
+
+        # 3. Enter / Return -> Confirm captured key
+        if ek_lower in ("enter", "return"):
+            self.dismiss(canonicalize_key(self.selected_key) if self.selected_key else "")
+            event.prevent_default()
+            event.stop()
+            return
+
+        # 4. Ctrl+C -> Cancel without changes
+        if ek_lower == "ctrl+c":
             self.dismiss(None)
             event.prevent_default()
             event.stop()
             return
 
-        ek_lower = (event.key or "").lower()
-        has_modifier = ("+" in ek_lower) or ek_lower.startswith("ctrl+") or ek_lower.startswith("alt+")
-        is_fn = ek_lower.startswith("f") and ek_lower[1:].isdigit()
-        is_media = ek_lower in (
-            "audio_prev", "audio_next", "audio_play", "audio_pause", "mediaplaypause",
-            "medianexttrack", "mediaprevioustrack", "audio_mute", "audio_lower_volume", "audio_raise_volume"
-        )
-        is_special = ek_lower in ("space", "tab", "backspace", "delete", "up", "down", "left", "right", "home", "end", "pageup", "pagedown")
-
-        if (has_modifier or is_fn or is_media or is_special) and ek_lower not in ("enter", "return"):
-            captured = normalize_captured_key(event.key, getattr(event, "character", None))
-            inp = self.query_one("#rebind-input", Input)
-            inp.value = captured
+        # 5. Any other keypress -> capture immediately!
+        captured = normalize_captured_key(event.key, getattr(event, "character", None))
+        if captured:
+            self.selected_key = captured
             self._update_preview(captured)
             event.prevent_default()
             event.stop()
@@ -685,6 +698,8 @@ class SettingsModal(ModalScreen[None]):
         Binding("up", "cursor_up", "Up", show=False),
         Binding("enter", "select_or_toggle", "Select", show=False),
         Binding("space", "select_or_toggle", "Toggle", show=False),
+        Binding("u", "unbind_selected_key", "Unbind Key", show=False),
+        Binding("delete", "unbind_selected_key", "Unbind Key", show=False),
         Binding("backspace", "reset_selected_key", "Reset Key", show=False),
         Binding("r", "reset_selected_key", "Reset Key", show=False),
         Binding("R", "reset_all_keys", "Reset All", show=False),
@@ -717,7 +732,7 @@ class SettingsModal(ModalScreen[None]):
             yield Static("REBINDABLE ACTIONS", id="settings-table-title")
             yield DataTable(id="settings-table", cursor_type="row", show_header=True)
             yield Static("", id="settings-status-line")
-            yield Static("[dim]Enter: rebind  |  Backspace / r: reset key  |  R: reset all  |  j/k: navigate[/dim]", id="settings-footer")
+            yield Static("[dim]Enter: rebind  |  u / Del: unbind  |  Backspace: reset default  |  R: reset all  |  j/k: navigate[/dim]", id="settings-footer")
 
     def on_mount(self) -> None:
         self.update_toggle_ui()
@@ -732,8 +747,13 @@ class SettingsModal(ModalScreen[None]):
             cat, title = ACTION_INFO[act_id]
             cur_key = self.spoff_app.keybindings.get(act_id, "")
             is_default = (cur_key == DEFAULT_KEYBINDINGS.get(act_id))
-            status_str = "[dim]Default[/dim]" if is_default else "[bold #569f68]Custom[/]"
-            table.add_row(cat, title, format_key_display(cur_key), status_str, key=act_id)
+            if not cur_key:
+                disp_k = "[dim #888888]Unbound[/]"
+                status_str = "[dim #c47676]Unbound[/]"
+            else:
+                disp_k = format_key_display(cur_key)
+                status_str = "[dim]Default[/dim]" if is_default else "[bold #569f68]Custom[/]"
+            table.add_row(cat, title, disp_k, status_str, key=act_id)
 
         try:
             self.query_one("#adv-mode-toggle", AdvModeToggle).focus()
@@ -749,7 +769,7 @@ class SettingsModal(ModalScreen[None]):
                 self.query_one("#settings-close-hint", Static).update("")
             else:
                 adv_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]Advanced Mode[/]  [dim]— Press Space/Enter to hide keybind indicators[/dim]")
-                self.query_one("#settings-footer", Static).update("[dim]Enter: rebind  |  Backspace / r: reset key  |  R: reset all  |  j/k: navigate[/dim]")
+                self.query_one("#settings-footer", Static).update("[dim]Enter: rebind  |  u / Del: unbind  |  Backspace: reset default  |  R: reset all  |  j/k: navigate[/dim]")
                 self.query_one("#settings-close-hint", Static).update("[dim]Esc / q to close[/dim]")
 
             trans_toggle = self.query_one("#transparency-toggle", TransparencyToggle)
@@ -858,7 +878,7 @@ class SettingsModal(ModalScreen[None]):
             return
 
         _, act_title = ACTION_INFO.get(act_id, ("General", act_id))
-        new_key = canonicalize_key(new_key)
+        new_key = canonicalize_key(new_key) if new_key else ""
 
         conflicting_act = None
         if new_key:
@@ -867,13 +887,16 @@ class SettingsModal(ModalScreen[None]):
                     conflicting_act = other_id
                     break
 
-        disp_key = format_key_display(new_key)
-        status_msg = f"Bound [bold #ffffff]'{act_title}'[/] to [bold #569f68]{disp_key}[/]."
-        if conflicting_act:
-            _, conf_title = ACTION_INFO.get(conflicting_act, ("General", conflicting_act))
-            self.spoff_app.set_custom_keybinding(conflicting_act, "")
-            status_msg += f" [dim](Unbound conflicting '{conf_title}')[/dim]"
-            self._refresh_row(conflicting_act)
+        if not new_key:
+            status_msg = f"Unbound [bold #ffffff]'{act_title}'[/]."
+        else:
+            disp_key = format_key_display(new_key)
+            status_msg = f"Bound [bold #ffffff]'{act_title}'[/] to [bold #569f68]{disp_key}[/]."
+            if conflicting_act:
+                _, conf_title = ACTION_INFO.get(conflicting_act, ("General", conflicting_act))
+                self.spoff_app.set_custom_keybinding(conflicting_act, "")
+                status_msg += f" [dim](Unbound conflicting '{conf_title}')[/dim]"
+                self._refresh_row(conflicting_act)
 
         self.spoff_app.set_custom_keybinding(act_id, new_key)
         self._refresh_row(act_id)
@@ -888,6 +911,9 @@ class SettingsModal(ModalScreen[None]):
         if key_override:
             disp_key = key_override
             disp_status = "[bold #569f68]Capturing[/]"
+        elif not cur_key:
+            disp_key = "[dim #888888]Unbound[/]"
+            disp_status = "[dim #c47676]Unbound[/]"
         else:
             disp_key = format_key_display(cur_key)
             disp_status = "[dim]Default[/dim]" if is_default else "[bold #569f68]Custom[/]"
@@ -899,6 +925,17 @@ class SettingsModal(ModalScreen[None]):
             table.update_cell(act_id, "stat", disp_status)
         except Exception:
             pass
+
+    def action_unbind_selected_key(self) -> None:
+        table = self.query_one("#settings-table", DataTable)
+        if table.cursor_row is not None and table.row_count > 0:
+            act_id = list(ACTION_INFO.keys())[table.cursor_row]
+            self.spoff_app.set_custom_keybinding(act_id, "")
+            self._refresh_row(act_id)
+            _, title = ACTION_INFO.get(act_id, ("General", act_id))
+            self.query_one("#settings-status-line", Static).update(
+                f"Unbound [bold #ffffff]'{title}'[/]."
+            )
 
     def action_reset_selected_key(self) -> None:
         table = self.query_one("#settings-table", DataTable)
@@ -1031,6 +1068,11 @@ class SettingsModal(ModalScreen[None]):
                 return
             elif event.key in ("home",) and table.row_count > 0:
                 table.move_cursor(row=0)
+                event.prevent_default()
+                event.stop()
+                return
+            elif event.key in ("u", "delete"):
+                self.action_unbind_selected_key()
                 event.prevent_default()
                 event.stop()
                 return
@@ -1640,7 +1682,7 @@ class HelpModal(ModalScreen[None]):
             (f"{k_shuf}", "Toggle shuffle mode"),
             (f"{k_rep}", "Cycle repeat (off / all / 1)"),
             (f"{k_prev} / {k_next}, Fn+F7/F9", "Previous / Next track"),
-            (f"{k_share}, y", "Copy track link to clipboard"),
+            (f"{k_share}", "Copy track link to clipboard"),
             ("Left / Right", "Seek -/+ 5 seconds"),
             ("v / Click", "Cycle visualizer mode"),
             ("C", "Cycle visualizer color theme"),
@@ -2609,26 +2651,39 @@ class SpoffTUI(App):
         margin-bottom: 1;
     }
 
-    #rebind-inst {
+    #rebind-capture-container {
+        width: 100%;
         height: auto;
-        color: #767676;
+        background: #0e0e0e;
+        border: solid #222222;
+        padding: 1 2;
+        margin-bottom: 1;
+        align: center middle;
+    }
+
+    #rebind-capture-box {
+        text-align: center;
+        width: 100%;
+        height: auto;
         margin-bottom: 1;
     }
 
-    #rebind-input {
-        background: #1a1a1a;
-        border: solid #282828;
+    #rebind-capture-box:focus {
         color: #ffffff;
-        margin-bottom: 1;
     }
 
-    #rebind-input:focus {
-        border: solid #569f68;
-    }
-
-    #rebind-preview {
+    #rebind-key-display {
+        text-align: center;
+        width: 100%;
         height: 1;
+        text-style: bold;
         margin-bottom: 1;
+    }
+
+    #rebind-conflict-warning {
+        text-align: center;
+        width: 100%;
+        height: 1;
     }
 
     #rebind-buttons {
@@ -2640,7 +2695,7 @@ class SpoffTUI(App):
     #rebind-buttons > Button {
         margin-left: 1;
         height: 3;
-        min-width: 14;
+        min-width: 12;
         background: #222222;
         color: #e2e2e2;
         border: tall #333333;
@@ -2673,16 +2728,16 @@ class SpoffTUI(App):
         text-style: bold;
     }
 
-    #rebind-buttons > Button.-error {
-        background: #261717;
-        color: #c47676;
-        border: tall #562525;
+    #rebind-buttons > Button.-warning {
+        background: #2a2012;
+        color: #c4a768;
+        border: tall #604a25;
     }
 
-    #rebind-buttons > Button.-error:focus {
-        background: #c47676;
+    #rebind-buttons > Button.-warning:focus {
+        background: #c4a768;
         color: #131313;
-        border: tall #df8888;
+        border: tall #deb574;
         text-style: bold;
     }
 
@@ -2854,7 +2909,6 @@ class SpoffTUI(App):
         Binding("a", "add_to_playlist", "Add to Playlist"),
         Binding("+", "add_to_playlist", "Add to Playlist", show=False),
         Binding("c", "share_track", "Share Track"),
-        Binding("y", "share_track", "Share Track", show=False),
         Binding("s", "toggle_shuffle", "Shuffle"),
         Binding("r", "toggle_repeat", "Repeat"),
         Binding("L", "open_spotify_auth", "Spotify", show=False),
@@ -3081,7 +3135,10 @@ class SpoffTUI(App):
         save_visualizer_color(self.vis_color)
 
     def set_custom_keybinding(self, action_id: str, new_key: str) -> None:
-        if not new_key or new_key == DEFAULT_KEYBINDINGS.get(action_id):
+        if new_key is None:
+            new_key = ""
+        new_key = str(new_key).strip()
+        if new_key == DEFAULT_KEYBINDINGS.get(action_id):
             self.custom_keybindings.pop(action_id, None)
         else:
             self.custom_keybindings[action_id] = new_key
@@ -3115,7 +3172,6 @@ class SpoffTUI(App):
             self._bindings.bind("shift+delete", "delete_playlist", show=False)
             self._bindings.bind("x", "delete_item", show=False)
             self._bindings.bind("+", "add_to_playlist", show=False)
-            self._bindings.bind("y", "share_track", show=False)
             self._bindings.bind("shift+l", "open_spotify_auth", show=False)
             self._bindings.bind("S", "open_spotify_auth", show=False)
 
@@ -3560,8 +3616,6 @@ class SpoffTUI(App):
                 matched_action = "delete_item"
             elif (event.key == "+" or event.character in ("+", "a")) and self.keybindings.get("add_to_playlist") == "a":
                 matched_action = "add_to_playlist"
-            elif (event.key in ("c", "y") or event.character in ("c", "y")) and not isinstance(self.focused, Input) and self.keybindings.get("share_track") in ("c", "y"):
-                matched_action = "share_track"
             elif (event.key in ("U",) or event.character in ("u", "U")) and self.keybindings.get("check_update") == "u":
                 matched_action = "check_update"
             elif event.key in ("f1",):
@@ -4974,7 +5028,8 @@ class SpoffTUI(App):
                 lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
                 hints = f"Enter/Click: seek to line  |  Space: pause  |  s: shuf  |  r: rep  |  Esc/{lyr_k}: back  |  q: quit"
             else:
-                share_k = format_key_display(self.keybindings.get("share_track", "c"))
+                share_bound = self.keybindings.get("share_track", "")
+                share_hint = f"{format_key_display(share_bound)}: share  |  " if share_bound else ""
                 shuf_k = format_key_display(self.keybindings.get("toggle_shuffle", "s"))
                 rep_k = format_key_display(self.keybindings.get("toggle_repeat", "r"))
                 lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
@@ -4984,7 +5039,7 @@ class SpoffTUI(App):
                 help_k = format_key_display(self.keybindings.get("show_help", ":"))
                 help_label = ": help" if help_k in (":", "colon") else f"{help_k}: help"
                 quit_k = format_key_display(self.keybindings.get("quit_app", "q"))
-                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {share_k}: share  |  {shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {vis_k}: vis  |  {seek_k}: seek  |  {sett_k}: set  |  {help_label}  |  {quit_k}: quit"
+                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {share_hint}{shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {vis_k}: vis  |  {seek_k}: seek  |  {sett_k}: set  |  {help_label}  |  {quit_k}: quit"
             try:
                 deck_l3 = self.query_one("#deck-line-3", Static)
                 deck_l3.update(escape(hints))
