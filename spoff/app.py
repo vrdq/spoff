@@ -3,6 +3,9 @@ import os
 import re
 import signal
 import subprocess
+import shutil
+import base64
+import urllib.parse
 
 if "TEXTUAL_FPS" not in os.environ:
     os.environ["TEXTUAL_FPS"] = "60"
@@ -108,10 +111,130 @@ def format_time(seconds: Any) -> str:
     except (ValueError, TypeError, OverflowError):
         return "00:00"
 
+def resolve_track_url(track: Dict[str, Any]) -> Tuple[str, str]:
+    """
+    Resolves the shareable URL and source service name for a track.
+    Returns (share_url, service_name).
+    """
+    raw_url = str(track.get("url") or "").strip()
+    raw_id = str(track.get("id") or "").strip()
+    raw_uri = str(track.get("uri") or "").strip()
+    raw_src = str(track.get("source") or "").lower()
+
+    # 1. Spotify track
+    if raw_uri.startswith("spotify:track:"):
+        sp_id = raw_uri.split(":")[-1]
+        return f"https://open.spotify.com/track/{sp_id}", "Spotify"
+    if "open.spotify.com/track/" in raw_url:
+        return raw_url, "Spotify"
+    if raw_src == "spotify" and raw_id:
+        return f"https://open.spotify.com/track/{raw_id}", "Spotify"
+    if len(raw_id) == 22 and raw_id.isalnum() and not raw_url.startswith("http"):
+        return f"https://open.spotify.com/track/{raw_id}", "Spotify"
+
+    # 2. YouTube / YouTube Music track
+    if "music.youtube.com" in raw_url or "youtube.com" in raw_url or "youtu.be" in raw_url:
+        label = "YouTube Music" if "music.youtube" in raw_url else "YouTube"
+        return raw_url, label
+    if len(raw_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', raw_id):
+        return f"https://music.youtube.com/watch?v={raw_id}", "YouTube Music"
+    if raw_url.startswith("http://") or raw_url.startswith("https://"):
+        return raw_url, "Web"
+
+    # 3. Fallback search query
+    title = str(track.get("title") or "").strip()
+    artist = str(track.get("artist") or "").strip()
+    clean_artist = "" if artist.lower() in ("unknown artist", "unknown", "none", "") else artist
+    query = f"{title} {clean_artist}".strip() if clean_artist else title
+    if query:
+        encoded = urllib.parse.quote(query)
+        if raw_src == "spotify":
+            return f"https://open.spotify.com/search/{encoded}", "Spotify"
+        return f"https://music.youtube.com/search?q={encoded}", "YouTube Music"
+
+    return "", ""
+
+
+def copy_to_clipboard(text: str, app: Optional[Any] = None) -> bool:
+    """
+    Copies text to the system clipboard across Wayland (wl-copy), X11 (xclip/xsel),
+    Textual's clipboard driver, and OSC 52 terminal escape sequence.
+    """
+    if not text:
+        return False
+    copied = False
+
+    # 1. Textual App API
+    if app and hasattr(app, "copy_to_clipboard"):
+        try:
+            app.copy_to_clipboard(text)
+            copied = True
+        except Exception:
+            pass
+
+    # 2. Wayland wl-copy (Fast & native in Hyprland / Wayland desktops)
+    if shutil.which("wl-copy"):
+        try:
+            res = subprocess.run(
+                ["wl-copy"],
+                input=text,
+                text=True,
+                capture_output=True,
+                timeout=1.0
+            )
+            if res.returncode == 0:
+                copied = True
+        except Exception:
+            pass
+
+    # 3. X11 xclip fallback
+    if not copied and shutil.which("xclip"):
+        try:
+            res = subprocess.run(
+                ["xclip", "-selection", "clipboard"],
+                input=text,
+                text=True,
+                capture_output=True,
+                timeout=1.0
+            )
+            if res.returncode == 0:
+                copied = True
+        except Exception:
+            pass
+
+    # 4. X11 xsel fallback
+    if not copied and shutil.which("xsel"):
+        try:
+            res = subprocess.run(
+                ["xsel", "--clipboard", "--input"],
+                input=text,
+                text=True,
+                capture_output=True,
+                timeout=1.0
+            )
+            if res.returncode == 0:
+                copied = True
+        except Exception:
+            pass
+
+    # 5. OSC 52 escape sequence (Terminal emulator clipboard sync)
+    try:
+        b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
+        osc52 = f"\033]52;c;{b64}\a"
+        sys.stdout.write(osc52)
+        sys.stdout.flush()
+        copied = True
+    except Exception:
+        pass
+
+    return copied
+
+
 DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "toggle_play": "space",
     "next_track": "n",
     "prev_track": "p",
+    "share_track": "c",
     "seek_fwd": "right",
     "seek_bwd": "left",
     "cursor_up": "k",
@@ -150,6 +273,7 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "toggle_play": ("Playback", "Play / Pause (Space / F8)"),
     "next_track": ("Playback", "Next Track (n / F9)"),
     "prev_track": ("Playback", "Previous Track (p / F7)"),
+    "share_track": ("Playback", "Copy Track Link / Share (c / y)"),
     "seek_fwd": ("Playback", "Seek Forward (+5s)"),
     "seek_bwd": ("Playback", "Seek Backward (-5s)"),
     "cursor_up": ("Navigation", "Move Cursor Up (k)"),
@@ -1490,6 +1614,7 @@ class HelpModal(ModalScreen[None]):
         k_prev = format_key_display(kb.get("prev_track", "p"))
         k_next = format_key_display(kb.get("next_track", "n"))
         k_eng = format_key_display(kb.get("switch_engine", "ctrl+e"))
+        k_share = format_key_display(kb.get("share_track", "c"))
 
         nav_rows = [
             (f"{k_s1} / {k_s2} / {k_s3}", "Search / Playlists / Offline"),
@@ -1510,6 +1635,7 @@ class HelpModal(ModalScreen[None]):
             (f"{k_shuf}", "Toggle shuffle mode"),
             (f"{k_rep}", "Cycle repeat (off / all / 1)"),
             (f"{k_prev} / {k_next}, Fn+F7/F9", "Previous / Next track"),
+            (f"{k_share}, y", "Copy track link to clipboard"),
             ("Left / Right", "Seek -/+ 5 seconds"),
             ("v / Click", "Cycle visualizer mode"),
             ("C", "Cycle visualizer color theme"),
@@ -2656,6 +2782,8 @@ class SpoffTUI(App):
         Binding("i", "focus_import", "Import"),
         Binding("a", "add_to_playlist", "Add to Playlist"),
         Binding("+", "add_to_playlist", "Add to Playlist", show=False),
+        Binding("c", "share_track", "Share Track"),
+        Binding("y", "share_track", "Share Track", show=False),
         Binding("s", "toggle_shuffle", "Shuffle"),
         Binding("r", "toggle_repeat", "Repeat"),
         Binding("L", "open_spotify_auth", "Spotify", show=False),
@@ -2916,6 +3044,7 @@ class SpoffTUI(App):
             self._bindings.bind("shift+delete", "delete_playlist", show=False)
             self._bindings.bind("x", "delete_item", show=False)
             self._bindings.bind("+", "add_to_playlist", show=False)
+            self._bindings.bind("y", "share_track", show=False)
             self._bindings.bind("shift+l", "open_spotify_auth", show=False)
             self._bindings.bind("S", "open_spotify_auth", show=False)
 
@@ -3360,6 +3489,8 @@ class SpoffTUI(App):
                 matched_action = "delete_item"
             elif (event.key == "+" or event.character in ("+", "a")) and self.keybindings.get("add_to_playlist") == "a":
                 matched_action = "add_to_playlist"
+            elif (event.key in ("c", "y") or event.character in ("c", "y")) and not isinstance(self.focused, Input) and self.keybindings.get("share_track") in ("c", "y"):
+                matched_action = "share_track"
             elif (event.key in ("U",) or event.character in ("u", "U")) and self.keybindings.get("check_update") == "u":
                 matched_action = "check_update"
             elif event.key in ("f1",):
@@ -4432,6 +4563,65 @@ class SpoffTUI(App):
 
         self.push_screen(AddToPlaylistModal(track, self.playlists), handle_modal_result)
 
+    def action_share_track(self):
+        f = None
+        try:
+            f = self.focused
+            if isinstance(f, Input):
+                return
+        except Exception:
+            f = None
+
+        row_idx = None
+        if isinstance(f, DataTable) and f.id == "track-table":
+            row_idx = f.cursor_row
+        elif self.active_tab in ("search", "playlist", "offline"):
+            try:
+                tt = self.query_one("#track-table", DataTable)
+                if tt.cursor_row is not None:
+                    row_idx = tt.cursor_row
+            except Exception:
+                pass
+
+        tracks = []
+        if self.active_tab == "search":
+            tracks = self.search_results
+        elif self.active_tab == "playlist":
+            tracks = self.current_playlist_tracks
+        elif self.active_tab == "offline":
+            tracks = list(load_offline_index().values())
+
+        track = None
+        if row_idx is not None and 0 <= row_idx < len(tracks) and f and f.id == "track-table":
+            track = tracks[row_idx]
+        elif self.player.current_track:
+            track = self.player.current_track
+        elif row_idx is not None and 0 <= row_idx < len(tracks):
+            track = tracks[row_idx]
+
+        if not track:
+            self.notify_user("No track selected or playing to share.")
+            return
+
+        title = track.get("title", "Unknown Track")
+        artist = track.get("artist", "Unknown Artist")
+        share_url, source_label = resolve_track_url(track)
+
+        if not share_url:
+            self.notify_user(f"Could not generate share link for '{title}'.")
+            return
+
+        copied = copy_to_clipboard(share_url, self)
+
+        if copied:
+            self.notify_user(f"Copied {source_label} link for '{title}' to clipboard! ({share_url})")
+            try:
+                self.notify(f"{title} - {artist}\n{share_url}", title="Link Copied to Clipboard", timeout=3.5)
+            except Exception:
+                pass
+        else:
+            self.notify_user(f"Share link: {share_url}")
+
     def action_delete_playlist(self):
         if isinstance(self.focused, Input):
             return
@@ -4712,6 +4902,7 @@ class SpoffTUI(App):
                 lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
                 hints = f"Enter/Click: seek to line  |  Space: pause  |  s: shuf  |  r: rep  |  Esc/{lyr_k}: back  |  q: quit"
             else:
+                share_k = format_key_display(self.keybindings.get("share_track", "c"))
                 shuf_k = format_key_display(self.keybindings.get("toggle_shuffle", "s"))
                 rep_k = format_key_display(self.keybindings.get("toggle_repeat", "r"))
                 lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
@@ -4721,7 +4912,7 @@ class SpoffTUI(App):
                 help_k = format_key_display(self.keybindings.get("show_help", ":"))
                 help_label = ": help" if help_k in (":", "colon") else f"{help_k}: help"
                 quit_k = format_key_display(self.keybindings.get("quit_app", "q"))
-                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {vis_k}: vis  |  {seek_k}: seek  |  {sett_k}: set  |  {help_label}  |  {quit_k}: quit"
+                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {share_k}: share  |  {shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {vis_k}: vis  |  {seek_k}: seek  |  {sett_k}: set  |  {help_label}  |  {quit_k}: quit"
             try:
                 deck_l3 = self.query_one("#deck-line-3", Static)
                 deck_l3.update(escape(hints))
