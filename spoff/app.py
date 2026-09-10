@@ -2246,7 +2246,7 @@ class SpoffTUI(App):
     /* TOAST / NOTIFICATION POPUPS */
     ToastRack {
         dock: bottom;
-        align: right bottom;
+        align: left bottom;
         margin-bottom: 5;
         width: 1fr;
         max-width: 100%;
@@ -2255,7 +2255,7 @@ class SpoffTUI(App):
     }
 
     ToastHolder {
-        align-horizontal: right;
+        align-horizontal: left;
         width: 1fr;
         height: auto;
     }
@@ -2271,7 +2271,7 @@ class SpoffTUI(App):
         border-left: solid #569f68;
         padding: 0 2;
         margin-top: 1;
-        margin-right: 2;
+        margin-left: 0;
     }
 
     Toast .toast--title {
@@ -3397,15 +3397,7 @@ class SpoffTUI(App):
         return []
 
     def on_resize(self, event: events.Resize) -> None:
-        last_w = getattr(self, "_last_rendered_width", None)
         self._last_rendered_width = event.size.width
-        if last_w is not None:
-            was_compact = last_w < 115
-            is_compact = event.size.width < 115
-            if was_compact != is_compact:
-                tracks = self._get_active_tracks()
-                if tracks:
-                    self.render_tracks(tracks)
 
     def on_key(self, event) -> None:
         if self.focused is None:
@@ -3868,10 +3860,9 @@ class SpoffTUI(App):
         table = self.query_one("#track-table", DataTable)
         old_cursor = table.cursor_row
         table.clear()
-        is_compact = self.size.width < 115
-        spot_name = "spot" if is_compact else "Spotify"
-        ytm_name = "ytm" if is_compact else "YTMusic"
-        loc_name = "local" if is_compact else "Local disk"
+        spot_name = "Spotify"
+        ytm_name = "YTMusic"
+        loc_name = "Local disk"
 
         for idx, t in enumerate(tracks):
             t_id = t.get("id") or str(hash(t.get("title", "") + t.get("artist", "")))
