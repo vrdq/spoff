@@ -145,9 +145,9 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
 }
 
 ACTION_INFO: Dict[str, Tuple[str, str]] = {
-    "toggle_play": ("Playback", "Play / Pause Toggle"),
-    "next_track": ("Playback", "Next Track"),
-    "prev_track": ("Playback", "Previous Track"),
+    "toggle_play": ("Playback", "Play / Pause (Space / F8)"),
+    "next_track": ("Playback", "Next Track (n / F9)"),
+    "prev_track": ("Playback", "Previous Track (p / F7)"),
     "seek_fwd": ("Playback", "Seek Forward (+5s)"),
     "seek_bwd": ("Playback", "Seek Backward (-5s)"),
     "cursor_up": ("Navigation", "Move Cursor Up (k)"),
@@ -195,7 +195,9 @@ def canonicalize_key(k: str) -> str:
             parts = [p.strip() for p in s_lower.split(sep) if p.strip()]
             norm_parts = []
             for p in parts:
-                if p in ("cntrl", "control"): norm_parts.append("ctrl")
+                if p == "fn":
+                    continue
+                elif p in ("cntrl", "control"): norm_parts.append("ctrl")
                 elif p in ("opt", "option"): norm_parts.append("alt")
                 elif p in ("cmd", "command"): norm_parts.append("ctrl")
                 elif p == "esc": norm_parts.append("escape")
@@ -258,9 +260,26 @@ def normalize_captured_key(event_key: str, event_char: Optional[str]) -> str:
     ec = str(event_char or "")
     ek_lower = ek.lower()
 
+    # Audio / Hardware media keys
+    if ek_lower in ("audio_play", "audio_pause", "mediaplaypause"):
+        return "f8"
+    if ek_lower in ("audio_next", "medianexttrack"):
+        return "f9"
+    if ek_lower in ("audio_prev", "mediaprevioustrack"):
+        return "f7"
+    if ek_lower == "audio_mute":
+        return "f1"
+    if ek_lower == "audio_lower_volume":
+        return "f2"
+    if ek_lower == "audio_raise_volume":
+        return "f3"
+
     # 1. Modifiers combinations (ctrl+1, ctrl+shift+a, alt+up, shift+tab)
     if "+" in ek_lower or ek_lower.startswith("ctrl+") or ek_lower.startswith("alt+"):
         parts = [p.strip() for p in ek_lower.split("+") if p.strip()]
+        parts = [p for p in parts if p != "fn"]
+        if not parts:
+            return "fn"
         # Shift + single letter -> uppercase letter
         if len(parts) == 2 and parts[0] == "shift" and len(parts[1]) == 1 and parts[1].isalpha():
             return parts[1].upper()
@@ -268,7 +287,7 @@ def normalize_captured_key(event_key: str, event_char: Optional[str]) -> str:
         if ek_lower == "shift+slash": return "?"
         if ek_lower == "shift+equal": return "+"
         if ek_lower == "ctrl+@": return "ctrl+space"
-        return ek_lower
+        return "+".join(parts)
 
     # 2. Named special keys
     named_keys = {
@@ -510,9 +529,13 @@ class RebindKeyModal(ModalScreen[Optional[str]]):
         ek_lower = (event.key or "").lower()
         has_modifier = ("+" in ek_lower) or ek_lower.startswith("ctrl+") or ek_lower.startswith("alt+")
         is_fn = ek_lower.startswith("f") and ek_lower[1:].isdigit()
+        is_media = ek_lower in (
+            "audio_prev", "audio_next", "audio_play", "audio_pause", "mediaplaypause",
+            "medianexttrack", "mediaprevioustrack", "audio_mute", "audio_lower_volume", "audio_raise_volume"
+        )
         is_special = ek_lower in ("space", "tab", "backspace", "delete", "up", "down", "left", "right", "home", "end", "pageup", "pagedown")
 
-        if (has_modifier or is_fn or is_special) and ek_lower not in ("enter", "return"):
+        if (has_modifier or is_fn or is_media or is_special) and ek_lower not in ("enter", "return"):
             captured = normalize_captured_key(event.key, getattr(event, "character", None))
             inp = self.query_one("#rebind-input", Input)
             inp.value = captured
@@ -2883,6 +2906,30 @@ class SpoffTUI(App):
             self._bindings.bind("+", "add_to_playlist", show=False)
             self._bindings.bind("shift+l", "open_spotify_auth", show=False)
             self._bindings.bind("S", "open_spotify_auth", show=False)
+
+            # Dual playback & volume secondary bindings (hardware Fn & primary keys)
+            self._bindings.bind("space", "toggle_play", show=False)
+            self._bindings.bind("f8", "toggle_play", show=False)
+            self._bindings.bind("audio_play", "toggle_play", show=False)
+            self._bindings.bind("audio_pause", "toggle_play", show=False)
+            self._bindings.bind("mediaplaypause", "toggle_play", show=False)
+
+            self._bindings.bind("n", "next_track", show=False)
+            self._bindings.bind("f9", "next_track", show=False)
+            self._bindings.bind("audio_next", "next_track", show=False)
+            self._bindings.bind("medianexttrack", "next_track", show=False)
+
+            self._bindings.bind("p", "prev_track", show=False)
+            self._bindings.bind("f7", "prev_track", show=False)
+            self._bindings.bind("audio_prev", "prev_track", show=False)
+            self._bindings.bind("mediaprevioustrack", "prev_track", show=False)
+
+            self._bindings.bind("f1", "vol_mute", show=False)
+            self._bindings.bind("audio_mute", "vol_mute", show=False)
+            self._bindings.bind("f2", "vol_down", show=False)
+            self._bindings.bind("audio_lower_volume", "vol_down", show=False)
+            self._bindings.bind("f3", "vol_up", show=False)
+            self._bindings.bind("audio_raise_volume", "vol_up", show=False)
         except Exception:
             pass
         self._update_nav_bar()
@@ -2955,7 +3002,7 @@ class SpoffTUI(App):
                 yield Static("00:00", id="time-elapsed")
                 yield ScrubBar(total=100, show_eta=False, id="playback-bar")
                 yield Static("00:00", id="time-total")
-            yield Static("Enter: play  |  Space: pause  |  s: shuf  |  r: rep  |  4: lyrics  |  : help  |  q: quit", id="deck-line-3")
+            yield Static("Enter: play  |  Space / F8: pause  |  s: shuf  |  r: rep  |  4: lyrics  |  : help  |  q: quit", id="deck-line-3")
 
     def on_mount(self) -> None:
         self.player.start_mpv()
@@ -3090,35 +3137,44 @@ class SpoffTUI(App):
             else:
                 self.query_one("#track-table", DataTable).focus()
 
-        # 1. Hardware media keys
+        # 1. Hardware media keys and global Fn/F playback & volume keys
         k = str(getattr(event, "key", "")).lower()
         name = str(getattr(event, "name", "")).lower()
-        if k in ("audio_prev", "mediaprevioustrack") or name in ("audio_prev", "mediaprevioustrack"):
+
+        # Check if an F-key was explicitly bound to a different action by the user
+        f_custom_action = None
+        if k in ("f1", "f2", "f3", "f7", "f8", "f9"):
+            for act, b in self.keybindings.items():
+                if b and key_matches(k, None, b):
+                    f_custom_action = act
+                    break
+
+        if k in ("audio_prev", "mediaprevioustrack") or name in ("audio_prev", "mediaprevioustrack") or (k == "f7" and f_custom_action in (None, "prev_track")):
             self.action_prev_track()
             event.prevent_default()
             event.stop()
             return
-        elif k in ("audio_play", "audio_pause", "mediaplaypause") or name in ("audio_play", "audio_pause", "mediaplaypause"):
+        elif k in ("audio_play", "audio_pause", "mediaplaypause") or name in ("audio_play", "audio_pause", "mediaplaypause") or (k == "f8" and f_custom_action in (None, "toggle_play")):
             self.action_toggle_play()
             event.prevent_default()
             event.stop()
             return
-        elif k in ("audio_next", "medianexttrack") or name in ("audio_next", "medianexttrack"):
+        elif k in ("audio_next", "medianexttrack") or name in ("audio_next", "medianexttrack") or (k == "f9" and f_custom_action in (None, "next_track")):
             self.action_next_track()
             event.prevent_default()
             event.stop()
             return
-        elif k in ("audio_mute",) or name in ("audio_mute",):
+        elif k in ("audio_mute",) or name in ("audio_mute",) or (k == "f1" and f_custom_action in (None, "vol_mute")):
             self.action_vol_mute()
             event.prevent_default()
             event.stop()
             return
-        elif k in ("audio_lower_volume",) or name in ("audio_lower_volume",):
+        elif k in ("audio_lower_volume",) or name in ("audio_lower_volume",) or (k == "f2" and f_custom_action in (None, "vol_down")):
             self.action_vol_down()
             event.prevent_default()
             event.stop()
             return
-        elif k in ("audio_raise_volume",) or name in ("audio_raise_volume",):
+        elif k in ("audio_raise_volume",) or name in ("audio_raise_volume",) or (k == "f3" and f_custom_action in (None, "vol_up")):
             self.action_vol_up()
             event.prevent_default()
             event.stop()
@@ -3297,6 +3353,16 @@ class SpoffTUI(App):
                 matched_action = "vol_down"
             elif event.key in ("f3",):
                 matched_action = "vol_up"
+            # Dual playback key support: F7/F8/F9 and Space/n/p always work
+            elif (event.key in ("f8", "space") or event.character == " ") and not isinstance(self.focused, Input):
+                if not any(key_matches(event.key, getattr(event, "character", None), b) for act, b in self.keybindings.items() if act != "toggle_play" and b):
+                    matched_action = "toggle_play"
+            elif (event.key in ("f9", "n") or event.character == "n") and not isinstance(self.focused, Input):
+                if not any(key_matches(event.key, getattr(event, "character", None), b) for act, b in self.keybindings.items() if act != "next_track" and b):
+                    matched_action = "next_track"
+            elif (event.key in ("f7", "p") or event.character == "p") and not isinstance(self.focused, Input):
+                if not any(key_matches(event.key, getattr(event, "character", None), b) for act, b in self.keybindings.items() if act != "prev_track" and b):
+                    matched_action = "prev_track"
 
         if matched_action:
             act_method = getattr(self, f"action_{matched_action}", None)
