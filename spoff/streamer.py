@@ -2,7 +2,8 @@ import re
 import time
 import logging
 import threading
-from typing import Optional, Dict, Any, Tuple, cast
+from pathlib import Path
+from typing import Optional, Dict, Any, Tuple, Callable, cast
 import yt_dlp
 try:
     from .storage import CACHE_DIR, register_cached_track, get_cached_track_path
@@ -120,9 +121,19 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
         logger.error(f"Error resolving stream for {track_title} {artist}: {e}")
         return None
 
-def download_track_to_cache(track_id: str, title: str, artist: str, on_complete=None, direct_url: Optional[str] = None):
+def download_track_to_cache(
+    track_id: str,
+    title: str,
+    artist: str,
+    on_complete: Optional[Callable[[Path], None]] = None,
+    direct_url: Optional[str] = None,
+    track_meta: Optional[Dict[str, Any]] = None,
+    on_error: Optional[Callable[[Exception], None]] = None,
+    blocking: bool = False
+) -> Optional[threading.Thread]:
     """
-    Asynchronously downloads track to local disk.
+    Downloads track to local disk cache. If blocking is True, runs synchronously;
+    otherwise spawns a daemon background thread.
     """
     with _download_lock:
         if track_id in _active_downloads:
@@ -136,7 +147,6 @@ def download_track_to_cache(track_id: str, title: str, artist: str, on_complete=
                 if on_complete:
                     on_complete(cached_path)
                 return
-
 
             temp_path = CACHE_DIR / f"{track_id}_dl"
             if direct_url and (direct_url.startswith("http://") or direct_url.startswith("https://")):
@@ -159,6 +169,7 @@ def download_track_to_cache(track_id: str, title: str, artist: str, on_complete=
                 ydl.download([query])
 
             valid_exts = (".m4a", ".opus", ".mp3", ".webm", ".ogg", ".flac")
+            downloaded_path: Optional[Path] = None
             for f in CACHE_DIR.glob(f"{track_id}_dl.*"):
                 if not f.is_file():
                     continue
@@ -169,16 +180,33 @@ def download_track_to_cache(track_id: str, title: str, artist: str, on_complete=
                     final_path = CACHE_DIR / f"{track_id}{ext}"
                     if f != final_path:
                         f.replace(final_path)
-                    register_cached_track(track_id, {"title": title, "artist": artist}, final_path)
+                    meta_to_save = dict(track_meta) if track_meta else {"title": title, "artist": artist}
+                    register_cached_track(track_id, meta_to_save, final_path)
+                    downloaded_path = final_path
                     if on_complete:
                         on_complete(final_path)
                     break
+
+            if not downloaded_path:
+                cached_existing = get_cached_track_path(track_id)
+                if cached_existing and cached_existing.exists() and cached_existing.stat().st_size > 10000:
+                    if on_complete:
+                        on_complete(cached_existing)
+                elif on_error:
+                    on_error(RuntimeError(f"No audio file produced for track '{title}' ({track_id})"))
         except Exception as e:
-            logger.error(f"Failed to background cache track {track_id}: {e}")
+            logger.error(f"Failed to cache track {track_id}: {e}")
+            if on_error:
+                on_error(e)
         finally:
             with _download_lock:
                 _active_downloads.discard(track_id)
 
+    if blocking:
+        _worker()
+        return None
+
     t = threading.Thread(target=_worker, daemon=True)
     t.start()
     return t
+

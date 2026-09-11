@@ -313,7 +313,9 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "toggle_shuffle": "s",
     "toggle_repeat": "r",
     "focus_search": "slash",
-    "focus_bar": "b",
+    "download_offline": "b",
+    "bulk_download_playlist": "B",
+    "focus_bar": "",
     "focus_import": "i",
     "add_to_playlist": "a",
     "share_playlist": "y",
@@ -353,6 +355,8 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "toggle_shuffle": ("Playback", "Toggle Shuffle"),
     "toggle_repeat": ("Playback", "Cycle Repeat Mode"),
     "focus_search": ("Navigation", "Focus Search Bar"),
+    "download_offline": ("Library", "Download Song / Playlist Offline (b)"),
+    "bulk_download_playlist": ("Library", "Bulk Download Playlist Offline (B)"),
     "focus_bar": ("Playback", "Focus Seek Bar"),
     "focus_import": ("Playlists", "New Playlist / Import"),
     "add_to_playlist": ("Playlists", "Add Song to Playlist"),
@@ -1750,11 +1754,14 @@ class HelpModal(ModalScreen[None]):
             ("Esc", "Unfocus / Back to playlist"),
         ]
 
+        k_dl = format_key_display(kb.get("download_offline", "b"))
+
         playback_rows = [
             (f"{k_play}, Fn+F8", "Play / Pause toggle"),
             (f"{k_shuf}", "Toggle shuffle mode"),
             (f"{k_rep}", "Cycle repeat (off / all / 1)"),
             (f"{k_prev} / {k_next}, Fn+F7/F9", "Previous / Next track"),
+            (f"{k_dl}", "Download song / playlist offline"),
             (f"{k_share}", "Copy track link to clipboard"),
             ("Left / Right", "Seek -/+ 5 seconds"),
             ("v / Click", "Cycle visualizer mode"),
@@ -1764,12 +1771,12 @@ class HelpModal(ModalScreen[None]):
         ]
 
         seek_rows = [
-            ("b", "Toggle seek bar focus"),
+            ("Left / Right", "Seek -/+ 5s on bar"),
             ("h / l", "Seek -/+ 5s on bar"),
             ("H / L", "Fast seek -/+ 15s on bar"),
             ("0 – 9", "Jump to 0% – 90% of song"),
             ("Enter / Click", "Jump to lyric timestamp"),
-            ("b / Esc / k", "Return to table"),
+            ("Esc / k", "Return to table"),
         ]
 
         k_spot = format_key_display(kb.get("open_spotify_auth", "L"))
@@ -2995,7 +3002,9 @@ class SpoffTUI(App):
         Binding("mediaplaypause", "toggle_play", "Play/Pause", show=False),
         Binding("medianexttrack", "next_track", "Next", show=False),
         Binding("slash", "focus_search", "Search"),
-        Binding("b", "focus_bar", "Seek Bar"),
+        Binding("b", "download_offline", "Download Offline"),
+        Binding("B", "bulk_download_playlist", "Download Playlist", show=False),
+        Binding("shift+b", "bulk_download_playlist", "Download Playlist", show=False),
         Binding("i", "focus_import", "Import"),
         Binding("a", "add_to_playlist", "Add to Playlist"),
         Binding("+", "add_to_playlist", "Add to Playlist", show=False),
@@ -3070,6 +3079,7 @@ class SpoffTUI(App):
         self.update_info: Optional[Dict[str, Any]] = None
         self.queue: List[Dict[str, Any]] = []
         self.current_index: int = -1
+        self._bulk_download_in_progress: bool = False
         self.playlists: List[Dict[str, Any]] = []
         self.current_playlist_tracks: List[Dict[str, Any]] = []
         self.current_playlist_id: Optional[str] = None
@@ -3758,6 +3768,8 @@ class SpoffTUI(App):
                 matched_action = "delete_item"
             elif event.key == "+" and self.keybindings.get("add_to_playlist") != "":
                 matched_action = "add_to_playlist"
+            elif (event.key in ("shift+b", "B") or getattr(event, "character", None) == "B") and not isinstance(self.focused, (Input, ScrubBar)):
+                matched_action = "bulk_download_playlist"
             elif event.key in ("f1",) and self.keybindings.get("vol_mute") != "":
                 matched_action = "vol_mute"
             elif event.key in ("f2",) and self.keybindings.get("vol_down") != "":
@@ -5032,6 +5044,231 @@ class SpoffTUI(App):
         else:
             self.notify_user(f"Share link: {share_url}")
 
+    def action_download_offline(self):
+        if not getattr(self, "_is_ready", False) or isinstance(self.focused, Input):
+            return
+
+        # 1. If focused on side-table (playlists sidebar) -> bulk download highlighted playlist
+        if self.focused and getattr(self.focused, "id", None) == "side-table" and isinstance(self.focused, DataTable):
+            row_idx = self.focused.cursor_row
+            if row_idx is not None and 0 <= row_idx < len(self.playlists):
+                self._bulk_download_playlist(self.playlists[row_idx])
+                return
+
+        # 2. If focused on track-table and has selected row -> download that song
+        if self.focused and getattr(self.focused, "id", None) == "track-table" and isinstance(self.focused, DataTable):
+            row_idx = self.focused.cursor_row
+            tracks = self._get_current_view_tracks()
+            if row_idx is not None and 0 <= row_idx < len(tracks):
+                self._download_single_track(tracks[row_idx])
+                return
+
+        # 3. If in playlist tab and no track is selected or table is empty -> bulk download current playlist
+        if self.active_tab == "playlist" and hasattr(self, "current_playlist_id") and self.current_playlist_id:
+            for p in self.playlists:
+                if p.get("id") == self.current_playlist_id:
+                    self._bulk_download_playlist(p)
+                    return
+
+        # 4. Fallback: currently playing track
+        if self.player.current_track:
+            self._download_single_track(self.player.current_track)
+            return
+
+        # 5. Fallback: highlighted playlist in sidebar
+        if self.playlists:
+            try:
+                st = self.query_one("#side-table", DataTable)
+                idx = st.cursor_row if st.cursor_row is not None else 0
+                if 0 <= idx < len(self.playlists):
+                    self._bulk_download_playlist(self.playlists[idx])
+                    return
+            except Exception:
+                pass
+
+        self.notify_user("No song or playlist selected to download.")
+
+    def action_bulk_download_playlist(self):
+        if not getattr(self, "_is_ready", False) or isinstance(self.focused, Input):
+            return
+
+        target_pl = None
+        if self.focused and getattr(self.focused, "id", None) == "side-table" and isinstance(self.focused, DataTable):
+            row_idx = self.focused.cursor_row
+            if row_idx is not None and 0 <= row_idx < len(self.playlists):
+                target_pl = self.playlists[row_idx]
+
+        if not target_pl and self.active_tab == "playlist" and hasattr(self, "current_playlist_id") and self.current_playlist_id:
+            for p in self.playlists:
+                if p.get("id") == self.current_playlist_id:
+                    target_pl = p
+                    break
+
+        if not target_pl and self.playlists:
+            try:
+                st = self.query_one("#side-table", DataTable)
+                idx = st.cursor_row if st.cursor_row is not None else 0
+                if 0 <= idx < len(self.playlists):
+                    target_pl = self.playlists[idx]
+            except Exception:
+                pass
+
+        if target_pl:
+            self._bulk_download_playlist(target_pl)
+        else:
+            self.notify_user("No playlist selected to download.")
+
+    def _download_single_track(self, track: Dict[str, Any]):
+        t_id = track.get("id") or str(hash(track.get("title", "") + track.get("artist", "")))
+        title = track.get("title") or "Unknown Track"
+        artist = track.get("artist") or "Unknown Artist"
+
+        cached_path = get_cached_track_path(t_id)
+        if cached_path and cached_path.exists() and cached_path.stat().st_size > 10000:
+            self.notify_user(f"'{title}' is already cached offline.")
+            return
+
+        track_url = track.get("url")
+        if not track_url and t_id and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
+            track_url = f"https://www.youtube.com/watch?v={t_id}"
+
+        self.notify_user(f"Downloading '{title}' to offline library...")
+        try:
+            self.notify(f"[bold #ffffff]{escape_markup(title)}[/]\n[#aaaaaa]{escape_markup(artist)}[/]", title="⬇ Downloading for Offline", timeout=2.5)
+        except Exception:
+            pass
+
+        def _on_done(path):
+            self.call_from_thread(self.notify_user, f"✓ Saved '{title}' to offline library.")
+            try:
+                self.call_from_thread(self.notify, f"[bold #ffffff]{escape_markup(title)}[/] is ready offline", title="✓ Download Finished", timeout=3.0)
+            except Exception:
+                pass
+            def _refresh():
+                if self.active_tab == "offline":
+                    self.render_tracks(list(load_offline_index().values()))
+                elif self.active_tab == "playlist":
+                    self.render_tracks(self.current_playlist_tracks)
+                elif self.active_tab == "search":
+                    self.render_tracks(self.search_results)
+            self.call_from_thread(_refresh)
+
+        def _on_err(err):
+            self.call_from_thread(self.notify_user, f"Download failed for '{title}'.")
+            try:
+                self.call_from_thread(self.notify, f"Could not download '{title}'", title="✗ Download Error", timeout=3.0)
+            except Exception:
+                pass
+
+        download_track_to_cache(
+            t_id,
+            title,
+            artist,
+            on_complete=_on_done,
+            direct_url=track_url,
+            track_meta=track,
+            on_error=_on_err
+        )
+
+    def _bulk_download_playlist(self, playlist: Dict[str, Any]):
+        name = playlist.get("name") or "Playlist"
+        tracks = list(playlist.get("tracks") or [])
+        if not tracks:
+            self.notify_user(f"Playlist '{name}' has no tracks to download.")
+            return
+
+        needed: List[Dict[str, Any]] = []
+        for t in tracks:
+            tid = t.get("id") or str(hash(t.get("title", "") + t.get("artist", "")))
+            c = get_cached_track_path(tid)
+            if not (c and c.exists() and c.stat().st_size > 10000):
+                needed.append(t)
+
+        total = len(tracks)
+        already_cached = total - len(needed)
+        if not needed:
+            self.notify_user(f"All {total} tracks in '{name}' are already cached offline.")
+            return
+
+        if getattr(self, "_bulk_download_in_progress", False):
+            self.notify_user("Bulk download already in progress. Please wait for it to complete.")
+            return
+
+        self._bulk_download_in_progress = True
+        to_dl_count = len(needed)
+        self.notify_user(f"Starting download of {to_dl_count} tracks for '{name}' ({already_cached} already cached)...")
+        try:
+            self.notify(f"Downloading {to_dl_count} songs from '{name}'", title="⬇ Bulk Download Started", timeout=3.5)
+        except Exception:
+            pass
+
+        def _worker():
+            success_count = 0
+            fail_count = 0
+            try:
+                for idx, t in enumerate(needed, 1):
+                    t_title = t.get("title") or "Unknown"
+                    t_artist = t.get("artist") or "Unknown"
+                    t_id = t.get("id") or str(hash(t_title + t_artist))
+                    t_url = t.get("url")
+                    if not t_url and t_id and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
+                        t_url = f"https://www.youtube.com/watch?v={t_id}"
+
+                    self.call_from_thread(
+                        self.notify_user,
+                        f"Downloading '{t_title}' ({idx}/{to_dl_count}) from '{name}'..."
+                    )
+
+                    dl_ok = [False]
+
+                    def _done(path):
+                        dl_ok[0] = True
+
+                    download_track_to_cache(
+                        t_id,
+                        t_title,
+                        t_artist,
+                        on_complete=_done,
+                        direct_url=t_url,
+                        track_meta=t,
+                        blocking=True
+                    )
+
+                    if dl_ok[0]:
+                        success_count += 1
+                        def _refresh_table():
+                            if self.active_tab == "playlist" and self.current_playlist_id == playlist.get("id"):
+                                self.render_tracks(self.current_playlist_tracks)
+                            elif self.active_tab == "offline":
+                                self.render_tracks(list(load_offline_index().values()))
+                        self.call_from_thread(_refresh_table)
+                    else:
+                        fail_count += 1
+
+                msg = f"✓ Finished caching '{name}': {success_count}/{to_dl_count} tracks saved."
+                if fail_count > 0:
+                    msg += f" ({fail_count} failed)"
+                self.call_from_thread(self.notify_user, msg)
+                try:
+                    self.call_from_thread(
+                        self.notify,
+                        f"Cached {success_count} songs from '{name}' for offline play",
+                        title="✓ Bulk Download Complete",
+                        timeout=4.0
+                    )
+                except Exception:
+                    pass
+                def _final_refresh():
+                    if self.active_tab == "playlist":
+                        self.render_tracks(self.current_playlist_tracks)
+                    elif self.active_tab == "offline":
+                        self.render_tracks(list(load_offline_index().values()))
+                self.call_from_thread(_final_refresh)
+            finally:
+                self._bulk_download_in_progress = False
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     def action_delete_playlist(self):
         if isinstance(self.focused, Input):
             return
@@ -5385,12 +5622,13 @@ class SpoffTUI(App):
                 rep_k = format_key_display(self.keybindings.get("toggle_repeat", "r"))
                 lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
                 vis_k = format_key_display(self.keybindings.get("toggle_visualizer", "v"))
-                seek_k = format_key_display(self.keybindings.get("focus_bar", "b"))
+                dl_k = format_key_display(self.keybindings.get("download_offline", "b"))
+                dl_hint = f"{dl_k}: offline  |  " if dl_k else ""
                 sett_k = format_key_display(self.keybindings.get("open_settings", ","))
                 help_k = format_key_display(self.keybindings.get("show_help", ":"))
                 help_label = ": help" if help_k in (":", "colon") else f"{help_k}: help"
                 quit_k = format_key_display(self.keybindings.get("quit_app", "q"))
-                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {share_hint}{shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {vis_k}: vis  |  {seek_k}: seek  |  {sett_k}: set  |  {help_label}  |  {quit_k}: quit"
+                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {share_hint}{shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {vis_k}: vis  |  {dl_hint}{sett_k}: set  |  {help_label}  |  {quit_k}: quit"
             try:
                 deck_l3 = self.query_one("#deck-line-3", Static)
                 deck_l3.update(escape(hints))
@@ -5658,7 +5896,7 @@ class SpoffTUI(App):
                     self.render_tracks(list(load_offline_index().values()))
                 self.call_from_thread(_refresh)
 
-        download_track_to_cache(t_id, title, artist, on_complete=on_cached, direct_url=track_url)
+        download_track_to_cache(t_id, title, artist, on_complete=on_cached, direct_url=track_url, track_meta=track)
 
 SpotatoTUI = SpoffTUI
 
