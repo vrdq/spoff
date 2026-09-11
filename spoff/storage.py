@@ -378,7 +378,7 @@ def add_track_to_playlist(playlist_id: str, track: Dict[str, Any]) -> bool:
     return False
 
 def remove_track_from_playlist(playlist_id: str, track_id: str) -> bool:
-    if not playlist_id:
+    if not playlist_id or not track_id:
         return False
     existing = load_saved_playlists()
     for p in existing:

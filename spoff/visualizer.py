@@ -142,18 +142,26 @@ bit_format = 8bit
             return
         fd = self.proc.stdout.fileno()
         bars_count = self.bars_count
+        buf = bytearray()
         while self.running:
             try:
-                data = os.read(fd, bars_count)
-                if not data:
+                chunk = os.read(fd, 4096)
+                if not chunk:
                     break
-                if len(data) == bars_count:
+                buf.extend(chunk)
+                if len(buf) >= bars_count:
+                    num_frames = len(buf) // bars_count
+                    latest_frame_idx = (num_frames - 1) * bars_count
+                    data = buf[latest_frame_idx : latest_frame_idx + bars_count]
+                    buf = buf[num_frames * bars_count :]
+
                     vals = [b / 255.0 for b in data]
                     self._raw_values = vals
                     if any(b > 0 for b in data):
                         self._last_cava_time = time.monotonic()
             except Exception:
                 break
+
 
     def cycle_style(self) -> str:
         styles = list(STYLE_NAMES.keys())

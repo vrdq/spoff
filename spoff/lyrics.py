@@ -199,19 +199,23 @@ def fetch_lyrics(title: str, artist: str = "", duration_ms: Optional[int] = None
 
 def get_active_lyric_index(lines: List[Dict[str, Any]], current_seconds: float) -> int:
     """
-    Returns the index of the currently active lyric line based on current playback seconds.
+    Returns the index of the currently active lyric line in `lines` based on current playback seconds.
     Returns -1 if before the first line or if lines are empty/unsynced.
     """
     if not lines:
         return -1
 
-    # If first line has no timestamp (plain text lyrics)
-    if lines[0].get("time") is None:
+    timed_entries = [
+        (item["time"], i)
+        for i, item in enumerate(lines)
+        if item.get("time") is not None
+    ]
+    if not timed_entries:
         return -1
 
-    times = [item["time"] for item in lines if item.get("time") is not None]
-    if not times:
+    times = [t[0] for t in timed_entries]
+    pos = bisect.bisect_right(times, current_seconds) - 1
+    if pos < 0:
         return -1
+    return timed_entries[pos][1]
 
-    idx = bisect.bisect_right(times, current_seconds) - 1
-    return idx

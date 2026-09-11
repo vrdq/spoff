@@ -4,9 +4,12 @@ import json
 import socket
 import os
 import time
+import logging
 import threading
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
+
+logger = logging.getLogger("player")
 
 class MPVController:
     def __init__(self, socket_path: Optional[str] = None, initial_volume: int = 80):
@@ -26,7 +29,12 @@ class MPVController:
 
     def start_mpv(self):
         if self.process and self.process.poll() is None:
+            if self._listener_thread is None or not self._listener_thread.is_alive():
+                self._stop_listener = False
+                self._listener_thread = threading.Thread(target=self._ipc_listener, daemon=True)
+                self._listener_thread.start()
             return
+
 
         if os.path.exists(self.socket_path):
             try:
@@ -119,8 +127,11 @@ class MPVController:
                                         self.is_paused = bool(val)
                                 elif ev_type == "end-file":
                                     reason = event.get("reason")
-                                    if reason == "eof" and self.playback_finished_callback:
+                                    if reason == "error":
+                                        logger.warning("MPV reported playback end due to stream error")
+                                    if reason in ("eof", "error") and self.playback_finished_callback:
                                         self.playback_finished_callback()
+
                             except Exception:
                                 pass
             except Exception:

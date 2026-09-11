@@ -129,6 +129,9 @@ def resolve_track_url(track: Dict[str, Any]) -> Tuple[str, str]:
         return raw_url, "Spotify"
     if raw_src == "spotify" and raw_id:
         return f"https://open.spotify.com/track/{raw_id}", "Spotify"
+    sp_tr_id = str(track.get("spotify_id") or "").strip()
+    if sp_tr_id and len(sp_tr_id) == 22 and sp_tr_id.isalnum():
+        return f"https://open.spotify.com/track/{sp_tr_id}", "Spotify"
     if len(raw_id) == 22 and raw_id.isalnum() and not raw_url.startswith("http"):
         return f"https://open.spotify.com/track/{raw_id}", "Spotify"
 
@@ -168,8 +171,13 @@ def resolve_playlist_url(playlist: Dict[str, Any], default_engine: str = "ytmusi
     raw_uri = str(playlist.get("uri") or "").strip()
     raw_src = str(playlist.get("source") or "").lower()
     name = str(playlist.get("name") or "").strip()
+    sp_pl_id = str(playlist.get("spotify_id") or "").strip()
 
-    # 1. Spotify playlist / album
+    # 1. Spotify playlist / album / liked songs
+    if raw_id == "spotify_liked_songs" or (raw_src == "spotify" and name.lower() == "liked songs"):
+        return "https://open.spotify.com/collection/tracks", "Spotify"
+    if sp_pl_id and len(sp_pl_id) == 22 and sp_pl_id.isalnum():
+        return f"https://open.spotify.com/playlist/{sp_pl_id}", "Spotify"
     if raw_uri.startswith("spotify:playlist:"):
         sp_id = raw_uri.split(":")[-1]
         return f"https://open.spotify.com/playlist/{sp_id}", "Spotify"
@@ -184,6 +192,7 @@ def resolve_playlist_url(playlist: Dict[str, Any], default_engine: str = "ytmusi
         return f"https://open.spotify.com/playlist/{raw_id}", "Spotify"
     if len(raw_id) == 22 and raw_id.isalnum() and not raw_id.startswith("local_") and not raw_id.startswith("pl_") and not raw_url.startswith("http"):
         return f"https://open.spotify.com/playlist/{raw_id}", "Spotify"
+
 
     # 2. YouTube Music / YouTube playlist
     if "music.youtube.com/playlist" in raw_url:
@@ -3680,14 +3689,15 @@ class SpoffTUI(App):
         if event.key in ("enter", "return"):
             if isinstance(self.focused, DataTable):
                 if self.focused.id == "track-table":
-                    if self.focused.cursor_row is not None and self.focused.row_count > 0:
-                        self.play_current_table_row(self.focused.cursor_row)
+                    row_idx = self.focused.cursor_row if self.focused.cursor_row is not None else 0
+                    if 0 <= row_idx < self.focused.row_count:
+                        self.play_current_table_row(row_idx)
                     event.prevent_default()
                     event.stop()
                     return
                 elif self.focused.id == "side-table":
-                    idx = self.focused.cursor_row
-                    if idx is not None and 0 <= idx < len(self.playlists):
+                    idx = self.focused.cursor_row if self.focused.cursor_row is not None else 0
+                    if 0 <= idx < len(self.playlists):
                         self.load_playlist_by_index(idx, focus_tracks=True)
                     event.prevent_default()
                     event.stop()
@@ -3710,8 +3720,9 @@ class SpoffTUI(App):
             elif not isinstance(self.focused, Button):
                 try:
                     tt = self.query_one("#track-table", DataTable)
-                    if tt.cursor_row is not None and tt.row_count > 0:
-                        self.play_current_table_row(tt.cursor_row)
+                    row_idx = tt.cursor_row if tt.cursor_row is not None else 0
+                    if 0 <= row_idx < tt.row_count:
+                        self.play_current_table_row(row_idx)
                         event.prevent_default()
                         event.stop()
                         return
@@ -3829,6 +3840,7 @@ class SpoffTUI(App):
             else:
                 self.notify_user("")
         elif view == "playlist":
+            self.playlists = load_saved_playlists()
             if self.current_playlist_id:
                 for p in self.playlists:
                     if p.get("id") == self.current_playlist_id:
@@ -4024,7 +4036,9 @@ class SpoffTUI(App):
             except (ValueError, TypeError):
                 dur_ms = 0.0
             dur = format_time(dur_ms / 1000.0)
-            table.add_row(type_tag, escape(t.get("title", "")), escape(t.get("artist", "")), dur, key=str(idx))
+            safe_title = escape(str(t.get("title") or ""))
+            safe_artist = escape(str(t.get("artist") or ""))
+            table.add_row(type_tag, safe_title, safe_artist, dur, key=str(idx))
         if tracks:
             if select_row is not None:
                 target = max(0, min(select_row, len(tracks) - 1))
@@ -4212,15 +4226,20 @@ class SpoffTUI(App):
                                 daemon=True
                             ).start()
 
-                if self.current_index == idx:
-                    self.current_index = new_idx
-                elif self.current_index == new_idx:
-                    self.current_index = idx
-
-                if self.queue and len(self.queue) == len(self.current_playlist_tracks):
-                    if 0 <= idx < len(self.queue) and 0 <= new_idx < len(self.queue):
-                        q_item = self.queue.pop(idx)
-                        self.queue.insert(new_idx, q_item)
+                is_queue_mirroring = (
+                    bool(self.queue)
+                    and len(self.queue) == len(self.current_playlist_tracks)
+                    and 0 <= idx < len(self.queue)
+                    and 0 <= new_idx < len(self.queue)
+                    and (self.queue[idx] == track or (track.get("id") and self.queue[idx].get("id") == track.get("id")))
+                )
+                if is_queue_mirroring:
+                    if self.current_index == idx:
+                        self.current_index = new_idx
+                    elif self.current_index == new_idx:
+                        self.current_index = idx
+                    q_item = self.queue.pop(idx)
+                    self.queue.insert(new_idx, q_item)
 
                 self.render_tracks(self.current_playlist_tracks, select_row=new_idx)
                 tt.focus()
@@ -4274,15 +4293,20 @@ class SpoffTUI(App):
                                 daemon=True
                             ).start()
 
-                if self.current_index == idx:
-                    self.current_index = new_idx
-                elif self.current_index == new_idx:
-                    self.current_index = idx
-
-                if self.queue and len(self.queue) == len(self.current_playlist_tracks):
-                    if 0 <= idx < len(self.queue) and 0 <= new_idx < len(self.queue):
-                        q_item = self.queue.pop(idx)
-                        self.queue.insert(new_idx, q_item)
+                is_queue_mirroring = (
+                    bool(self.queue)
+                    and len(self.queue) == len(self.current_playlist_tracks)
+                    and 0 <= idx < len(self.queue)
+                    and 0 <= new_idx < len(self.queue)
+                    and (self.queue[idx] == track or (track.get("id") and self.queue[idx].get("id") == track.get("id")))
+                )
+                if is_queue_mirroring:
+                    if self.current_index == idx:
+                        self.current_index = new_idx
+                    elif self.current_index == new_idx:
+                        self.current_index = idx
+                    q_item = self.queue.pop(idx)
+                    self.queue.insert(new_idx, q_item)
 
                 self.render_tracks(self.current_playlist_tracks, select_row=new_idx)
                 tt.focus()
@@ -4847,8 +4871,8 @@ class SpoffTUI(App):
                             ok, msg = add_track_to_spotify_account(val, pl_name, track)
                             if ok:
                                 self.call_from_thread(self.notify_user, f"'{t_title}' synced to Spotify playlist '{pl_name}'.")
-                                self.playlists = load_saved_playlists()
                                 def _refresh_after_sync():
+                                    self.playlists = load_saved_playlists()
                                     self.refresh_side_table()
                                     if self.current_playlist_id == val:
                                         for p_sync in self.playlists:

@@ -1,17 +1,25 @@
 import re
+import time
 import logging
 import threading
-from typing import Optional, Dict, Any, cast
+from typing import Optional, Dict, Any, Tuple, cast
 import yt_dlp
 try:
-    from .storage import CACHE_DIR, register_cached_track
+    from .storage import CACHE_DIR, register_cached_track, get_cached_track_path
 except ImportError:
-    from storage import CACHE_DIR, register_cached_track
+    from storage import CACHE_DIR, register_cached_track, get_cached_track_path
 
 logger = logging.getLogger("streamer")
 _active_downloads = set()
 _download_lock = threading.Lock()
-_stream_cache = {}
+_stream_cache: Dict[str, Tuple[Dict[str, Any], float]] = {}
+STREAM_CACHE_TTL = 7200.0  # 2 hours
+
+def invalidate_stream_cache(track_title: str, artist: str, direct_url: Optional[str] = None):
+    cache_key = f"{track_title.lower()}::{artist.lower()}"
+    if direct_url:
+        cache_key = f"{direct_url}::{cache_key}"
+    _stream_cache.pop(cache_key, None)
 
 def get_base_ydl_opts(extra_opts=None):
     opts = {
@@ -34,7 +42,10 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
     if direct_url:
         cache_key = f"{direct_url}::{cache_key}"
     if cache_key in _stream_cache:
-        return _stream_cache[cache_key]
+        cached_data, cached_ts = _stream_cache[cache_key]
+        if time.time() - cached_ts < STREAM_CACHE_TTL:
+            return cached_data
+        _stream_cache.pop(cache_key, None)
 
     queries = []
     if direct_url and (direct_url.startswith("http://") or direct_url.startswith("https://")):
@@ -101,7 +112,9 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
                 "webpage_url": item.get("webpage_url"),
                 "ext": item.get("ext", "m4a")
             }
-            _stream_cache[cache_key] = stream_data
+            if len(_stream_cache) > 500:
+                _stream_cache.clear()
+            _stream_cache[cache_key] = (stream_data, time.time())
             return stream_data
     except Exception as e:
         logger.error(f"Error resolving stream for {track_title} {artist}: {e}")
@@ -118,11 +131,12 @@ def download_track_to_cache(track_id: str, title: str, artist: str, on_complete=
 
     def _worker():
         try:
-            target_path = CACHE_DIR / f"{track_id}.m4a"
-            if target_path.exists() and target_path.stat().st_size > 10000:
+            cached_path = get_cached_track_path(track_id)
+            if cached_path and cached_path.exists() and cached_path.stat().st_size > 10000:
                 if on_complete:
-                    on_complete(target_path)
+                    on_complete(cached_path)
                 return
+
 
             temp_path = CACHE_DIR / f"{track_id}_dl"
             if direct_url and (direct_url.startswith("http://") or direct_url.startswith("https://")):
