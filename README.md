@@ -151,6 +151,7 @@ In the playlist view, press `Shift+J` or `Shift+K` on any song to move it down o
 | `b` | Focus progress scrub bar (use `h`/`l` for 5s, `H`/`L` for 15s, `0`-`9` for 0%-90%) |
 | `s` | Toggle Shuffle mode |
 | `r` | Toggle Repeat mode (`OFF` $\rightarrow$ `ALL` $\rightarrow$ `SINGLE`) |
+| `c` | Copy track share link to clipboard |
 | `F2` / `Down` | Lower volume (-5%) |
 | `F3` / `Up` | Raise volume (+5%) |
 | `F1` | Mute / Unmute audio |
@@ -159,6 +160,7 @@ In the playlist view, press `Shift+J` or `Shift+K` on any song to move it down o
 | Key | Action |
 | :--- | :--- |
 | `a` | Add highlighted track to a playlist |
+| `y` | Copy playlist share link to clipboard |
 | `i` | Focus playlist create / link import input |
 | `Shift+J` / `Shift+Down` | Move track or playlist down |
 | `Shift+K` / `Shift+Up` | Move track or playlist up |

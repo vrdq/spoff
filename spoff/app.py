@@ -155,6 +155,60 @@ def resolve_track_url(track: Dict[str, Any]) -> Tuple[str, str]:
     return "", ""
 
 
+def resolve_playlist_url(playlist: Dict[str, Any], default_engine: str = "ytmusic") -> Tuple[str, str]:
+    """
+    Resolves the shareable URL and source service name for a playlist.
+    Returns (share_url, service_name).
+    """
+    if not playlist or not isinstance(playlist, dict):
+        return "", ""
+
+    raw_url = str(playlist.get("url") or "").strip()
+    raw_id = str(playlist.get("id") or "").strip()
+    raw_uri = str(playlist.get("uri") or "").strip()
+    raw_src = str(playlist.get("source") or "").lower()
+    name = str(playlist.get("name") or "").strip()
+
+    # 1. Spotify playlist / album
+    if raw_uri.startswith("spotify:playlist:"):
+        sp_id = raw_uri.split(":")[-1]
+        return f"https://open.spotify.com/playlist/{sp_id}", "Spotify"
+    if raw_uri.startswith("spotify:album:"):
+        sp_id = raw_uri.split(":")[-1]
+        return f"https://open.spotify.com/album/{sp_id}", "Spotify"
+    if "open.spotify.com/playlist/" in raw_url:
+        return raw_url, "Spotify"
+    if "open.spotify.com/album/" in raw_url:
+        return raw_url, "Spotify"
+    if raw_src == "spotify" and raw_id and not raw_id.startswith("local_") and not raw_id.startswith("pl_"):
+        return f"https://open.spotify.com/playlist/{raw_id}", "Spotify"
+    if len(raw_id) == 22 and raw_id.isalnum() and not raw_id.startswith("local_") and not raw_id.startswith("pl_") and not raw_url.startswith("http"):
+        return f"https://open.spotify.com/playlist/{raw_id}", "Spotify"
+
+    # 2. YouTube Music / YouTube playlist
+    if "music.youtube.com/playlist" in raw_url:
+        return raw_url, "YouTube Music"
+    if "youtube.com/playlist" in raw_url or "youtu.be" in raw_url:
+        label = "YouTube Music" if "music.youtube" in raw_url else "YouTube"
+        return raw_url, label
+    if any(raw_id.startswith(p) for p in ("PL", "VL", "RD", "OLAK", "MPREb_")):
+        return f"https://music.youtube.com/playlist?list={raw_id}", "YouTube Music"
+
+    # 3. Any standard web URL attached to the playlist
+    if raw_url.startswith("http://") or raw_url.startswith("https://"):
+        label = "Spotify" if "spotify.com" in raw_url else ("YouTube Music" if "music.youtube" in raw_url else ("YouTube" if "youtube.com" in raw_url else "Web"))
+        return raw_url, label
+
+    # 4. Fallback search query for local playlists
+    if name:
+        encoded = urllib.parse.quote(name)
+        if raw_src == "spotify" or default_engine == "spotify":
+            return f"https://open.spotify.com/search/{encoded}", "Spotify"
+        return f"https://music.youtube.com/search?q={encoded}", "YouTube Music"
+
+    return "", ""
+
+
 def copy_to_clipboard(text: str, app: Optional[Any] = None) -> bool:
     """
     Copies text to the system clipboard across Wayland (wl-copy), X11 (xclip/xsel),
@@ -253,6 +307,7 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "focus_bar": "b",
     "focus_import": "i",
     "add_to_playlist": "a",
+    "share_playlist": "y",
     "delete_item": "d",
     "delete_playlist": "D",
     "open_spotify_auth": "L",
@@ -292,6 +347,7 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "focus_bar": ("Playback", "Focus Seek Bar"),
     "focus_import": ("Playlists", "New Playlist / Import"),
     "add_to_playlist": ("Playlists", "Add Song to Playlist"),
+    "share_playlist": ("Playlists", "Copy Playlist Link / Share"),
     "delete_item": ("Playlists", "Delete Selected Item"),
     "delete_playlist": ("Playlists", "Delete Entire Playlist"),
     "open_spotify_auth": ("Integrations", "Spotify Menu & Login"),
@@ -1709,6 +1765,7 @@ class HelpModal(ModalScreen[None]):
 
         k_spot = format_key_display(kb.get("open_spotify_auth", "L"))
         k_add = format_key_display(kb.get("add_to_playlist", "a"))
+        k_share_pl = format_key_display(kb.get("share_playlist", "y"))
         k_del = format_key_display(kb.get("delete_item", "d"))
         k_del_pl = format_key_display(kb.get("delete_playlist", "D"))
         k_imp = format_key_display(kb.get("focus_import", "i"))
@@ -1718,6 +1775,7 @@ class HelpModal(ModalScreen[None]):
         playlist_rows = [
             ("J / K, Shift+↑↓", "Reorder songs in playlist"),
             (f"{k_add}, +", "Add track to playlist"),
+            (f"{k_share_pl}", "Copy playlist link to clipboard"),
             (f"{k_imp}", "New playlist / import link"),
             (f"{k_spot}", "Spotify login & sync"),
             (f"{k_sett}", "Settings & Rebind keys"),
@@ -2933,6 +2991,7 @@ class SpoffTUI(App):
         Binding("a", "add_to_playlist", "Add to Playlist"),
         Binding("+", "add_to_playlist", "Add to Playlist", show=False),
         Binding("c", "share_track", "Share Track"),
+        Binding("y", "share_playlist", "Share Playlist"),
         Binding("s", "toggle_shuffle", "Shuffle"),
         Binding("r", "toggle_repeat", "Repeat"),
         Binding("L", "open_spotify_auth", "Spotify", show=False),
@@ -4821,6 +4880,11 @@ class SpoffTUI(App):
         except Exception:
             f = None
 
+        # If user is focused on the playlists sidebar table, share the highlighted playlist instead
+        if f and getattr(f, "id", None) == "side-table":
+            self.action_share_playlist()
+            return
+
         row_idx = None
         if isinstance(f, DataTable) and f.id == "track-table":
             row_idx = f.cursor_row
@@ -4849,6 +4913,9 @@ class SpoffTUI(App):
             track = tracks[row_idx]
 
         if not track:
+            if self.active_tab == "playlist" or (f and getattr(f, "id", None) == "side-table"):
+                self.action_share_playlist()
+                return
             self.notify_user("No track selected or playing to share.")
             return
 
@@ -4866,6 +4933,75 @@ class SpoffTUI(App):
             self.notify_user(f"Copied {source_label} link for '{title}' to clipboard")
             try:
                 msg = f"[bold #ffffff]{escape_markup(title)}[/]  [#666666]•[/]  [#aaaaaa]{escape_markup(artist)}[/]\n[#666666]{escape_markup(share_url)}[/]"
+                self.notify(msg, title="✓  Copied to clipboard", timeout=3.0)
+            except Exception:
+                pass
+        else:
+            self.notify_user(f"Share link: {share_url}")
+
+    def action_share_playlist(self):
+        if not getattr(self, "_is_ready", False):
+            return
+        if isinstance(self.focused, Input):
+            return
+
+        target_pl = None
+
+        # 1. If focused on side-table, use sidebar cursor row
+        if self.focused and getattr(self.focused, "id", None) == "side-table" and isinstance(self.focused, DataTable):
+            row_idx = self.focused.cursor_row
+            if row_idx is not None and 0 <= row_idx < len(self.playlists):
+                target_pl = self.playlists[row_idx]
+
+        # 2. If viewing playlist tab or we have current_playlist_id
+        if not target_pl and self.active_tab == "playlist" and hasattr(self, "current_playlist_id") and self.current_playlist_id:
+            for p in self.playlists:
+                if p.get("id") == self.current_playlist_id:
+                    target_pl = p
+                    break
+
+        # 3. If in search or offline view, or no playlist found, delegate to share_track if track available
+        if not target_pl:
+            if self.active_tab in ("search", "offline"):
+                self.action_share_track()
+                return
+            if hasattr(self, "current_playlist_id") and self.current_playlist_id:
+                for p in self.playlists:
+                    if p.get("id") == self.current_playlist_id:
+                        target_pl = p
+                        break
+            if not target_pl and self.playlists:
+                try:
+                    st = self.query_one("#side-table", DataTable)
+                    idx = st.cursor_row if st.cursor_row is not None else 0
+                    if 0 <= idx < len(self.playlists):
+                        target_pl = self.playlists[idx]
+                except Exception:
+                    pass
+
+        if not target_pl:
+            if self.player.current_track:
+                self.action_share_track()
+                return
+            self.notify_user("No playlist selected or open to share.")
+            return
+
+        name = target_pl.get("name", "Playlist")
+        tracks = target_pl.get("tracks") or []
+        track_count = len(tracks)
+        count_str = f"{track_count} {'track' if track_count == 1 else 'tracks'}"
+
+        share_url, source_label = resolve_playlist_url(target_pl, default_engine=self.search_engine)
+        if not share_url:
+            self.notify_user(f"Could not generate share link for '{name}'.")
+            return
+
+        copied = copy_to_clipboard(share_url, self)
+
+        if copied:
+            self.notify_user(f"Copied {source_label} link for '{name}' to clipboard")
+            try:
+                msg = f"[bold #ffffff]{escape_markup(name)}[/]  [#666666]•[/]  [#aaaaaa]{count_str}[/]\n[#666666]{escape_markup(share_url)}[/]"
                 self.notify(msg, title="✓  Copied to clipboard", timeout=3.0)
             except Exception:
                 pass
@@ -5215,8 +5351,12 @@ class SpoffTUI(App):
                 lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
                 hints = f"Enter/Click: seek to line  |  Space: pause  |  s: shuf  |  r: rep  |  Esc/{lyr_k}: back  |  q: quit"
             else:
-                share_bound = self.keybindings.get("share_track", "")
-                share_hint = f"{format_key_display(share_bound)}: share  |  " if share_bound else ""
+                if self.focused and getattr(self.focused, "id", None) == "side-table":
+                    pl_share = self.keybindings.get("share_playlist", "y")
+                    share_hint = f"{format_key_display(pl_share)}: share pl  |  " if pl_share else ""
+                else:
+                    share_bound = self.keybindings.get("share_track", "")
+                    share_hint = f"{format_key_display(share_bound)}: share  |  " if share_bound else ""
                 shuf_k = format_key_display(self.keybindings.get("toggle_shuffle", "s"))
                 rep_k = format_key_display(self.keybindings.get("toggle_repeat", "r"))
                 lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
