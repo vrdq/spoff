@@ -5643,17 +5643,49 @@ def main():
         run_cli_update()
         return
 
-    def _signal_handler(sig, frame):
-        sys.exit(0)
-
+    # On Linux, request kernel delivery of SIGHUP if the parent terminal/process dies,
+    # preventing orphaned instances from surviving terminal window closure.
     try:
-        signal.signal(signal.SIGTERM, _signal_handler)
-        signal.signal(signal.SIGHUP, _signal_handler)
+        import ctypes
+        libc = ctypes.CDLL(None)
+        # PR_SET_PDEATHSIG = 1
+        libc.prctl(1, signal.SIGHUP, 0, 0, 0)
     except Exception:
         pass
 
-    app = SpoffTUI()
-    app.run()
+    app: Optional[SpoffTUI] = None
+
+    def _signal_handler(sig, frame):
+        try:
+            # Prevent re-entrant handler execution
+            signal.signal(sig, signal.SIG_IGN)
+        except Exception:
+            pass
+        try:
+            if app:
+                app._cleanup_on_exit()
+        except Exception:
+            pass
+        # os._exit bypasses Python exception handling and background thread joins,
+        # ensuring the process immediately and unconditionally dies without spinning on EOF.
+        os._exit(0)
+
+    for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT, signal.SIGQUIT):
+        try:
+            signal.signal(sig, _signal_handler)
+        except Exception:
+            pass
+
+    try:
+        app = SpoffTUI()
+        app.run()
+    finally:
+        try:
+            if app:
+                app._cleanup_on_exit()
+        except Exception:
+            pass
+        os._exit(0)
 
 if __name__ == "__main__":
     main()
