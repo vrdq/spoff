@@ -2,6 +2,7 @@ import math
 import cmath
 import json
 import logging
+import re
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import List, Dict, Any, Optional, Tuple
@@ -308,13 +309,164 @@ FLAT_PRESET = EQPreset(
     ]
 )
 
+HARMAN_OVER_EAR_2018_PRESET = EQPreset(
+    name="Harman Target 2018 (Over-Ear)",
+    description="Harman Over-Ear Target 2018 curve for circumaural headphones with balanced sub-bass and smooth pinna gain",
+    preamp_db=-4.5,
+    bands=[
+        EQBand(1, FilterType.LOW_SHELF, 60.0, +4.0, 0.71, label="Harman Bass Shelf"),
+        EQBand(2, FilterType.PEAKING, 200.0, -1.0, 1.00, label="Warmth Purge"),
+        EQBand(3, FilterType.PEAKING, 1200.0, +1.5, 1.40, label="Midrange Presence"),
+        EQBand(4, FilterType.PEAKING, 3000.0, +3.0, 2.00, label="Pinna Gain"),
+        EQBand(5, FilterType.PEAKING, 6000.0, -2.5, 3.00, label="Treble Peak Tamer"),
+        EQBand(6, FilterType.HIGH_SHELF, 10000.0, +2.0, 0.71, label="Air & Extension"),
+    ]
+)
+
+IEF_NEUTRAL_PRESET = EQPreset(
+    name="IEF Neutral 2020",
+    description="In-Ear Fidelity neutral target curve with uncolored bass-to-midrange transition and natural ear canal gain",
+    preamp_db=-4.0,
+    bands=[
+        EQBand(1, FilterType.PEAKING, 1000.0, +1.0, 1.40, label="Linear Midrange"),
+        EQBand(2, FilterType.PEAKING, 2800.0, +4.0, 1.80, label="IEF Ear Canal Gain"),
+        EQBand(3, FilterType.PEAKING, 5800.0, -1.5, 2.50, label="Treble Smooth Notch"),
+        EQBand(4, FilterType.HIGH_SHELF, 10000.0, +1.0, 0.71, label="Natural Air"),
+    ]
+)
+
+DIFFUSE_FIELD_PRESET = EQPreset(
+    name="Diffuse Field (DF)",
+    description="Studio acoustic standard simulating flat speaker power response in a reverberant diffuse room",
+    preamp_db=-6.0,
+    bands=[
+        EQBand(1, FilterType.PEAKING, 1500.0, +1.5, 1.20, label="DF Mid Rise"),
+        EQBand(2, FilterType.PEAKING, 3000.0, +6.0, 1.50, label="Diffuse Field Ear Resonance"),
+        EQBand(3, FilterType.PEAKING, 7000.0, -2.0, 2.50, label="DF Treble Taper"),
+        EQBand(4, FilterType.HIGH_SHELF, 11000.0, +2.0, 0.71, label="DF Top Octave"),
+    ]
+)
+
+FREE_FIELD_PRESET = EQPreset(
+    name="Free Field (FF)",
+    description="Anechoic reference target compensating for head and ear diffraction from a frontal sound source",
+    preamp_db=-5.0,
+    bands=[
+        EQBand(1, FilterType.PEAKING, 1000.0, +1.0, 1.00, label="FF Mid Elevation"),
+        EQBand(2, FilterType.PEAKING, 2700.0, +5.0, 1.60, label="Free Field Pinna Peak"),
+        EQBand(3, FilterType.PEAKING, 6500.0, -3.0, 2.80, label="FF Ear Notch"),
+        EQBand(4, FilterType.HIGH_SHELF, 12000.0, +1.5, 0.71, label="FF Air Extension"),
+    ]
+)
+
 BUILTIN_PRESETS: List[EQPreset] = [
     SAMSUNG_AKG_REFERENCE_PRESET,
     HARMAN_IN_EAR_2019_PRESET,
+    HARMAN_OVER_EAR_2018_PRESET,
+    IEF_NEUTRAL_PRESET,
+    DIFFUSE_FIELD_PRESET,
+    FREE_FIELD_PRESET,
     BASS_IMPACT_PRESET,
     VOCAL_PRESENCE_PRESET,
     FLAT_PRESET,
 ]
+
+
+# ============================================================================
+# EQUALIZER APO & AUTOEQ PARSER
+# ============================================================================
+
+def parse_equalizer_apo(text: str, default_name: str = "Imported AutoEQ") -> Optional[EQPreset]:
+    """
+    Parses AutoEQ or EqualizerAPO (Peace) configuration text into an EQPreset.
+    Handles:
+      - Preamp: -5.5 dB
+      - Filter 1: ON PK Fc 65.0 Hz Gain +4.5 dB Q 0.70
+      - Filter: ON LSC Fc 105 Hz Gain -2.1 dB Q 0.71
+      - Filter 2: ON HSC Fc 10000 Hz Gain 3.5 dB Q 0.70
+      - Lines without 'Filter': 'ON PK Fc 100 Hz Gain 2.0 dB Q 1.0'
+    """
+    if not text or not text.strip():
+        return None
+
+    lines = text.strip().splitlines()
+    preamp_db = 0.0
+    preset_name = default_name
+    bands: List[EQBand] = []
+
+    preamp_re = re.compile(r"^\s*Preamp\s*:\s*([+-]?\d+(?:\.\d+)?)\s*(?:dB)?", re.IGNORECASE)
+    name_re = re.compile(r"^\s*#\s*(?:Profile|Preset|Name|EqualizerAPO(?:\s+Profile)?)\s*:\s*(.+)$", re.IGNORECASE)
+    filter_re = re.compile(
+        r"(?:Filter(?:\s*\d+)?\s*:\s*)?"
+        r"(?:(ON|OFF)\s+)?"
+        r"(PK|PEAK|PEAKING|LSC|LOW_SHELF|LOWSHELF|LS|HSC|HIGH_SHELF|HIGHSHELF|HS|BELL)\s+"
+        r"Fc\s+(\d+(?:\.\d+)?)\s*(?:Hz)?\s+"
+        r"Gain\s+([+-]?\d+(?:\.\d+)?)\s*(?:dB)?\s+"
+        r"Q\s+(\d+(?:\.\d+)?)",
+        re.IGNORECASE
+    )
+
+    for line in lines:
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+
+        m_name = name_re.match(line_clean)
+        if m_name and preset_name == default_name:
+            cand = m_name.group(1).strip()
+            if cand:
+                preset_name = cand
+            continue
+
+        if line_clean.startswith("#") or line_clean.startswith(";"):
+            continue
+
+        m_preamp = preamp_re.match(line_clean)
+        if m_preamp:
+            try:
+                preamp_db = float(m_preamp.group(1))
+            except ValueError:
+                pass
+            continue
+
+        m_filter = filter_re.search(line_clean)
+        if m_filter:
+            on_off = (m_filter.group(1) or "ON").upper()
+            ft_str = m_filter.group(2).upper()
+            freq_str = m_filter.group(3)
+            gain_str = m_filter.group(4)
+            q_str = m_filter.group(5)
+
+            ft = FilterType.from_str(ft_str)
+            enabled = (on_off != "OFF")
+            try:
+                freq = float(freq_str)
+                gain = float(gain_str)
+                q_val = float(q_str)
+            except ValueError:
+                continue
+
+            idx = len(bands) + 1
+            bands.append(EQBand(
+                index=idx,
+                filter_type=ft,
+                frequency=freq,
+                gain_db=gain,
+                q=q_val,
+                enabled=enabled,
+                label=f"AutoEQ Band {idx}"
+            ))
+
+    if not bands:
+        return None
+
+    desc = f"Imported AutoEQ / EqualizerAPO profile ({len(bands)} bands)"
+    return EQPreset(
+        name=preset_name,
+        description=desc,
+        preamp_db=preamp_db,
+        bands=bands
+    )
 
 
 # ============================================================================
@@ -331,7 +483,14 @@ class ParametricEQEngine:
         self,
         preset: Optional[EQPreset] = None,
         sample_rate: float = 48000.0,
-        bypassed: bool = False
+        bypassed: bool = False,
+        precision: str = "f64",
+        auto_headroom: bool = True,
+        headroom_margin: float = 0.5,
+        intersample_guard: bool = True,
+        anti_denormal: bool = True,
+        curve_style: str = "braille",
+        curve_range_db: float = 12.0,
     ):
         p = preset or SAMSUNG_AKG_REFERENCE_PRESET
         self.preset_name: str = p.name
@@ -340,6 +499,13 @@ class ParametricEQEngine:
         self.bands: List[EQBand] = [EQBand(**asdict(b)) for b in p.bands]
         self.sample_rate: float = sample_rate
         self.bypassed: bool = bypassed
+        self.precision: str = precision if precision in ("f32", "f64") else "f64"
+        self.auto_headroom: bool = auto_headroom
+        self.headroom_margin: float = max(0.0, min(6.0, float(headroom_margin)))
+        self.intersample_guard: bool = intersample_guard
+        self.anti_denormal: bool = anti_denormal
+        self.curve_style: str = curve_style if curve_style in ("braille", "blocks", "outline") else "braille"
+        self.curve_range_db: float = float(curve_range_db) if float(curve_range_db) in (12.0, 18.0, 24.0) else 12.0
         self._filters: List[BiquadFilter] = [BiquadFilter() for _ in self.bands]
         self._update_filter_coefficients()
 
@@ -347,6 +513,33 @@ class ParametricEQEngine:
         if sample_rate > 0 and sample_rate != self.sample_rate:
             self.sample_rate = sample_rate
             self._update_filter_coefficients()
+
+    def set_precision(self, precision: str) -> None:
+        p = precision.lower().strip()
+        if p in ("f32", "f64"):
+            self.precision = p
+
+    def set_auto_headroom(self, enabled: bool) -> None:
+        self.auto_headroom = bool(enabled)
+
+    def set_headroom_margin(self, margin_db: float) -> None:
+        self.headroom_margin = max(0.0, min(6.0, float(margin_db)))
+
+    def set_intersample_guard(self, enabled: bool) -> None:
+        self.intersample_guard = bool(enabled)
+
+    def set_anti_denormal(self, enabled: bool) -> None:
+        self.anti_denormal = bool(enabled)
+
+    def set_curve_style(self, style: str) -> None:
+        s = style.lower().strip()
+        if s in ("braille", "blocks", "outline"):
+            self.curve_style = s
+
+    def set_curve_range_db(self, range_db: float) -> None:
+        r = float(range_db)
+        if r in (12.0, 18.0, 24.0):
+            self.curve_range_db = r
 
     def _update_filter_coefficients(self) -> None:
         for i, band in enumerate(self.bands):
@@ -455,18 +648,22 @@ class ParametricEQEngine:
 
         return max_gain_db, peak_freq
 
-    def auto_preamp_headroom(self, margin_db: float = 0.5) -> float:
+    def auto_preamp_headroom(self, margin_db: Optional[float] = None) -> float:
         """
         Calculates the exact attenuation needed to ensure no frequency exceeds 0 dBFS,
         preventing inter-sample and digital saturation clipping.
         """
+        margin = self.headroom_margin if margin_db is None else margin_db
+        if self.intersample_guard and margin_db is None:
+            margin = margin + 0.2
+
         saved_preamp = self.preamp_db
         self.preamp_db = 0.0
         peak_gain_no_preamp, _ = self.calculate_peak_gain(num_points=300)
         self.preamp_db = saved_preamp
 
         if peak_gain_no_preamp > 0.0:
-            recommended = -(peak_gain_no_preamp + margin_db)
+            recommended = -(peak_gain_no_preamp + margin)
             return round(recommended, 1)
         return 0.0
 
@@ -486,7 +683,7 @@ class ParametricEQEngine:
     def to_ffmpeg_af(self) -> str:
         """
         Compiles this parametric equalizer into an exact FFmpeg/mpv audio filter string.
-        Utilizes 64-bit double precision float processing and transposed direct form II.
+        Utilizes 64-bit double precision float processing (or 32-bit float) and transposed direct form II.
         """
         if self.bypassed:
             return ""
@@ -498,6 +695,7 @@ class ParametricEQEngine:
             filters.append(f"volume=volume={self.preamp_db:.2f}dB:precision=fixed")
 
         # 2. Biquad Filter Chain
+        prec = "f64" if self.precision == "f64" else "f32"
         for b in self.bands:
             if not b.enabled or abs(b.gain_db) < 0.01:
                 continue
@@ -507,11 +705,11 @@ class ParametricEQEngine:
             q_val = b.q
 
             if b.filter_type == FilterType.LOW_SHELF:
-                filters.append(f"lowshelf=f={f_hz:.1f}:t=q:w={q_val:.2f}:g={gain:.2f}:r=f64")
+                filters.append(f"lowshelf=f={f_hz:.1f}:t=q:w={q_val:.2f}:g={gain:.2f}:r={prec}")
             elif b.filter_type == FilterType.HIGH_SHELF:
-                filters.append(f"highshelf=f={f_hz:.1f}:t=q:w={q_val:.2f}:g={gain:.2f}:r=f64")
+                filters.append(f"highshelf=f={f_hz:.1f}:t=q:w={q_val:.2f}:g={gain:.2f}:r={prec}")
             elif b.filter_type == FilterType.PEAKING:
-                filters.append(f"equalizer=f={f_hz:.1f}:t=q:w={q_val:.2f}:g={gain:.2f}:r=f64")
+                filters.append(f"equalizer=f={f_hz:.1f}:t=q:w={q_val:.2f}:g={gain:.2f}:r={prec}")
 
         return ",".join(filters)
 
@@ -526,6 +724,14 @@ class ParametricEQEngine:
             "description": self.description,
             "preamp_db": self.preamp_db,
             "bypassed": self.bypassed,
+            "sample_rate": self.sample_rate,
+            "precision": self.precision,
+            "auto_headroom": self.auto_headroom,
+            "headroom_margin": self.headroom_margin,
+            "intersample_guard": self.intersample_guard,
+            "anti_denormal": self.anti_denormal,
+            "curve_style": self.curve_style,
+            "curve_range_db": self.curve_range_db,
             "bands": [
                 {
                     "index": b.index,
@@ -544,7 +750,26 @@ class ParametricEQEngine:
     def from_dict(cls, data: Dict[str, Any], sample_rate: float = 48000.0) -> "ParametricEQEngine":
         preset = EQPreset.from_dict(data)
         bypassed = bool(data.get("bypassed", False))
-        return cls(preset=preset, sample_rate=sample_rate, bypassed=bypassed)
+        sr = float(data.get("sample_rate", sample_rate))
+        precision = str(data.get("precision", "f64"))
+        auto_headroom = bool(data.get("auto_headroom", True))
+        headroom_margin = float(data.get("headroom_margin", 0.5))
+        intersample_guard = bool(data.get("intersample_guard", True))
+        anti_denormal = bool(data.get("anti_denormal", True))
+        curve_style = str(data.get("curve_style", "braille"))
+        curve_range_db = float(data.get("curve_range_db", 12.0))
+        return cls(
+            preset=preset,
+            sample_rate=sr,
+            bypassed=bypassed,
+            precision=precision,
+            auto_headroom=auto_headroom,
+            headroom_margin=headroom_margin,
+            intersample_guard=intersample_guard,
+            anti_denormal=anti_denormal,
+            curve_style=curve_style,
+            curve_range_db=curve_range_db,
+        )
 
     def to_equalizer_apo(self) -> str:
         """Exports the EQ configuration to EqualizerAPO / Peace format."""
@@ -588,17 +813,23 @@ def format_gain_bar(gain_db: float, max_range: float = 12.0, width: int = 12) ->
         return f"[dim #555555]{'·' * dots}[/][#61afef]{'=' * bars}[/]|[dim #555555]{'·' * half}[/]"
 
 
-def render_braille_curve(engine: ParametricEQEngine, width: int = 68, height: int = 6) -> str:
+def render_braille_curve(
+    engine: ParametricEQEngine,
+    width: int = 68,
+    height: int = 6,
+    max_db: Optional[float] = None
+) -> str:
     """
     Renders a high-fidelity Braille frequency response curve across 20 Hz to 20 kHz.
     Uses logarithmic frequency interpolation and Robert Bristow-Johnson analytical transfer functions.
     """
-    min_db, max_db = -12.0, +12.0
+    limit_db = float(max_db or getattr(engine, "curve_range_db", 12.0))
+    min_db, max_db_val = -limit_db, limit_db
     total_rows = height * 4
     total_cols = width * 2
 
     grid = [[0 for _ in range(total_cols)] for _ in range(total_rows)]
-    zero_y = int(round((max_db - 0.0) / (max_db - min_db) * (total_rows - 1)))
+    zero_y = int(round((max_db_val - 0.0) / (max_db_val - min_db) * (total_rows - 1)))
     zero_y = max(0, min(total_rows - 1, zero_y))
 
     # Baseline dots along 0 dBFS
@@ -610,7 +841,7 @@ def render_braille_curve(engine: ParametricEQEngine, width: int = 68, height: in
     for x in range(total_cols):
         f = 20.0 * (1000.0 ** (x / (total_cols - 1)))
         g = engine.get_magnitude_at_freq(f)
-        y = int(round((max_db - g) / (max_db - min_db) * (total_rows - 1)))
+        y = int(round((max_db_val - g) / (max_db_val - min_db) * (total_rows - 1)))
         y = max(0, min(total_rows - 1, y))
         grid[y][x] = 1
         if prev_y is not None:
@@ -629,15 +860,15 @@ def render_braille_curve(engine: ParametricEQEngine, width: int = 68, height: in
     color = "#555555" if engine.bypassed else "#569f68"
     lines = []
 
-    # Top line (+12 dB)
+    # Top line
     top_chars = "".join(
         chr(0x2800 + sum(dot_map[dr][dc] for dr in range(4) for dc in range(2) if grid[dr][c * 2 + dc]))
         for c in range(width)
     )
-    lines.append(f"[#555555]+12dB ┌[/][{color}]{top_chars}[/][#555555]┐[/]")
+    lines.append(f"[#555555]{limit_db:+3.0f}dB ┌[/][{color}]{top_chars}[/][#555555]┐[/]")
 
     for r in range(1, height - 1):
-        db_val = max_db - r * (max_db - min_db) / (height - 1)
+        db_val = max_db_val - r * (max_db_val - min_db) / (height - 1)
         lbl = "  0dB" if abs(db_val) < 0.5 else f"{db_val:+3.0f}dB"
         chars = "".join(
             chr(0x2800 + sum(dot_map[dr][dc] for dr in range(4) for dc in range(2) if grid[r * 4 + dr][c * 2 + dc]))
@@ -645,12 +876,139 @@ def render_braille_curve(engine: ParametricEQEngine, width: int = 68, height: in
         )
         lines.append(f"[#555555]{lbl} │[/][{color}]{chars}[/][#555555]│[/]")
 
-    # Bottom line (-12 dB)
+    # Bottom line
     bot_chars = "".join(
         chr(0x2800 + sum(dot_map[dr][dc] for dr in range(4) for dc in range(2) if grid[(height - 1) * 4 + dr][c * 2 + dc]))
         for c in range(width)
     )
-    lines.append(f"[#555555]-12dB └[/][{color}]{bot_chars}[/][#555555]┘[/]")
+    lines.append(f"[#555555]{-limit_db:+3.0f}dB └[/][{color}]{bot_chars}[/][#555555]┘[/]")
     lines.append("[#555555]       20Hz       100Hz        500Hz        1kHz         5kHz        10kHz      20kHz[/]")
 
     return "\n".join(lines)
+
+
+def render_blocks_curve(
+    engine: ParametricEQEngine,
+    width: int = 68,
+    height: int = 6,
+    max_db: Optional[float] = None
+) -> str:
+    """Renders frequency response curve with solid ASCII blocks."""
+    limit_db = float(max_db or getattr(engine, "curve_range_db", 12.0))
+    min_db, max_db_val = -limit_db, limit_db
+    color = "#555555" if engine.bypassed else "#569f68"
+
+    gains = []
+    for c in range(width):
+        f = 20.0 * (1000.0 ** (c / (width - 1)))
+        g = engine.get_magnitude_at_freq(f)
+        gains.append(g)
+
+    zero_r = int(round((max_db_val - 0.0) / (max_db_val - min_db) * (height - 1)))
+    lines = []
+
+    for r in range(height):
+        db_val = max_db_val - r * (max_db_val - min_db) / (height - 1)
+        if r == 0:
+            lbl = f"{limit_db:+3.0f}dB ┌"
+            r_edge = "┐"
+        elif r == height - 1:
+            lbl = f"{-limit_db:+3.0f}dB └"
+            r_edge = "┘"
+        elif abs(db_val) < 0.5:
+            lbl = "  0dB │"
+            r_edge = "│"
+        else:
+            lbl = f"{db_val:+3.0f}dB │"
+            r_edge = "│"
+
+        row_chars = []
+        r_top = max_db_val - (r - 0.5) * (max_db_val - min_db) / (height - 1) if r > 0 else max_db_val + 10.0
+        r_bot = max_db_val - (r + 0.5) * (max_db_val - min_db) / (height - 1) if r < height - 1 else min_db - 10.0
+
+        for c in range(width):
+            g = gains[c]
+            if min(r_top, r_bot) <= g <= max(r_top, r_bot):
+                row_chars.append("█")
+            elif g > 0 and zero_r >= r and g >= r_bot:
+                row_chars.append("▄")
+            elif g < 0 and zero_r <= r and g <= r_top:
+                row_chars.append("▀")
+            elif r == zero_r and c % 4 == 0:
+                row_chars.append("·")
+            else:
+                row_chars.append(" ")
+
+        line_str = "".join(row_chars)
+        lines.append(f"[#555555]{lbl}[/][{color}]{line_str}[/][#555555]{r_edge}[/]")
+
+    lines.append("[#555555]       20Hz       100Hz        500Hz        1kHz         5kHz        10kHz      20kHz[/]")
+    return "\n".join(lines)
+
+
+def render_outline_curve(
+    engine: ParametricEQEngine,
+    width: int = 68,
+    height: int = 6,
+    max_db: Optional[float] = None
+) -> str:
+    """Renders frequency response curve with dotted outline."""
+    limit_db = float(max_db or getattr(engine, "curve_range_db", 12.0))
+    min_db, max_db_val = -limit_db, limit_db
+    color = "#555555" if engine.bypassed else "#61afef"
+
+    gains = []
+    for c in range(width):
+        f = 20.0 * (1000.0 ** (c / (width - 1)))
+        g = engine.get_magnitude_at_freq(f)
+        y = int(round((max_db_val - g) / (max_db_val - min_db) * (height - 1)))
+        gains.append(max(0, min(height - 1, y)))
+
+    zero_r = int(round((max_db_val - 0.0) / (max_db_val - min_db) * (height - 1)))
+    lines = []
+
+    for r in range(height):
+        db_val = max_db_val - r * (max_db_val - min_db) / (height - 1)
+        if r == 0:
+            lbl = f"{limit_db:+3.0f}dB ┌"
+            r_edge = "┐"
+        elif r == height - 1:
+            lbl = f"{-limit_db:+3.0f}dB └"
+            r_edge = "┘"
+        elif abs(db_val) < 0.5:
+            lbl = "  0dB │"
+            r_edge = "│"
+        else:
+            lbl = f"{db_val:+3.0f}dB │"
+            r_edge = "│"
+
+        row_chars = []
+        for c in range(width):
+            if gains[c] == r:
+                row_chars.append("●")
+            elif r == zero_r and c % 4 == 0:
+                row_chars.append("·")
+            else:
+                row_chars.append(" ")
+
+        line_str = "".join(row_chars)
+        lines.append(f"[#555555]{lbl}[/][{color}]{line_str}[/][#555555]{r_edge}[/]")
+
+    lines.append("[#555555]       20Hz       100Hz        500Hz        1kHz         5kHz        10kHz      20kHz[/]")
+    return "\n".join(lines)
+
+
+def render_curve(
+    engine: ParametricEQEngine,
+    width: int = 68,
+    height: int = 6,
+    style: Optional[str] = None,
+    max_db: Optional[float] = None
+) -> str:
+    """Dispatches curve rendering according to engine mode and scale."""
+    st = (style or getattr(engine, "curve_style", "braille")).lower()
+    if st in ("block", "blocks", "solid"):
+        return render_blocks_curve(engine, width, height, max_db)
+    elif st in ("outline", "dot", "dots"):
+        return render_outline_curve(engine, width, height, max_db)
+    return render_braille_curve(engine, width, height, max_db)

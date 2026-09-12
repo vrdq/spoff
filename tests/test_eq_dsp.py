@@ -9,9 +9,17 @@ from spoff.eq import (
     ParametricEQEngine,
     SAMSUNG_AKG_REFERENCE_PRESET,
     HARMAN_IN_EAR_2019_PRESET,
+    HARMAN_OVER_EAR_2018_PRESET,
+    IEF_NEUTRAL_PRESET,
+    DIFFUSE_FIELD_PRESET,
+    FREE_FIELD_PRESET,
     BUILTIN_PRESETS,
     format_gain_bar,
     render_braille_curve,
+    render_blocks_curve,
+    render_outline_curve,
+    render_curve,
+    parse_equalizer_apo,
 )
 from spoff.storage import load_eq_settings, save_eq_settings
 from spoff.player import MPVController
@@ -365,5 +373,398 @@ class TestParametricEQDSP(unittest.TestCase):
         asyncio.run(_run())
 
 
+class TestAutoEQParser(unittest.TestCase):
+    def test_parse_autoeq_standard_format(self):
+        apo_text = """
+        Preamp: -5.5 dB
+        Filter 1: ON PK Fc 65.0 Hz Gain +4.5 dB Q 0.70
+        Filter 2: ON LSC Fc 105.0 Hz Gain -2.1 dB Q 0.71
+        Filter 3: ON HSC Fc 10000.0 Hz Gain +3.5 dB Q 0.70
+        """
+        preset = parse_equalizer_apo(apo_text, default_name="AutoEQ Sennheiser")
+        self.assertIsNotNone(preset)
+        self.assertEqual(preset.name, "AutoEQ Sennheiser")
+        self.assertAlmostEqual(preset.preamp_db, -5.5)
+        self.assertEqual(len(preset.bands), 3)
+
+        b1 = preset.bands[0]
+        self.assertEqual(b1.filter_type, FilterType.PEAKING)
+        self.assertAlmostEqual(b1.frequency, 65.0)
+        self.assertAlmostEqual(b1.gain_db, 4.5)
+        self.assertAlmostEqual(b1.q, 0.70)
+        self.assertTrue(b1.enabled)
+
+        b2 = preset.bands[1]
+        self.assertEqual(b2.filter_type, FilterType.LOW_SHELF)
+        self.assertAlmostEqual(b2.frequency, 105.0)
+        self.assertAlmostEqual(b2.gain_db, -2.1)
+        self.assertAlmostEqual(b2.q, 0.71)
+        self.assertTrue(b2.enabled)
+
+        b3 = preset.bands[2]
+        self.assertEqual(b3.filter_type, FilterType.HIGH_SHELF)
+        self.assertAlmostEqual(b3.frequency, 10000.0)
+        self.assertAlmostEqual(b3.gain_db, 3.5)
+        self.assertAlmostEqual(b3.q, 0.70)
+        self.assertTrue(b3.enabled)
+
+    def test_parse_peace_format_and_variations(self):
+        peace_text = """
+        # Profile: Moondrop Blessing 2 Dusk
+        ; Auto-generated EqualizerAPO config
+        Preamp: -4.2
+        ON PK Fc 1000 Gain -1.5 Q 1.8
+        OFF LSC Fc 80 Gain 3.0 Q 0.71
+        Filter 3: ON HSC Fc 12000 Hz Gain -2.0 dB Q 1.0
+        """
+        preset = parse_equalizer_apo(peace_text)
+        self.assertIsNotNone(preset)
+        self.assertEqual(preset.name, "Moondrop Blessing 2 Dusk")
+        self.assertAlmostEqual(preset.preamp_db, -4.2)
+        self.assertEqual(len(preset.bands), 3)
+
+        self.assertTrue(preset.bands[0].enabled)
+        self.assertFalse(preset.bands[1].enabled)
+        self.assertTrue(preset.bands[2].enabled)
+        self.assertEqual(preset.bands[1].filter_type, FilterType.LOW_SHELF)
+        self.assertEqual(preset.bands[2].filter_type, FilterType.HIGH_SHELF)
+
+    def test_parse_empty_and_invalid(self):
+        self.assertIsNone(parse_equalizer_apo(""))
+        self.assertIsNone(parse_equalizer_apo("   \n\t  "))
+        self.assertIsNone(parse_equalizer_apo("# Just a comment\n; Another comment"))
+        self.assertIsNone(parse_equalizer_apo("Some random text without any filters"))
+
+    def test_parse_preamp_positive_and_omitted(self):
+        apo_no_preamp = "Filter 1: ON PK Fc 1000 Hz Gain 2.0 dB Q 1.4"
+        p1 = parse_equalizer_apo(apo_no_preamp)
+        self.assertIsNotNone(p1)
+        self.assertAlmostEqual(p1.preamp_db, 0.0)
+
+        apo_pos_preamp = "Preamp: +2.5 dB\nFilter 1: ON PK Fc 1000 Hz Gain -2.0 dB Q 1.4"
+        p2 = parse_equalizer_apo(apo_pos_preamp)
+        self.assertIsNotNone(p2)
+        self.assertAlmostEqual(p2.preamp_db, 2.5)
+
+
+class TestEQEngineAdvancedSettings(unittest.TestCase):
+    def test_precision_setting_and_ffmpeg_af(self):
+        engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET, precision="f64")
+        self.assertEqual(engine.precision, "f64")
+        af_f64 = engine.to_ffmpeg_af()
+        self.assertIn(":r=f64", af_f64)
+        self.assertNotIn(":r=f32", af_f64)
+
+        engine.set_precision("f32")
+        self.assertEqual(engine.precision, "f32")
+        af_f32 = engine.to_ffmpeg_af()
+        self.assertIn(":r=f32", af_f32)
+        self.assertNotIn(":r=f64", af_f32)
+
+        # Invalid precision is ignored
+        engine.set_precision("invalid")
+        self.assertEqual(engine.precision, "f32")
+
+    def test_auto_headroom_settings_and_guard(self):
+        engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
+        engine.set_auto_headroom(False)
+        self.assertFalse(engine.auto_headroom)
+        engine.set_auto_headroom(True)
+        self.assertTrue(engine.auto_headroom)
+
+        engine.set_headroom_margin(1.5)
+        self.assertEqual(engine.headroom_margin, 1.5)
+
+        engine.set_intersample_guard(True)
+        self.assertTrue(engine.intersample_guard)
+        rec_guard = engine.auto_preamp_headroom()
+
+        engine.set_intersample_guard(False)
+        self.assertFalse(engine.intersample_guard)
+        rec_no_guard = engine.auto_preamp_headroom()
+
+        self.assertLess(rec_guard, rec_no_guard)
+
+    def test_curve_styles_and_ranges(self):
+        engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
+        engine.set_curve_style("blocks")
+        self.assertEqual(engine.curve_style, "blocks")
+        engine.set_curve_style("outline")
+        self.assertEqual(engine.curve_style, "outline")
+        engine.set_curve_style("braille")
+        self.assertEqual(engine.curve_style, "braille")
+        engine.set_curve_style("unsupported")
+        self.assertEqual(engine.curve_style, "braille")
+
+        engine.set_curve_range_db(18.0)
+        self.assertEqual(engine.curve_range_db, 18.0)
+        engine.set_curve_range_db(24.0)
+        self.assertEqual(engine.curve_range_db, 24.0)
+        engine.set_curve_range_db(12.0)
+        self.assertEqual(engine.curve_range_db, 12.0)
+        engine.set_curve_range_db(99.0)  # Invalid, ignored
+        self.assertEqual(engine.curve_range_db, 12.0)
+
+    def test_advanced_serialization_roundtrip(self):
+        engine = ParametricEQEngine(
+            SAMSUNG_AKG_REFERENCE_PRESET,
+            sample_rate=96000.0,
+            precision="f32",
+            auto_headroom=False,
+            headroom_margin=1.0,
+            intersample_guard=False,
+            anti_denormal=False,
+            curve_style="blocks",
+            curve_range_db=18.0,
+        )
+        d = engine.to_dict()
+        self.assertEqual(d["sample_rate"], 96000.0)
+        self.assertEqual(d["precision"], "f32")
+        self.assertFalse(d["auto_headroom"])
+        self.assertEqual(d["headroom_margin"], 1.0)
+        self.assertFalse(d["intersample_guard"])
+        self.assertFalse(d["anti_denormal"])
+        self.assertEqual(d["curve_style"], "blocks")
+        self.assertEqual(d["curve_range_db"], 18.0)
+
+        restored = ParametricEQEngine.from_dict(d)
+        self.assertEqual(restored.sample_rate, 96000.0)
+        self.assertEqual(restored.precision, "f32")
+        self.assertFalse(restored.auto_headroom)
+        self.assertEqual(restored.headroom_margin, 1.0)
+        self.assertFalse(restored.intersample_guard)
+        self.assertFalse(restored.anti_denormal)
+        self.assertEqual(restored.curve_style, "blocks")
+        self.assertEqual(restored.curve_range_db, 18.0)
+
+    def test_render_curve_dispatchers(self):
+        engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
+        blocks = render_blocks_curve(engine, width=40, height=6)
+        self.assertIn("20Hz", blocks)
+        self.assertIn("20kHz", blocks)
+        self.assertTrue("█" in blocks or "▄" in blocks or "▀" in blocks or "·" in blocks)
+
+        outline = render_outline_curve(engine, width=40, height=6)
+        self.assertIn("20Hz", outline)
+        self.assertIn("20kHz", outline)
+        self.assertIn("●", outline)
+
+        # Dispatcher with style arg
+        d_blocks = render_curve(engine, width=40, height=6, style="blocks")
+        self.assertEqual(d_blocks, blocks)
+
+        d_outline = render_curve(engine, width=40, height=6, style="outline")
+        self.assertEqual(d_outline, outline)
+
+        d_braille = render_curve(engine, width=40, height=6, style="braille")
+        self.assertIn("20Hz", d_braille)
+
+    def test_builtin_acoustic_target_presets(self):
+        names = [p.name for p in BUILTIN_PRESETS]
+        self.assertIn("Samsung AKG Master Reference", names)
+        self.assertIn("Harman Target 2019 (In-Ear)", names)
+        self.assertIn("Harman Target 2018 (Over-Ear)", names)
+        self.assertIn("IEF Neutral 2020", names)
+        self.assertIn("Diffuse Field (DF)", names)
+        self.assertIn("Free Field (FF)", names)
+
+        for p in BUILTIN_PRESETS:
+            self.assertTrue(len(p.bands) > 0)
+            self.assertLessEqual(p.preamp_db, 0.0)
+
+
+class TestEQSettingsModalUI(unittest.TestCase):
+    def test_eq_settings_modal_interactions(self):
+        import asyncio
+        from unittest.mock import patch
+        from textual.app import App, ComposeResult
+        from spoff.app import EQSettingsModal, EqualizerModal
+        from textual.widgets import Static
+
+        class EQSettingsApp(App):
+            def __init__(self, engine):
+                super().__init__()
+                self.eq_engine = engine
+                self.player = MPVController(eq_engine=self.eq_engine)
+
+            def compose(self) -> ComposeResult:
+                yield Static("Root Screen")
+
+        async def _run():
+            engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
+            app = EQSettingsApp(engine)
+            async with app.run_test() as pilot:
+                modal = EQSettingsModal(engine)
+                app.push_screen(modal)
+                await pilot.pause()
+
+                # Test navigation cursor down and up
+                modal.action_cursor_down()
+                await pilot.pause()
+                self.assertEqual(modal.focused.id, "eq-opt-precision")
+                modal.action_cursor_up()
+                await pilot.pause()
+                self.assertEqual(modal.focused.id, "eq-opt-sample-rate")
+
+                # Test switch focus (Tab / Shift+Tab)
+                modal.action_switch_focus()
+                await pilot.pause()
+                self.assertEqual(modal.focused.id, "eq-opt-precision")
+                modal.action_switch_focus_back()
+                await pilot.pause()
+                self.assertEqual(modal.focused.id, "eq-opt-sample-rate")
+
+                # Test action_select_or_toggle when focused on sample rate
+                modal.action_select_or_toggle()
+                self.assertEqual(engine.sample_rate, 88200.0)
+
+                # Test cycle sample rate
+                modal.cycle_sample_rate()
+                self.assertEqual(engine.sample_rate, 96000.0)
+
+                # Test cycle precision
+                modal.cycle_precision()
+                self.assertEqual(engine.precision, "f32")
+                modal.cycle_precision()
+                self.assertEqual(engine.precision, "f64")
+
+                # Test toggle anti-denormal
+                modal.toggle_anti_denormal()
+                self.assertFalse(engine.anti_denormal)
+                modal.toggle_anti_denormal()
+                self.assertTrue(engine.anti_denormal)
+
+                # Test toggle auto headroom
+                modal.toggle_auto_headroom()
+                self.assertFalse(engine.auto_headroom)
+                modal.toggle_auto_headroom()
+                self.assertTrue(engine.auto_headroom)
+
+                # Test cycle headroom margin
+                modal.cycle_headroom_margin()
+                self.assertEqual(engine.headroom_margin, 1.0)
+
+                # Test toggle intersample guard
+                modal.toggle_intersample_guard()
+                self.assertFalse(engine.intersample_guard)
+                modal.toggle_intersample_guard()
+                self.assertTrue(engine.intersample_guard)
+
+                # Test cycle curve style
+                modal.cycle_curve_style()
+                self.assertEqual(engine.curve_style, "blocks")
+
+                # Test cycle curve range
+                modal.cycle_curve_range()
+                self.assertEqual(engine.curve_range_db, 18.0)
+
+                # Test cycle target profile
+                orig_name = engine.preset_name
+                modal.cycle_target_profile()
+                self.assertNotEqual(engine.preset_name, orig_name)
+
+                # Test reset to reference
+                modal.reset_to_reference()
+                self.assertEqual(engine.preset_name, "Samsung AKG Master Reference")
+
+                # Test clipboard export
+                with patch("spoff.app.copy_to_clipboard", return_value=True) as mock_copy:
+                    modal.export_to_clipboard()
+                    mock_copy.assert_called_once()
+
+                # Test clipboard import with auto_headroom active (attenuates to prevent 0 dBFS clipping)
+                sample_apo = "Preamp: -3.0 dB\nFilter 1: ON PK Fc 1000.0 Hz Gain 4.0 dB Q 1.0"
+                with patch("spoff.app.read_from_clipboard", return_value=sample_apo):
+                    modal.import_from_clipboard()
+                    self.assertEqual(len(engine.bands), 1)
+                    # Auto-headroom calculates -5.2 dB (4.0 dB peak + 1.0 margin + 0.2 intersample guard)
+                    self.assertLess(engine.preamp_db, -4.0)
+
+                    # When auto_headroom is disabled, imported preamp is retained as-is (-3.0 dB)
+                    engine.set_auto_headroom(False)
+                    modal.import_from_clipboard()
+                    self.assertAlmostEqual(engine.preamp_db, -3.0)
+
+                # Test open live editor
+                modal.open_live_editor()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, EqualizerModal)
+
+        asyncio.run(_run())
+
+    def test_open_eq_settings_from_equalizer_modal(self):
+        import asyncio
+        from textual.app import App, ComposeResult
+        from spoff.app import EqualizerModal, EQSettingsModal
+        from textual.widgets import Static
+
+        class EQApp(App):
+            def __init__(self, engine):
+                super().__init__()
+                self.eq_engine = engine
+                self.player = MPVController(eq_engine=self.eq_engine)
+
+            def compose(self) -> ComposeResult:
+                yield Static("Root Screen")
+
+        async def _run():
+            engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
+            app = EQApp(engine)
+            async with app.run_test() as pilot:
+                eq_modal = EqualizerModal(engine)
+                app.push_screen(eq_modal)
+                await pilot.pause()
+
+                # Trigger open settings action (bound to s/S)
+                eq_modal.action_open_settings()
+                await pilot.pause()
+
+                self.assertIsInstance(app.screen, EQSettingsModal)
+                app.screen.action_dismiss_modal()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, EqualizerModal)
+
+        asyncio.run(_run())
+
+    def test_open_eq_settings_from_settings_modal(self):
+        import asyncio
+        from textual.app import App, ComposeResult
+        from spoff.app import SettingsModal, EQSettingsModal, DEFAULT_KEYBINDINGS
+        from textual.widgets import Static
+
+        class SettingsApp(App):
+            def __init__(self, engine):
+                super().__init__()
+                self.eq_engine = engine
+                self.player = MPVController(eq_engine=self.eq_engine)
+                self.keybindings = dict(DEFAULT_KEYBINDINGS)
+
+            def compose(self) -> ComposeResult:
+                yield Static("Root Screen")
+
+            def reset_all_keybindings(self):
+                pass
+
+        async def _run():
+            engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
+            app = SettingsApp(engine)
+            async with app.run_test() as pilot:
+                settings_modal = SettingsModal()
+                app.push_screen(settings_modal)
+                await pilot.pause()
+
+                # Trigger open_eq_settings from SettingsModal
+                settings_modal.open_eq_settings()
+                await pilot.pause()
+
+                self.assertIsInstance(app.screen, EQSettingsModal)
+                app.screen.action_dismiss_modal()
+                await pilot.pause()
+                self.assertIsInstance(app.screen, SettingsModal)
+
+        asyncio.run(_run())
+
+
 if __name__ == "__main__":
     unittest.main()
+
