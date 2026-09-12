@@ -54,7 +54,10 @@ class MPVController:
             "--no-video",
             f"--volume={self._volume}",
             "--really-quiet",
-            "--gapless-audio=yes"
+            "--gapless-audio=yes",
+            "--audio-client-name=spoff",
+            "--title=spoff",
+            "--force-media-title=spoff",
         ]
         self.process = subprocess.Popen(
             cmd,

@@ -49,6 +49,9 @@ def fetch_spotify_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
     if not entity:
         return None
 
+    cover_sources = entity.get("coverArt", {}).get("sources", []) if entity.get("coverArt") else []
+    cover_url = cover_sources[0].get("url") if cover_sources and len(cover_sources) > 0 and isinstance(cover_sources[0], dict) else None
+
     tracks: List[Dict[str, Any]] = []
     for item in entity.get("trackList", []):
         tracks.append({
@@ -57,10 +60,8 @@ def fetch_spotify_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
             "artist": item.get("subtitle") or "Unknown Artist",
             "duration_ms": item.get("duration") or 0,
             "uri": item.get("uri") or "",
+            "art_url": cover_url,
         })
-
-    cover_sources = entity.get("coverArt", {}).get("sources", []) if entity.get("coverArt") else []
-    cover_url = cover_sources[0].get("url") if cover_sources and len(cover_sources) > 0 and isinstance(cover_sources[0], dict) else None
 
     return {
         "id": p_id,
@@ -99,6 +100,10 @@ def fetch_spotify_album(album_id_or_url: str) -> Optional[Dict[str, Any]]:
     if not entity:
         return None
 
+    cover_sources = entity.get("coverArt", {}).get("sources", []) if entity.get("coverArt") else []
+    cover_url = cover_sources[0].get("url") if cover_sources and len(cover_sources) > 0 and isinstance(cover_sources[0], dict) else None
+    album_name = entity.get("name") or "Spotify Album"
+
     tracks: List[Dict[str, Any]] = []
     for item in entity.get("trackList", []):
         tracks.append({
@@ -107,11 +112,14 @@ def fetch_spotify_album(album_id_or_url: str) -> Optional[Dict[str, Any]]:
             "artist": item.get("subtitle") or "Unknown Artist",
             "duration_ms": item.get("duration") or 0,
             "uri": item.get("uri") or "",
+            "album": album_name,
+            "art_url": cover_url,
         })
 
     return {
         "id": a_id,
-        "name": entity.get("name") or "Spotify Album",
+        "name": album_name,
         "description": entity.get("subtitle") or "",
+        "cover_url": cover_url,
         "tracks": tracks
     }

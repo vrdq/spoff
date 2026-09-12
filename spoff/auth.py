@@ -438,12 +438,18 @@ def fetch_playlist_tracks(token: str, playlist_id: str) -> Optional[List[Dict[st
             t = entry["track"]
             t_id = t.get("id") or str(hash(t.get("name", "") + str(t.get("artists", []))))
             artists = ", ".join(a.get("name", "Unknown") for a in t.get("artists", []))
+            album_info = t.get("album") or {}
+            album_name = album_info.get("name")
+            images = album_info.get("images") or []
+            art_url = images[0].get("url") if images and isinstance(images[0], dict) else None
             tracks.append({
                 "id": t_id,
                 "title": t.get("name", "Unknown"),
                 "artist": artists if artists else "Unknown",
                 "duration_ms": t.get("duration_ms", 0),
                 "uri": t.get("uri", ""),
+                "album": album_name,
+                "art_url": art_url,
                 "source": "spotify"
             })
         url = res.get("next")
@@ -465,13 +471,18 @@ def fetch_liked_songs(token: str, max_tracks: Optional[int] = 200) -> Optional[L
                 continue
             t = entry["track"]
             t_id = t.get("id") or str(hash(t.get("name", "") + str(t.get("artists", []))))
-            artists = ", ".join(a.get("name", "Unknown") for a in t.get("artists", []))
+            album_info = t.get("album") or {}
+            album_name = album_info.get("name")
+            images = album_info.get("images") or []
+            art_url = images[0].get("url") if images and isinstance(images[0], dict) else None
             tracks.append({
                 "id": t_id,
                 "title": t.get("name", "Unknown"),
                 "artist": artists if artists else "Unknown",
                 "duration_ms": t.get("duration_ms", 0),
                 "uri": t.get("uri", ""),
+                "album": album_name,
+                "art_url": art_url,
                 "source": "spotify"
             })
         url = res.get("next")
@@ -684,12 +695,18 @@ def search_spotify_tracks(query: str, limit: int = 25, token: Optional[str] = No
         artists = ", ".join(a.get("name", "Unknown") for a in item.get("artists", []))
         duration_ms = item.get("duration_ms", 0)
         uri = item.get("uri") or (f"spotify:track:{t_id}" if t_id else "")
+        album_info = item.get("album") or {}
+        album_name = album_info.get("name")
+        images = album_info.get("images") or []
+        art_url = images[0].get("url") if images and isinstance(images[0], dict) else None
         tracks.append({
             "id": t_id,
             "title": title,
             "artist": artists,
             "duration_ms": duration_ms,
             "uri": uri,
+            "album": album_name,
+            "art_url": art_url,
             "url": item.get("external_urls", {}).get("spotify", f"https://open.spotify.com/track/{t_id}" if t_id else ""),
             "source": "spotify"
         })

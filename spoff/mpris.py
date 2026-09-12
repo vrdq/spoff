@@ -1,4 +1,5 @@
 import os
+import re
 import logging
 import threading
 from typing import Dict, Any, Optional, Callable
@@ -31,6 +32,7 @@ class SpoffMPRISDbus:
             <property name='CanRaise' type='b' access='read'/>
             <property name='HasTrackList' type='b' access='read'/>
             <property name='Identity' type='s' access='read'/>
+            <property name='DesktopEntry' type='s' access='read'/>
             <property name='SupportedUriSchemes' type='as' access='read'/>
             <property name='SupportedMimeTypes' type='as' access='read'/>
         </interface>
@@ -51,6 +53,9 @@ class SpoffMPRISDbus:
             <method name='OpenUri'>
                 <arg direction='in' name='Uri' type='s'/>
             </method>
+            <signal name='Seeked'>
+                <arg direction='out' name='Position' type='x'/>
+            </signal>
             <property name='PlaybackStatus' type='s' access='read'/>
             <property name='LoopStatus' type='s' access='readwrite'/>
             <property name='Rate' type='d' access='readwrite'/>
@@ -69,21 +74,23 @@ class SpoffMPRISDbus:
     """
     if HAS_DBUS and signal:
         PropertiesChanged = signal()
+        Seeked = signal()
 
     # Root Interface
     CanQuit = True
     CanRaise = False
     HasTrackList = False
     Identity = "Spoff"
+    DesktopEntry = "spoff"
     SupportedUriSchemes = ["file", "http", "https"]
     SupportedMimeTypes = ["audio/mpeg", "audio/ogg", "audio/flac", "audio/webm"]
 
     def __init__(self, callbacks: Dict[str, Callable]):
         self.callbacks = callbacks
         self.PlaybackStatus = "Stopped"
-        self.LoopStatus = "None"
+        self._loop_status = "None"
         self.Rate = 1.0
-        self.Shuffle = False
+        self._shuffle = False
         self._volume = 0.8
         self.Position = 0
         self.CanControl = True
@@ -93,6 +100,30 @@ class SpoffMPRISDbus:
         self.CanGoNext = True
         self.CanGoPrevious = True
         self.Metadata: Dict[str, Any] = {}
+
+    @property
+    def LoopStatus(self) -> str:
+        return self._loop_status
+
+    @LoopStatus.setter
+    def LoopStatus(self, val: str) -> None:
+        val_str = str(val)
+        if val_str in ("None", "Track", "Playlist"):
+            self._loop_status = val_str
+            fn = self.callbacks.get("set_loop_status")
+            if fn:
+                fn(val_str)
+
+    @property
+    def Shuffle(self) -> bool:
+        return self._shuffle
+
+    @Shuffle.setter
+    def Shuffle(self, val: bool) -> None:
+        self._shuffle = bool(val)
+        fn = self.callbacks.get("set_shuffle")
+        if fn:
+            fn(self._shuffle)
 
     @property
     def Volume(self) -> float:
@@ -187,19 +218,31 @@ class MPRISService:
 
             bus = SessionBus()
             self.dbus_obj = SpoffMPRISDbus(self.callbacks)
+
+            primary_name = "org.mpris.MediaPlayer2.spoff"
+            has_owner = False
             try:
-                self.publication = bus.publish(
-                    "org.mpris.MediaPlayer2.spoff",
-                    ("/org/mpris/MediaPlayer2", self.dbus_obj)
+                ret = bus.con.call_sync(
+                    "org.freedesktop.DBus",
+                    "/org/freedesktop/DBus",
+                    "org.freedesktop.DBus",
+                    "NameHasOwner",
+                    GLib.Variant("(s)", (primary_name,)),
+                    None,
+                    0,
+                    -1,
+                    None
                 )
-                logger.info("MPRIS service registered at org.mpris.MediaPlayer2.spoff")
-            except Exception as e:
-                logger.debug(f"Primary MPRIS bus name busy: {e}, falling back to instance name")
-                self.publication = bus.publish(
-                    f"org.mpris.MediaPlayer2.spoff.instance{os.getpid()}",
-                    ("/org/mpris/MediaPlayer2", self.dbus_obj)
-                )
-                logger.info(f"MPRIS service registered at org.mpris.MediaPlayer2.spoff.instance{os.getpid()}")
+                has_owner = bool(ret[0])
+            except Exception:
+                has_owner = False
+
+            bus_name = primary_name if not has_owner else f"{primary_name}.instance{os.getpid()}"
+            self.publication = bus.publish(
+                bus_name,
+                ("/org/mpris/MediaPlayer2", self.dbus_obj)
+            )
+            logger.info(f"MPRIS service registered at {bus_name}")
             self._started = True
             return True
         except Exception as e:
@@ -213,6 +256,8 @@ class MPRISService:
         prop_sig = getattr(self.dbus_obj, "PropertiesChanged", None)
         if callable(prop_sig):
             try:
+                # pydbus automatically wraps values based on introspected types.
+                # Passing raw python types (str, float, bool, dict) avoids double-wrapping TypeErrors.
                 prop_sig("org.mpris.MediaPlayer2.Player", props, [])
             except Exception as e:
                 logger.debug(f"Error emitting MPRIS PropertiesChanged: {e}")
@@ -225,14 +270,14 @@ class MPRISService:
             self.dbus_obj.Metadata = {}
             self.dbus_obj.PlaybackStatus = "Stopped"
             self._emit_changed({
-                "Metadata": GLib.Variant("a{sv}", {}),
-                "PlaybackStatus": GLib.Variant("s", "Stopped"),
+                "Metadata": {},
+                "PlaybackStatus": "Stopped",
             })
             return
 
         raw_id = str(track.get("id") or hash(track.get("title", "") + track.get("artist", "")))
         clean_id = "".join(c for c in raw_id if c.isalnum() or c == "_") or "track"
-        track_obj_path = f"/org/spoff/track/t_{clean_id}"
+        track_obj_path = f"/org/mpris/MediaPlayer2/track/t_{clean_id}"
 
         title = track.get("title", "Unknown Title")
         artist = track.get("artist", "Unknown Artist")
@@ -252,7 +297,11 @@ class MPRISService:
             "mpris:length": GLib.Variant("x", max(0, dur_us))
         }
 
-        art_url = track.get("art_url") or track.get("thumbnail")
+        art_url = track.get("art_url") or track.get("thumbnail") or track.get("cover_url")
+        t_id = str(track.get("id") or "")
+        if not art_url and t_id and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
+            art_url = f"https://img.youtube.com/vi/{t_id}/hqdefault.jpg"
+
         if art_url:
             meta["mpris:artUrl"] = GLib.Variant("s", str(art_url))
 
@@ -260,12 +309,22 @@ class MPRISService:
         if album:
             meta["xesam:album"] = GLib.Variant("s", str(album))
 
+        track_url = track.get("url")
+        if not track_url:
+            if t_id and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
+                track_url = f"https://www.youtube.com/watch?v={t_id}"
+            elif track.get("uri", "").startswith("spotify:track:"):
+                s_id = track.get("uri").split(":")[-1]
+                track_url = f"https://open.spotify.com/track/{s_id}"
+        if track_url:
+            meta["xesam:url"] = GLib.Variant("s", str(track_url))
+
         self.dbus_obj.Metadata = meta
         self.dbus_obj.PlaybackStatus = "Playing"
 
         self._emit_changed({
-            "Metadata": GLib.Variant("a{sv}", meta),
-            "PlaybackStatus": GLib.Variant("s", "Playing"),
+            "Metadata": meta,
+            "PlaybackStatus": "Playing",
         })
 
     def update_status(self, is_playing: bool, is_paused: bool) -> None:
@@ -277,7 +336,7 @@ class MPRISService:
             return
 
         self.dbus_obj.PlaybackStatus = status
-        self._emit_changed({"PlaybackStatus": GLib.Variant("s", status)})
+        self._emit_changed({"PlaybackStatus": status})
 
     def update_position(self, pos_sec: float) -> None:
         if not self.dbus_obj:
@@ -288,8 +347,41 @@ class MPRISService:
         if not HAS_DBUS or not self.dbus_obj or GLib is None:
             return
         vol_float = max(0.0, min(1.0, float(vol_int) / 100.0))
+        if abs(self.dbus_obj._volume - vol_float) < 0.005:
+            return
         self.dbus_obj._volume = vol_float
-        self._emit_changed({"Volume": GLib.Variant("d", vol_float)})
+        self._emit_changed({"Volume": vol_float})
+
+    def update_loop_status(self, repeat_mode: str) -> None:
+        if not HAS_DBUS or not self.dbus_obj or GLib is None:
+            return
+        mapping = {"off": "None", "one": "Track", "all": "Playlist"}
+        val = mapping.get(repeat_mode, "None")
+        if self.dbus_obj._loop_status == val:
+            return
+        self.dbus_obj._loop_status = val
+        self._emit_changed({"LoopStatus": val})
+
+    def update_shuffle(self, shuffle_on: bool) -> None:
+        if not HAS_DBUS or not self.dbus_obj or GLib is None:
+            return
+        val = bool(shuffle_on)
+        if self.dbus_obj._shuffle == val:
+            return
+        self.dbus_obj._shuffle = val
+        self._emit_changed({"Shuffle": val})
+
+    def emit_seeked(self, pos_sec: float) -> None:
+        if not HAS_DBUS or not self.dbus_obj:
+            return
+        pos_us = int(pos_sec * 1_000_000)
+        self.dbus_obj.Position = pos_us
+        seek_sig = getattr(self.dbus_obj, "Seeked", None)
+        if callable(seek_sig):
+            try:
+                seek_sig(pos_us)
+            except Exception as e:
+                logger.debug(f"Error emitting MPRIS Seeked: {e}")
 
     def stop(self) -> None:
         if self.publication:

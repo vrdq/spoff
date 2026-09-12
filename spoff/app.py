@@ -3073,6 +3073,8 @@ class SpoffTUI(App):
             "seek": lambda sec: self._dispatch_mpris(self._mpris_seek, sec),
             "set_position": lambda sec: self._dispatch_mpris(self._mpris_set_pos, sec),
             "set_volume": lambda vol: self._dispatch_mpris(self._mpris_set_vol, vol),
+            "set_loop_status": lambda mode: self._dispatch_mpris(self._mpris_set_loop_status, mode),
+            "set_shuffle": lambda val: self._dispatch_mpris(self._mpris_set_shuffle, val),
             "quit": lambda: self._dispatch_mpris(self.action_quit_app),
         }
         self.mpris = MPRISService(mpris_callbacks)
@@ -3398,6 +3400,8 @@ class SpoffTUI(App):
         self.mpris.start()
         if self.mpris:
             self.mpris.update_volume(self.volume)
+            self.mpris.update_loop_status(self.repeat_mode)
+            self.mpris.update_shuffle(self.shuffle_mode)
         self.visualizer.start()
         self.check_github_updates_bg()
 
@@ -3810,6 +3814,8 @@ class SpoffTUI(App):
         self._shuffle_history = []
         status = "ON" if self.shuffle_mode else "OFF"
         self.notify_user(f"Shuffle: {status}")
+        if self.mpris:
+            self.mpris.update_shuffle(self.shuffle_mode)
         self.update_player_hud()
 
     def action_toggle_repeat(self):
@@ -3820,6 +3826,8 @@ class SpoffTUI(App):
         self.repeat_mode = modes[(curr_idx + 1) % len(modes)]
         labels = {"off": "OFF", "all": "ALL", "one": "SINGLE TRACK"}
         self.notify_user(f"Repeat: {labels[self.repeat_mode]}")
+        if self.mpris:
+            self.mpris.update_loop_status(self.repeat_mode)
         self.update_player_hud()
 
     def switch_view(self, view: str, focus_sidebar: Optional[bool] = None):
@@ -4545,16 +4553,35 @@ class SpoffTUI(App):
 
     def _mpris_seek(self, sec: float):
         self.player.seek(sec)
+        pos = self.player.get_position()
+        if self.mpris:
+            self.mpris.emit_seeked(pos)
         self.update_player_hud()
 
     def _mpris_set_pos(self, sec: float):
         self.player.seek_absolute(sec)
+        if self.mpris:
+            self.mpris.emit_seeked(sec)
         self.update_player_hud()
 
     def _mpris_set_vol(self, vol: int):
         self.volume = max(0, min(100, vol))
         self.player.set_volume(self.volume)
         save_volume(self.volume)
+        self.update_player_hud()
+
+    def _mpris_set_loop_status(self, mode: str):
+        mapping = {"None": "off", "Track": "one", "Playlist": "all"}
+        self.repeat_mode = mapping.get(mode, "off")
+        labels = {"off": "OFF", "all": "ALL", "one": "SINGLE TRACK"}
+        self.notify_user(f"Repeat: {labels.get(self.repeat_mode, 'OFF')}")
+        self.update_player_hud()
+
+    def _mpris_set_shuffle(self, val: bool):
+        self.shuffle_mode = bool(val)
+        self._shuffle_history = []
+        status = "ON" if self.shuffle_mode else "OFF"
+        self.notify_user(f"Shuffle: {status}")
         self.update_player_hud()
 
     @work(thread=True)
