@@ -7,6 +7,7 @@ from spoff.eq import (
     EQBand,
     EQPreset,
     ParametricEQEngine,
+    SAMSUNG_AKG_AUDIOPHILE_PRO_PRESET,
     SAMSUNG_AKG_REFERENCE_PRESET,
     HARMAN_IN_EAR_2019_PRESET,
     HARMAN_OVER_EAR_2018_PRESET,
@@ -561,6 +562,7 @@ class TestEQEngineAdvancedSettings(unittest.TestCase):
 
     def test_builtin_acoustic_target_presets(self):
         names = [p.name for p in BUILTIN_PRESETS]
+        self.assertIn("Samsung AKG Audiophile Pro", names)
         self.assertIn("Samsung AKG Master Reference", names)
         self.assertIn("Harman Target 2019 (In-Ear)", names)
         self.assertIn("Harman Target 2018 (Over-Ear)", names)
@@ -765,6 +767,41 @@ class TestEQSettingsModalUI(unittest.TestCase):
         asyncio.run(_run())
 
 
+class TestDirectHardwareAudioDevice(unittest.TestCase):
+    def test_detect_direct_hardware_sink_when_filter_sink_present(self):
+        from unittest.mock import patch, MagicMock
+        from spoff.player import get_direct_hardware_audio_device
+
+        mock_stdout = (
+            "41\tsamsung_akg_eq\tPipeWire\tfloat32le 2ch 48000Hz\tRUNNING\n"
+            "68\talsa_output.pci-0000_00_1f.3.analog-stereo\tPipeWire\ts32le 2ch 48000Hz\tRUNNING\n"
+        )
+        mock_proc = MagicMock(returncode=0, stdout=mock_stdout)
+        with patch("subprocess.run", return_value=mock_proc):
+            dev = get_direct_hardware_audio_device()
+            self.assertEqual(dev, "pulse/alsa_output.pci-0000_00_1f.3.analog-stereo")
+
+    def test_direct_hardware_sink_returns_none_when_no_filter_sink(self):
+        from unittest.mock import patch, MagicMock
+        from spoff.player import get_direct_hardware_audio_device
+
+        # Only ALSA output present, no virtual software filters
+        mock_stdout = "68\talsa_output.pci-0000_00_1f.3.analog-stereo\tPipeWire\ts32le 2ch 48000Hz\tRUNNING\n"
+        mock_proc = MagicMock(returncode=0, stdout=mock_stdout)
+        with patch("subprocess.run", return_value=mock_proc):
+            dev = get_direct_hardware_audio_device()
+            self.assertIsNone(dev)
+
+    def test_direct_hardware_sink_handles_failure(self):
+        from unittest.mock import patch
+        from spoff.player import get_direct_hardware_audio_device
+
+        with patch("subprocess.run", side_effect=Exception("pactl failed")):
+            dev = get_direct_hardware_audio_device()
+            self.assertIsNone(dev)
+
+
 if __name__ == "__main__":
     unittest.main()
+
 

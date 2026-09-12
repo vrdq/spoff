@@ -231,6 +231,24 @@ class EQPreset:
 # BUILT-IN FLAGSHIP ACOUSTIC PRESETS
 # ============================================================================
 
+SAMSUNG_AKG_AUDIOPHILE_PRO_PRESET = EQPreset(
+    name="Samsung AKG Audiophile Pro",
+    description="Flagship audiophile master tuning for Samsung dual-driver IEMs: tight sub-bass, mud purge, intimate vocal presence, anti-shout pinna, and holographic 3D air",
+    preamp_db=-3.8,
+    bands=[
+        EQBand(1, FilterType.LOW_SHELF, 55.0, +3.8, 0.71, label="Sub-Bass Visceral Foundation"),
+        EQBand(2, FilterType.PEAKING, 160.0, -3.2, 0.85, label="Lower-Mid Mud Purge"),
+        EQBand(3, FilterType.PEAKING, 650.0, +2.2, 1.10, label="Vocal Body & Acoustic Warmth"),
+        EQBand(4, FilterType.PEAKING, 1200.0, -1.0, 1.80, label="Boxiness Tamer"),
+        EQBand(5, FilterType.PEAKING, 2900.0, -1.8, 2.50, label="Anti-Shout Pinna Resonance"),
+        EQBand(6, FilterType.PEAKING, 4200.0, +1.8, 2.80, label="Instrument Snap & Articulation"),
+        EQBand(7, FilterType.PEAKING, 6300.0, -3.5, 3.20, label="Crossover Sibilance Killer"),
+        EQBand(8, FilterType.PEAKING, 8200.0, +1.5, 3.00, label="Brilliance Sparkle"),
+        EQBand(9, FilterType.PEAKING, 9800.0, -4.5, 2.60, label="8mm Tweeter Spike De-Harsh"),
+        EQBand(10, FilterType.HIGH_SHELF, 13000.0, +3.5, 0.71, label="Holographic 3D Ultra-Air"),
+    ]
+)
+
 SAMSUNG_AKG_REFERENCE_PRESET = EQPreset(
     name="Samsung AKG Master Reference",
     description="Studio-grade calibration for Samsung EO-IG955 dual-driver IEMs (Harman Target with mud purge and tweeter resonance compensation)",
@@ -360,6 +378,7 @@ FREE_FIELD_PRESET = EQPreset(
 )
 
 BUILTIN_PRESETS: List[EQPreset] = [
+    SAMSUNG_AKG_AUDIOPHILE_PRO_PRESET,
     SAMSUNG_AKG_REFERENCE_PRESET,
     HARMAN_IN_EAR_2019_PRESET,
     HARMAN_OVER_EAR_2018_PRESET,

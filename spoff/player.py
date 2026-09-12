@@ -11,6 +11,34 @@ from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger("player")
 
+
+def get_direct_hardware_audio_device() -> Optional[str]:
+    """
+    Detects physical ALSA hardware output to bypass virtual filter-chain sinks
+    (such as PipeWire samsung_akg_eq or easyeffects), avoiding double-equalization.
+    """
+    try:
+        res = subprocess.run(
+            ["pactl", "list", "sinks", "short"],
+            capture_output=True,
+            text=True,
+            timeout=0.5
+        )
+        if res.returncode == 0:
+            lines = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+            has_filter_sink = any(
+                not parts[1].startswith("alsa_output.") for parts in [l.split() for l in lines] if len(parts) >= 2
+            )
+            if has_filter_sink:
+                for l in lines:
+                    parts = l.split()
+                    if len(parts) >= 2 and parts[1].startswith("alsa_output."):
+                        return f"pulse/{parts[1]}"
+    except Exception:
+        pass
+    return None
+
+
 class MPVController:
     def __init__(self, socket_path: Optional[str] = None, initial_volume: int = 80, eq_engine: Optional[Any] = None):
         if socket_path is None:
@@ -64,6 +92,10 @@ class MPVController:
             af_str = self.eq_engine.to_ffmpeg_af()
             if af_str:
                 cmd.append(f"--af={af_str}")
+            if not getattr(self.eq_engine, "bypassed", False):
+                direct_dev = get_direct_hardware_audio_device()
+                if direct_dev:
+                    cmd.append(f"--audio-device={direct_dev}")
 
         self.process = subprocess.Popen(
             cmd,
@@ -154,7 +186,14 @@ class MPVController:
         if not self.eq_engine:
             return False
         af_str = self.eq_engine.to_ffmpeg_af()
-        return self._send_command(["set_property", "af", af_str])
+        ok = self._send_command(["set_property", "af", af_str])
+        if self.eq_engine.bypassed or not af_str:
+            self._send_command(["set_property", "audio-device", "auto"])
+        else:
+            direct_dev = get_direct_hardware_audio_device()
+            if direct_dev:
+                self._send_command(["set_property", "audio-device", direct_dev])
+        return ok
 
     def toggle_eq_bypass(self) -> bool:
         """Seamlessly toggles EQ bypass without audio interruption (A-B testing)."""
