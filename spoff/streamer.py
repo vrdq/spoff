@@ -4,14 +4,16 @@ import logging
 import threading
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, Callable, cast
+from concurrent.futures import Future
 import yt_dlp
 try:
-    from .storage import CACHE_DIR, register_cached_track, get_cached_track_path
+    from .storage import CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS
 except ImportError:
-    from storage import CACHE_DIR, register_cached_track, get_cached_track_path
+    from storage import CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS
 
 logger = logging.getLogger("streamer")
 _active_downloads = set()
+_active_download_futures: Dict[str, Future] = {}
 _download_lock = threading.Lock()
 _stream_cache: Dict[str, Tuple[Dict[str, Any], float]] = {}
 STREAM_CACHE_TTL = 7200.0  # 2 hours
@@ -42,11 +44,11 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
     cache_key = f"{track_title.lower()}::{artist.lower()}"
     if direct_url:
         cache_key = f"{direct_url}::{cache_key}"
-    if cache_key in _stream_cache:
-        cached_data, cached_ts = _stream_cache[cache_key]
+    cached_entry = _stream_cache.get(cache_key)
+    if cached_entry is not None:
+        cached_data, cached_ts = cached_entry
         if time.time() - cached_ts < STREAM_CACHE_TTL:
             return cached_data
-        _stream_cache.pop(cache_key, None)
 
     queries = []
     if direct_url and (direct_url.startswith("http://") or direct_url.startswith("https://")):
@@ -135,26 +137,69 @@ def download_track_to_cache(
     Downloads track to local disk cache. If blocking is True, runs synchronously;
     otherwise spawns a daemon background thread.
     """
+    try:
+        val_id = validate_track_id(track_id)
+    except ValueError as e:
+        if on_error:
+            on_error(e)
+        return None
+
+    cached_path = get_cached_track_path(val_id)
+    if cached_path and cached_path.is_file() and cached_path.stat().st_size > 10000:
+        if on_complete:
+            on_complete(cached_path)
+        return None
+
     with _download_lock:
-        if track_id in _active_downloads:
+        existing_future = _active_download_futures.get(val_id)
+        if existing_future is not None or val_id in _active_downloads:
+            if existing_future is None:
+                existing_future = Future()
+                _active_download_futures[val_id] = existing_future
+                # If someone added to _active_downloads externally without a worker, complete it with an error
+                existing_future.set_exception(RuntimeError(f"Track {val_id} is already being downloaded"))
+            future = existing_future
+            is_new = False
+        else:
+            future = Future()
+            _active_download_futures[val_id] = future
+            _active_downloads.add(val_id)
+            is_new = True
+
+    def _deliver(fut: Future):
+        try:
+            res_p = fut.result()
+            if on_complete:
+                on_complete(res_p)
+        except Exception as ex:
+            if on_error:
+                on_error(ex)
+
+    if not is_new:
+        if blocking:
+            try:
+                res_p = future.result(timeout=300)
+                if on_complete:
+                    on_complete(res_p)
+            except Exception as ex:
+                if on_error:
+                    on_error(ex)
             return None
-        _active_downloads.add(track_id)
+        else:
+            future.add_done_callback(_deliver)
+            return None
+
+    future.add_done_callback(_deliver)
 
     def _worker():
         try:
-            cached_path = get_cached_track_path(track_id)
-            if cached_path and cached_path.exists() and cached_path.stat().st_size > 10000:
-                if on_complete:
-                    on_complete(cached_path)
-                return
-
-            temp_path = CACHE_DIR / f"{track_id}_dl"
+            temp_path = CACHE_DIR / f"{val_id}_dl"
             if direct_url and (direct_url.startswith("http://") or direct_url.startswith("https://")):
                 query = direct_url
             elif title.startswith("http://") or title.startswith("https://"):
                 query = title
-            elif len(track_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', track_id):
-                query = f"https://www.youtube.com/watch?v={track_id}"
+            elif len(val_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', val_id):
+                query = f"https://www.youtube.com/watch?v={val_id}"
             elif len(title) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', title):
                 query = f"https://www.youtube.com/watch?v={title}"
             else:
@@ -168,39 +213,42 @@ def download_track_to_cache(
             with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
                 ydl.download([query])
 
-            valid_exts = (".m4a", ".opus", ".mp3", ".webm", ".ogg", ".flac")
+            valid_exts = CACHE_EXTENSIONS
             downloaded_path: Optional[Path] = None
-            for f in CACHE_DIR.glob(f"{track_id}_dl.*"):
+            for f in CACHE_DIR.glob(f"{val_id}_dl.*"):
                 if not f.is_file():
                     continue
                 if f.name.endswith((".part", ".ytdl", ".temp", ".aria2")):
                     continue
                 ext = f.suffix.lower()
                 if ext in valid_exts and f.stat().st_size > 10000:
-                    final_path = CACHE_DIR / f"{track_id}{ext}"
+                    final_path = CACHE_DIR / f"{val_id}{ext}"
                     if f != final_path:
                         f.replace(final_path)
                     meta_to_save = dict(track_meta) if track_meta else {"title": title, "artist": artist}
-                    register_cached_track(track_id, meta_to_save, final_path)
+                    register_cached_track(val_id, meta_to_save, final_path)
                     downloaded_path = final_path
-                    if on_complete:
-                        on_complete(final_path)
+                    if not future.done():
+                        future.set_result(final_path)
                     break
 
             if not downloaded_path:
-                cached_existing = get_cached_track_path(track_id)
-                if cached_existing and cached_existing.exists() and cached_existing.stat().st_size > 10000:
-                    if on_complete:
-                        on_complete(cached_existing)
-                elif on_error:
-                    on_error(RuntimeError(f"No audio file produced for track '{title}' ({track_id})"))
+                cached_existing = get_cached_track_path(val_id)
+                if cached_existing and cached_existing.is_file() and cached_existing.stat().st_size > 10000:
+                    if not future.done():
+                        future.set_result(cached_existing)
+                else:
+                    err = RuntimeError(f"No audio file produced for track '{title}' ({val_id})")
+                    if not future.done():
+                        future.set_exception(err)
         except Exception as e:
-            logger.error(f"Failed to cache track {track_id}: {e}")
-            if on_error:
-                on_error(e)
+            logger.error(f"Failed to cache track {val_id}: {e}")
+            if not future.done():
+                future.set_exception(e)
         finally:
             with _download_lock:
-                _active_downloads.discard(track_id)
+                _active_download_futures.pop(val_id, None)
+                _active_downloads.discard(val_id)
 
     if blocking:
         _worker()

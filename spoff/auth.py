@@ -1,16 +1,15 @@
 import re
-import os
 import json
 import time
-import secrets
-import hashlib
 import base64
+import hashlib
+import secrets
 import logging
 import threading
 import urllib.request
 import urllib.parse
 import urllib.error
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, Any, List, Callable, Tuple
 
 try:
@@ -125,51 +124,77 @@ def build_auth_url(verifier: str, client_id: str = SPOTIFY_CLIENT_ID, redirect_u
     }
     return f"{SPOTIFY_AUTH_URL}?{urllib.parse.urlencode(params)}", state
 
+class CallbackHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+    block_on_close = False
+
+    def get_request(self):
+        connection, address = super().get_request()
+        connection.settimeout(3)
+        return connection, address
+
 class OAuthCallbackServer:
     """Lightweight local loopback server to capture Spotify's redirect code."""
     def __init__(self, port: int = SPOTIFY_PORT):
         self.port = port
         self.code: Optional[str] = None
         self.error: Optional[str] = None
-        self._server: Optional[HTTPServer] = None
+        self.expected_state: Optional[str] = None
+        self._server: Optional[CallbackHTTPServer] = None
         self._thread: Optional[threading.Thread] = None
         self._stopped = False
+        self._lock = threading.Lock()
 
-    def start(self, on_complete: Callable[[Optional[str], Optional[str]], None]):
+    def start(self, on_complete: Callable[[Optional[str], Optional[str]], None], expected_state: Optional[str] = None):
         outer = self
+        self.expected_state = expected_state
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
                 parsed = urllib.parse.urlparse(self.path)
                 if parsed.path == "/login":
                     qs = urllib.parse.parse_qs(parsed.query)
-                    if "code" in qs:
-                        outer.code = qs["code"][0]
-                        self.send_response(200)
-                        self.send_header("Content-Type", "text/html; charset=utf-8")
-                        self.end_headers()
-                        self.wfile.write(SUCCESS_HTML.encode("utf-8"))
-                        threading.Thread(target=outer.stop, daemon=True).start()
-                        on_complete(outer.code, None)
-                        return
-                    elif "error" in qs:
-                        outer.error = qs["error"][0]
+                    supplied_state = qs.get("state", [""])[0]
+                    if not outer.expected_state or not secrets.compare_digest(supplied_state, outer.expected_state):
                         self.send_response(400)
-                        self.send_header("Content-Type", "text/html; charset=utf-8")
+                        self.send_header("Content-Type", "text/plain; charset=utf-8")
                         self.end_headers()
-                        self.wfile.write(b"<html><body style='background:#131313;color:#fff;font-family:sans-serif;padding:40px;'><h2>Spotify Login Denied</h2></body></html>")
-                        threading.Thread(target=outer.stop, daemon=True).start()
-                        on_complete(None, outer.error)
+                        self.wfile.write(b"Invalid OAuth state")
                         return
+
+                    with outer._lock:
+                        if outer.code is not None or outer.error is not None:
+                            self.send_response(200)
+                            self.end_headers()
+                            self.wfile.write(b"OK")
+                            return
+
+                        if "code" in qs:
+                            outer.code = qs["code"][0]
+                            self.send_response(200)
+                            self.send_header("Content-Type", "text/html; charset=utf-8")
+                            self.end_headers()
+                            self.wfile.write(SUCCESS_HTML.encode("utf-8"))
+                            threading.Thread(target=outer.stop, daemon=True).start()
+                            on_complete(outer.code, None)
+                            return
+                        elif "error" in qs:
+                            outer.error = qs["error"][0]
+                            self.send_response(400)
+                            self.send_header("Content-Type", "text/html; charset=utf-8")
+                            self.end_headers()
+                            self.wfile.write(b"<html><body style='background:#131313;color:#fff;font-family:sans-serif;padding:40px;'><h2>Spotify Login Denied</h2></body></html>")
+                            threading.Thread(target=outer.stop, daemon=True).start()
+                            on_complete(None, outer.error)
+                            return
                 
-                # Ignore browser prefetch requests (favicon, etc.) and keep listening
                 self.send_response(404)
                 self.end_headers()
 
             def log_message(self, format, *args):
                 pass
 
-        self._server = HTTPServer(("127.0.0.1", self.port), Handler)
+        self._server = CallbackHTTPServer(("127.0.0.1", self.port), Handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
         logger.info(f"OAuth loopback server listening on 127.0.0.1:{self.port}")
@@ -248,17 +273,12 @@ def load_spotify_auth() -> Optional[Dict[str, Any]]:
     return None
 
 def save_spotify_auth(data: Dict[str, Any]):
-    """Persists Spotify auth session to disk."""
+    """Persists Spotify auth session to disk with mode 0600."""
     try:
-        AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
-        tmp_file = AUTH_FILE.with_suffix(f".tmp.{os.getpid()}")
-        with open(tmp_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_file, AUTH_FILE)
-    except Exception as e:
-        logger.error(f"Error saving {AUTH_FILE}: {e}")
+        from .storage import _atomic_json_dump
+    except ImportError:
+        from storage import _atomic_json_dump
+    _atomic_json_dump(AUTH_FILE, data, mode=0o600)
 
 def logout_spotify() -> bool:
     """Removes saved Spotify auth session."""
@@ -403,14 +423,15 @@ def fetch_user_playlists(token: str) -> List[Dict[str, Any]]:
         url = res.get("next")
     return playlists
 
-def fetch_playlist_tracks(token: str, playlist_id: str) -> List[Dict[str, Any]]:
-    """Fetches all tracks for a specific playlist with pagination."""
+def fetch_playlist_tracks(token: str, playlist_id: str) -> Optional[List[Dict[str, Any]]]:
+    """Fetches all tracks for a specific playlist with pagination. Returns None on network/API failure."""
     tracks = []
     url = f"/playlists/{playlist_id}/tracks?limit=100"
     while url:
         res = spotify_api_get(url, token)
-        if not res:
-            break
+        if res is None:
+            logger.error(f"Failed to fetch tracks page for playlist {playlist_id}")
+            return None
         for entry in res.get("items", []):
             if not entry or not entry.get("track"):
                 continue
@@ -428,14 +449,17 @@ def fetch_playlist_tracks(token: str, playlist_id: str) -> List[Dict[str, Any]]:
         url = res.get("next")
     return tracks
 
-def fetch_liked_songs(token: str, max_tracks: int = 200) -> List[Dict[str, Any]]:
-    """Fetches the user's saved Liked Songs."""
+def fetch_liked_songs(token: str, max_tracks: Optional[int] = 200) -> Optional[List[Dict[str, Any]]]:
+    """Fetches the user's saved Liked Songs. Returns None on network/API failure."""
     tracks = []
     url = "/me/tracks?limit=50"
-    while url and len(tracks) < max_tracks:
-        res = spotify_api_get(url, token)
-        if not res:
+    while url:
+        if max_tracks and len(tracks) >= max_tracks:
             break
+        res = spotify_api_get(url, token)
+        if res is None:
+            logger.error("Failed to fetch liked songs from Spotify")
+            return None
         for entry in res.get("items", []):
             if not entry or not entry.get("track"):
                 continue
@@ -559,17 +583,16 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
     
     synced_count = 0
     
-    # Sync Liked Songs if present
-    if liked:
+    # Sync Liked Songs if successfully fetched
+    if liked is not None:
         found = False
         for p in existing_playlists:
-            if p.get("id") == "spotify_liked_songs" or p.get("name") == "Liked Songs":
+            if p.get("id") == "spotify_liked_songs":
                 existing_tracks = p.get("tracks", [])
                 p["tracks"] = merge_spotify_and_client_tracks(liked, existing_tracks)
-                p["id"] = "spotify_liked_songs"
                 found = True
                 break
-        if not found:
+        if not found and liked:
             existing_playlists.insert(0, {
                 "id": "spotify_liked_songs",
                 "name": "Liked Songs",
@@ -592,12 +615,15 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
             progress_callback(f"Syncing playlist ({idx+1}/{len(user_pls)}): '{p_name}'...")
         
         tracks = fetch_playlist_tracks(token, p_id)
+        if tracks is None:
+            logger.warning(f"Skipping sync for playlist '{p_name}' due to fetch error")
+            continue
+
         found = False
         for p in existing_playlists:
             matches = (
                 p.get("id") == p_id
                 or (p.get("spotify_id") and p.get("spotify_id") == p_id)
-                or (p.get("id", "").startswith("local_") and p.get("name", "").strip().lower() == p_name.strip().lower())
             )
             if matches:
                 p["name"] = p_name

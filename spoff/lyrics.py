@@ -88,9 +88,10 @@ def parse_lrc(lrc_text: str) -> List[Dict[str, Any]]:
     return lines
 
 
-def _get_cache_path(title: str, artist: str) -> Path:
+def _get_cache_path(title: str, artist: str, duration_ms: Optional[int] = None) -> Path:
     _init_lyrics_storage()
-    safe_key = hashlib.sha256(f"{artist.lower().strip()}_{title.lower().strip()}".encode("utf-8")).hexdigest()
+    dur_tag = f"_{int(duration_ms / 1000)}" if duration_ms and duration_ms > 0 else ""
+    safe_key = hashlib.sha256(f"{artist.lower().strip()}_{title.lower().strip()}{dur_tag}".encode("utf-8")).hexdigest()
     return LYRICS_DIR / f"{safe_key}.json"
 
 
@@ -108,13 +109,13 @@ def fetch_lyrics(title: str, artist: str = "", duration_ms: Optional[int] = None
     }
     """
     clean_t, clean_a = clean_track_query(title, artist)
-    cache_file = _get_cache_path(clean_t, clean_a)
+    cache_file = _get_cache_path(clean_t, clean_a, duration_ms)
 
     if cache_file.exists():
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, dict):
+                if isinstance(data, dict) and isinstance(data.get("lines"), list):
                     return data
         except Exception as e:
             logger.warning(f"Failed to read cached lyrics for '{clean_t}': {e}")

@@ -3,7 +3,13 @@ import json
 import logging
 import uuid
 import shutil
+import tempfile
+import fcntl
+import threading
+import re
 from pathlib import Path
+from contextlib import contextmanager
+from functools import wraps
 from typing import List, Dict, Optional, Any
 
 DATA_DIR = Path.home() / ".local" / "share" / "spoff"
@@ -32,40 +38,114 @@ logging.basicConfig(
 )
 logger = logging.getLogger("spoff")
 
-def _atomic_json_dump(filepath: Path, data: Any) -> None:
-    """Safely writes JSON data via an fsynced temporary file replaced atomically."""
-    tmp_path = filepath.with_suffix(f".tmp.{os.getpid()}")
+_storage_lock = threading.RLock()
+_transaction_state = threading.local()
+
+@contextmanager
+def storage_transaction():
+    """Process-wide and inter-process transactional lock using fcntl.flock."""
+    with _storage_lock:
+        if getattr(_transaction_state, "active", False):
+            yield
+            return
+        lock_path = DATA_DIR / ".storage.lock"
+        with open(lock_path, "a+b") as lockfile:
+            fcntl.flock(lockfile.fileno(), fcntl.LOCK_EX)
+            _transaction_state.active = True
+            try:
+                yield
+            finally:
+                _transaction_state.active = False
+                try:
+                    fcntl.flock(lockfile.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
+
+def transactional(fn):
+    """Decorator ensuring a storage transaction wraps the operation."""
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        with storage_transaction():
+            return fn(*args, **kwargs)
+    return wrapped
+
+def _atomic_json_dump(filepath: Path, data: Any, mode: int = 0o644) -> None:
+    """Safely writes JSON data via an fsynced unique temporary file replaced atomically."""
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = None
     try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=filepath.parent,
+            prefix=f".{filepath.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            tmp_path = Path(f.name)
+            try:
+                os.chmod(tmp_path, mode)
+            except OSError:
+                pass
+            json.dump(data, f, indent=2, ensure_ascii=False, allow_nan=False)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, filepath)
+        try:
+            directory_fd = os.open(filepath.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass
     except Exception as e:
         logger.error(f"Atomic write failed for {filepath}: {e}")
-        if tmp_path.exists():
+        raise
+    finally:
+        if tmp_path is not None and tmp_path.exists():
             try:
                 tmp_path.unlink()
             except OSError:
                 pass
-        raise
 
 def _init_storage_once():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not PLAYLISTS_FILE.exists() or PLAYLISTS_FILE.stat().st_size == 0:
+    if not PLAYLISTS_FILE.exists():
         try:
             _atomic_json_dump(PLAYLISTS_FILE, [])
         except Exception as e:
             logger.error(f"Failed to create empty playlists file: {e}")
 
-    if not INDEX_FILE.exists() or INDEX_FILE.stat().st_size == 0:
+    if not INDEX_FILE.exists():
         try:
             _atomic_json_dump(INDEX_FILE, {})
         except Exception as e:
             logger.error(f"Failed to create offline index: {e}")
 
 _init_storage_once()
+
+# Cache extensions supported by downloader and local playback
+CACHE_EXTENSIONS = (".m4a", ".opus", ".mp3", ".webm", ".ogg", ".flac")
+
+def validate_track_id(track_id: str) -> str:
+    """Validates track_id against path traversal and special characters."""
+    if not isinstance(track_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", track_id):
+        raise ValueError(f"Invalid track ID: {track_id!r}")
+    return track_id
+
+def cache_path(track_id: str, suffix: str) -> Path:
+    """Constructs a validated cache file path strictly inside CACHE_DIR."""
+    val_id = validate_track_id(track_id)
+    path = (CACHE_DIR / f"{val_id}{suffix}").resolve()
+    cache_root = CACHE_DIR.resolve()
+    if not str(path).startswith(str(cache_root)):
+        raise ValueError("Cache path escapes cache directory")
+    if path.is_symlink():
+        raise ValueError("Cache files must not be symbolic links")
+    return path
 
 def load_config() -> Dict[str, Any]:
     try:
@@ -78,11 +158,8 @@ def load_config() -> Dict[str, Any]:
         logger.error(f"Error reading config: {e}")
     return {}
 
-def save_config(config: Dict[str, Any]):
-    try:
-        _atomic_json_dump(CONFIG_FILE, config)
-    except Exception as e:
-        logger.error(f"Error saving config: {e}")
+def save_config(config: Dict[str, Any]) -> None:
+    _atomic_json_dump(CONFIG_FILE, config)
 
 def is_first_launch() -> bool:
     """Returns True if Spoff is running for the first time without configured onboarding."""
@@ -99,6 +176,7 @@ def is_first_launch() -> bool:
         logger.error(f"Error checking first launch: {e}")
         return False
 
+@transactional
 def mark_first_launch_done():
     """Records that first-launch onboarding has been completed."""
     try:
@@ -107,6 +185,7 @@ def mark_first_launch_done():
         save_config(cfg)
     except Exception as e:
         logger.error(f"Error marking first launch done: {e}")
+        raise
 
 def get_saved_volume() -> int:
     """Retrieves saved volume level (0-100), defaulting to 80."""
@@ -119,6 +198,7 @@ def get_saved_volume() -> int:
         logger.error(f"Error reading saved volume: {e}")
     return 80
 
+@transactional
 def save_volume(volume: int):
     """Persists volume level (0-100) to config."""
     try:
@@ -127,6 +207,7 @@ def save_volume(volume: int):
         save_config(cfg)
     except Exception as e:
         logger.error(f"Error saving volume: {e}")
+        raise
 
 def get_saved_sidebar_width() -> int:
     """Retrieves saved sidebar width, defaulting to 44."""
@@ -139,6 +220,7 @@ def get_saved_sidebar_width() -> int:
         logger.error(f"Error reading saved sidebar width: {e}")
     return 44
 
+@transactional
 def save_sidebar_width(width: int):
     """Persists sidebar width to config."""
     try:
@@ -147,6 +229,7 @@ def save_sidebar_width(width: int):
         save_config(cfg)
     except Exception as e:
         logger.error(f"Error saving sidebar width: {e}")
+        raise
 
 def get_saved_advanced_mode() -> bool:
     """Retrieves whether advanced mode (no keybind hints) is enabled, defaulting to False."""
@@ -157,6 +240,7 @@ def get_saved_advanced_mode() -> bool:
         logger.error(f"Error reading advanced mode: {e}")
         return False
 
+@transactional
 def save_advanced_mode(enabled: bool):
     """Persists advanced mode setting to config."""
     try:
@@ -165,6 +249,7 @@ def save_advanced_mode(enabled: bool):
         save_config(cfg)
     except Exception as e:
         logger.error(f"Error saving advanced mode: {e}")
+        raise
 
 def get_saved_search_engine() -> str:
     """Retrieves active search engine ('ytmusic' or 'spotify'), defaulting to 'ytmusic'."""
@@ -177,6 +262,7 @@ def get_saved_search_engine() -> str:
         logger.error(f"Error reading search engine: {e}")
     return "ytmusic"
 
+@transactional
 def save_search_engine(engine: str):
     """Persists search engine choice to config."""
     try:
@@ -185,6 +271,7 @@ def save_search_engine(engine: str):
         save_config(cfg)
     except Exception as e:
         logger.error(f"Error saving search engine: {e}")
+        raise
 
 def get_saved_transparency() -> bool:
     """Retrieves whether terminal window transparency is enabled, defaulting to True."""
@@ -195,6 +282,7 @@ def get_saved_transparency() -> bool:
         logger.error(f"Error reading transparency setting: {e}")
         return True
 
+@transactional
 def save_transparency(enabled: bool):
     """Persists transparency setting to config."""
     try:
@@ -203,6 +291,7 @@ def save_transparency(enabled: bool):
         save_config(cfg)
     except Exception as e:
         logger.error(f"Error saving transparency setting: {e}")
+        raise
 
 def get_saved_instant_search() -> bool:
     """Retrieves whether instant search is enabled, defaulting to True."""
@@ -213,6 +302,7 @@ def get_saved_instant_search() -> bool:
         logger.error(f"Error reading instant search setting: {e}")
         return True
 
+@transactional
 def save_instant_search(enabled: bool):
     """Persists instant search setting to config."""
     try:
@@ -221,6 +311,7 @@ def save_instant_search(enabled: bool):
         save_config(cfg)
     except Exception as e:
         logger.error(f"Error saving instant search setting: {e}")
+        raise
 
 def get_saved_auto_update() -> bool:
     """Retrieves whether auto-update is enabled, defaulting to True."""
@@ -231,6 +322,7 @@ def get_saved_auto_update() -> bool:
         logger.error(f"Error reading auto update setting: {e}")
         return True
 
+@transactional
 def save_auto_update(enabled: bool):
     """Persists auto-update setting to config."""
     try:
@@ -239,6 +331,7 @@ def save_auto_update(enabled: bool):
         save_config(cfg)
     except Exception as e:
         logger.error(f"Error saving auto update setting: {e}")
+        raise
 
 def get_saved_visualizer_style() -> str:
     """Retrieves active visualizer style ('bars', 'braille', 'stereo', 'wave', 'dots'), defaulting to 'bars'."""
@@ -251,6 +344,7 @@ def get_saved_visualizer_style() -> str:
         logger.error(f"Error reading visualizer style: {e}")
     return "bars"
 
+@transactional
 def save_visualizer_style(style: str):
     """Persists visualizer style choice to config."""
     try:
@@ -260,6 +354,7 @@ def save_visualizer_style(style: str):
             save_config(cfg)
     except Exception as e:
         logger.error(f"Error saving visualizer style: {e}")
+        raise
 
 def get_saved_visualizer_color() -> str:
     """Retrieves active visualizer color theme ('green', 'cyan', 'amber', 'mono'), defaulting to 'green'."""
@@ -272,6 +367,7 @@ def get_saved_visualizer_color() -> str:
         logger.error(f"Error reading visualizer color: {e}")
     return "green"
 
+@transactional
 def save_visualizer_color(color: str):
     """Persists visualizer color theme to config."""
     try:
@@ -281,6 +377,7 @@ def save_visualizer_color(color: str):
             save_config(cfg)
     except Exception as e:
         logger.error(f"Error saving visualizer color: {e}")
+        raise
 
 def get_custom_keybindings() -> Dict[str, str]:
     """Retrieves custom keybindings mapping action_name -> key_string."""
@@ -293,6 +390,7 @@ def get_custom_keybindings() -> Dict[str, str]:
         logger.error(f"Error reading custom keybindings: {e}")
     return {}
 
+@transactional
 def save_custom_keybindings(keybindings: Dict[str, str]):
     """Persists custom keybindings mapping to config."""
     try:
@@ -301,7 +399,9 @@ def save_custom_keybindings(keybindings: Dict[str, str]):
         save_config(cfg)
     except Exception as e:
         logger.error(f"Error saving custom keybindings: {e}")
+        raise
 
+@transactional
 def reset_custom_keybindings():
     """Removes custom keybindings from config, reverting to defaults."""
     try:
@@ -310,6 +410,7 @@ def reset_custom_keybindings():
         save_config(cfg)
     except Exception as e:
         logger.error(f"Error resetting custom keybindings: {e}")
+        raise
 
 def load_saved_playlists() -> List[Dict[str, Any]]:
     try:
@@ -317,7 +418,17 @@ def load_saved_playlists() -> List[Dict[str, Any]]:
             with open(PLAYLISTS_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    return data
+                    valid_playlists = []
+                    for p in data:
+                        if isinstance(p, dict):
+                            if "id" not in p:
+                                p["id"] = f"pl_{uuid.uuid4().hex[:8]}"
+                            if "tracks" not in p or not isinstance(p["tracks"], list):
+                                p["tracks"] = []
+                            else:
+                                p["tracks"] = [t for t in p["tracks"] if isinstance(t, dict)]
+                            valid_playlists.append(p)
+                    return valid_playlists
     except Exception as e:
         logger.error(f"Error reading playlists: {e}")
         try:
@@ -329,13 +440,13 @@ def load_saved_playlists() -> List[Dict[str, Any]]:
             pass
     return []
 
-def save_saved_playlists(playlists: List[Dict[str, Any]]):
-    try:
-        _atomic_json_dump(PLAYLISTS_FILE, playlists)
-    except Exception as e:
-        logger.error(f"Error saving playlists: {e}")
+def save_saved_playlists(playlists: List[Dict[str, Any]]) -> None:
+    _atomic_json_dump(PLAYLISTS_FILE, playlists)
 
+@transactional
 def add_saved_playlist(playlist: Dict[str, Any]):
+    if not isinstance(playlist, dict):
+        return
     existing = load_saved_playlists()
     target_id = playlist.get("id")
     for p in existing:
@@ -346,6 +457,7 @@ def add_saved_playlist(playlist: Dict[str, Any]):
     existing.insert(0, playlist)
     save_saved_playlists(existing)
 
+@transactional
 def create_local_playlist(name: str) -> Dict[str, Any]:
     pid = f"local_{uuid.uuid4().hex[:8]}"
     playlist = {
@@ -359,8 +471,9 @@ def create_local_playlist(name: str) -> Dict[str, Any]:
     save_saved_playlists(existing)
     return playlist
 
+@transactional
 def add_track_to_playlist(playlist_id: str, track: Dict[str, Any]) -> bool:
-    if not playlist_id:
+    if not playlist_id or not isinstance(track, dict):
         return False
     existing = load_saved_playlists()
     for p in existing:
@@ -377,6 +490,7 @@ def add_track_to_playlist(playlist_id: str, track: Dict[str, Any]) -> bool:
             return True
     return False
 
+@transactional
 def remove_track_from_playlist(playlist_id: str, track_id: str) -> bool:
     if not playlist_id or not track_id:
         return False
@@ -391,16 +505,18 @@ def remove_track_from_playlist(playlist_id: str, track_id: str) -> bool:
                     return True
     return False
 
+@transactional
 def update_playlist_tracks(playlist_id: str, tracks: List[Dict[str, Any]]):
     if not playlist_id:
         return
     existing = load_saved_playlists()
     for p in existing:
         if p.get("id") == playlist_id:
-            p["tracks"] = list(tracks)
+            p["tracks"] = [t for t in tracks if isinstance(t, dict)]
             save_saved_playlists(existing)
             return
 
+@transactional
 def remove_saved_playlist(playlist_id: str) -> bool:
     if not playlist_id:
         return False
@@ -412,13 +528,28 @@ def remove_saved_playlist(playlist_id: str) -> bool:
         return True
     return False
 
+@transactional
+def move_saved_playlist(playlist_id: str, delta: int) -> bool:
+    """Atomically moves a saved playlist up (-1) or down (+1)."""
+    playlists = load_saved_playlists()
+    index = next((i for i, p in enumerate(playlists) if p.get("id") == playlist_id), None)
+    if index is None or not 0 <= index + delta < len(playlists):
+        return False
+    playlists.insert(index + delta, playlists.pop(index))
+    save_saved_playlists(playlists)
+    return True
+
 def load_offline_index() -> Dict[str, Dict[str, Any]]:
     try:
         if INDEX_FILE.exists() and INDEX_FILE.stat().st_size > 0:
             with open(INDEX_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
-                    return data
+                    valid_index = {}
+                    for k, v in data.items():
+                        if isinstance(k, str) and isinstance(v, dict):
+                            valid_index[k] = v
+                    return valid_index
     except Exception as e:
         logger.error(f"Error reading offline index: {e}")
         try:
@@ -430,54 +561,70 @@ def load_offline_index() -> Dict[str, Dict[str, Any]]:
             pass
     return {}
 
-def save_offline_index(index: Dict[str, Dict[str, Any]]):
-    try:
-        _atomic_json_dump(INDEX_FILE, index)
-    except Exception as e:
-        logger.error(f"Error saving offline index: {e}")
+def save_offline_index(index: Dict[str, Dict[str, Any]]) -> None:
+    _atomic_json_dump(INDEX_FILE, index)
 
 def get_cached_track_path(track_id: str) -> Optional[Path]:
     if not track_id:
         return None
-    for ext in (".m4a", ".opus", ".mp3", ".webm"):
-        track_path = CACHE_DIR / f"{track_id}{ext}"
-        if track_path.exists() and track_path.stat().st_size > 10000:
-            return track_path
+    try:
+        val_id = validate_track_id(track_id)
+    except ValueError:
+        return None
+    for ext in CACHE_EXTENSIONS:
+        try:
+            track_path = cache_path(val_id, ext)
+            if track_path.is_file() and track_path.stat().st_size > 10000:
+                return track_path
+        except (FileNotFoundError, ValueError, OSError):
+            continue
     return None
 
+@transactional
 def register_cached_track(track_id: str, meta: Dict[str, Any], filepath: Path):
+    val_id = validate_track_id(track_id)
+    filepath = Path(filepath)
+    if not filepath.is_file() or filepath.stat().st_size <= 10000:
+        raise ValueError(f"Incomplete cached audio file: {filepath}")
     index = load_offline_index()
     try:
         dur_ms = int(float(meta.get("duration_ms") or 0))
     except (ValueError, TypeError):
         dur_ms = 0
-    index[track_id] = {
-        "id": track_id,
+    index[val_id] = {
+        "id": val_id,
         "title": meta.get("title", "Unknown"),
         "artist": meta.get("artist", "Unknown"),
         "duration_ms": dur_ms,
         "filepath": str(filepath.resolve()),
-        "size_bytes": filepath.stat().st_size if filepath.exists() else 0
+        "size_bytes": filepath.stat().st_size
     }
     save_offline_index(index)
-    logger.info(f"Registered cached track: {track_id} -> {filepath}")
+    logger.info(f"Registered cached track: {val_id} -> {filepath}")
 
+@transactional
 def delete_cached_track(track_id: str) -> bool:
     """Deletes the cached audio file from disk and removes it from offline registry."""
+    if not track_id:
+        return False
+    try:
+        val_id = validate_track_id(track_id)
+    except ValueError:
+        return False
     index = load_offline_index()
     removed = False
-    if track_id in index:
-        del index[track_id]
+    if val_id in index:
+        del index[val_id]
         save_offline_index(index)
         removed = True
 
-    for ext in (".m4a", ".opus", ".mp3", ".webm", ".part"):
-        p = CACHE_DIR / f"{track_id}{ext}"
-        if p.exists():
-            try:
+    for ext in (*CACHE_EXTENSIONS, ".part"):
+        try:
+            p = cache_path(val_id, ext)
+            if p.exists() and p.is_file():
                 p.unlink()
                 removed = True
                 logger.info(f"Deleted cache file: {p}")
-            except Exception as e:
-                logger.error(f"Failed to delete cache file {p}: {e}")
+        except Exception as e:
+            logger.error(f"Failed to delete cache file {p}: {e}")
     return removed

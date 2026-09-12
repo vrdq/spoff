@@ -3270,6 +3270,7 @@ class SpoffTUI(App):
             system_bindings = {k: v for k, v in self._bindings.key_to_bindings.items() if any(getattr(b, "system", False) for b in v)}
             self._bindings.key_to_bindings.clear()
             self._bindings.key_to_bindings.update(system_bindings)
+            self._bindings.bind("escape", "clear_or_unfocus", show=False)
             for act_id, key in self.keybindings.items():
                 if key:
                     self._bindings.bind(key, act_id, show=False)
@@ -3454,7 +3455,7 @@ class SpoffTUI(App):
             try:
                 self.call_from_thread(_update)
             except Exception:
-                _update()
+                pass
 
     def on_click(self, event) -> None:
         if getattr(event, "widget", None):
@@ -3768,7 +3769,7 @@ class SpoffTUI(App):
                 matched_action = "delete_item"
             elif event.key == "+" and self.keybindings.get("add_to_playlist") != "":
                 matched_action = "add_to_playlist"
-            elif (event.key in ("shift+b", "B") or getattr(event, "character", None) == "B") and not isinstance(self.focused, (Input, ScrubBar)):
+            elif (self.keybindings.get("bulk_download_playlist") != "" and (event.key in ("shift+b", "B") or getattr(event, "character", None) == "B") and not isinstance(self.focused, (Input, ScrubBar))):
                 matched_action = "bulk_download_playlist"
             elif event.key in ("f1",) and self.keybindings.get("vol_mute") != "":
                 matched_action = "vol_mute"
@@ -4196,7 +4197,7 @@ class SpoffTUI(App):
             return
 
         # 1. Reordering playlists in the sidebar
-        if self.focused and self.focused.id == "side-table":
+        if self.focused and getattr(self.focused, "id", None) == "side-table":
             st = self.query_one("#side-table", DataTable)
             idx = st.cursor_row
             if idx is not None and 1 <= idx < len(self.playlists):
@@ -4206,9 +4207,9 @@ class SpoffTUI(App):
                 save_saved_playlists(self.playlists)
                 st.clear()
                 for i, pl in enumerate(self.playlists):
-                    st.add_row(pl.get("name", "Untitled"), key=str(i))
+                    st.add_row(escape(str(pl.get("name") or "Untitled")), key=str(i))
                 st.move_cursor(row=new_idx)
-                return
+            return
 
         # 2. Dragging/reordering songs in a playlist
         if self.active_tab == "playlist" and self.current_playlist_tracks:
@@ -4264,7 +4265,7 @@ class SpoffTUI(App):
             return
 
         # 1. Reordering playlists in the sidebar
-        if self.focused and self.focused.id == "side-table":
+        if self.focused and getattr(self.focused, "id", None) == "side-table":
             st = self.query_one("#side-table", DataTable)
             idx = st.cursor_row
             if idx is not None and 0 <= idx < len(self.playlists) - 1:
@@ -4274,9 +4275,9 @@ class SpoffTUI(App):
                 save_saved_playlists(self.playlists)
                 st.clear()
                 for i, pl in enumerate(self.playlists):
-                    st.add_row(pl.get("name", "Untitled"), key=str(i))
+                    st.add_row(escape(str(pl.get("name") or "Untitled")), key=str(i))
                 st.move_cursor(row=new_idx)
-                return
+            return
 
         # 2. Dragging/reordering songs in a playlist
         if self.active_tab == "playlist" and self.current_playlist_tracks:
@@ -4535,6 +4536,7 @@ class SpoffTUI(App):
             self.update_player_hud()
 
     def _mpris_stop(self):
+        self._play_request_id = getattr(self, "_play_request_id", 0) + 1
         self.player.stop()
         self.current_index = -1
         if self.mpris:
@@ -4998,6 +5000,9 @@ class SpoffTUI(App):
 
         # 3. If in search or offline view, or no playlist found, delegate to share_track if track available
         if not target_pl:
+            if self.focused and getattr(self.focused, "id", None) == "side-table":
+                self.notify_user("No playlist selected to share.")
+                return
             if self.active_tab in ("search", "offline"):
                 self.action_share_track()
                 return
@@ -5360,8 +5365,8 @@ class SpoffTUI(App):
             self.action_delete_playlist()
             return
 
-        elif f and f.id == "track-table" and isinstance(f, DataTable):
-            row_idx = f.cursor_row
+        elif f and getattr(f, "id", None) == "track-table":
+            row_idx = getattr(f, "cursor_row", None)
             if self.active_tab == "playlist":
                 # If playlist is empty, delete the playlist itself
                 if not self.current_playlist_tracks or row_idx is None or row_idx < 0 or row_idx >= len(self.current_playlist_tracks):
@@ -5383,34 +5388,43 @@ class SpoffTUI(App):
                 def handle_remove_track_confirm(confirmed: Optional[bool]) -> None:
                     if not confirmed:
                         return
+                    all_pls = load_saved_playlists()
+                    target_pl_dict = next((p for p in all_pls if p.get("id") == pl_id), None)
+                    if not target_pl_dict:
+                        self.notify_user("Playlist was deleted or not found.")
+                        return
+                    pl_tracks = list(target_pl_dict.get("tracks") or [])
                     found_idx = None
-                    if target_track in self.current_playlist_tracks:
-                        found_idx = self.current_playlist_tracks.index(target_track)
+                    if target_track in pl_tracks:
+                        found_idx = pl_tracks.index(target_track)
                     elif target_track_id:
-                        for idx, item in enumerate(self.current_playlist_tracks):
+                        for idx, item in enumerate(pl_tracks):
                             if item.get("id") == target_track_id:
                                 found_idx = idx
                                 break
-                    elif row_idx is not None and 0 <= row_idx < len(self.current_playlist_tracks):
+                    elif row_idx is not None and 0 <= row_idx < len(pl_tracks):
                         found_idx = row_idx
 
-                    if found_idx is not None and 0 <= found_idx < len(self.current_playlist_tracks):
-                        removed_track = self.current_playlist_tracks.pop(found_idx)
-                        self.render_tracks(self.current_playlist_tracks)
-                        if self.current_playlist_tracks and isinstance(f, DataTable):
-                            new_row = max(0, min(found_idx, len(self.current_playlist_tracks) - 1))
-                            f.move_cursor(row=new_row)
+                    if found_idx is not None and 0 <= found_idx < len(pl_tracks):
+                        removed_track = pl_tracks.pop(found_idx)
+                        target_pl_dict["tracks"] = pl_tracks
                         if pl_id:
-                            update_playlist_tracks(pl_id, self.current_playlist_tracks)
-                            self.playlists = load_saved_playlists()
-                            self.refresh_side_table()
+                            update_playlist_tracks(pl_id, pl_tracks)
+                        if self.current_playlist_id == pl_id:
+                            self.current_playlist_tracks = pl_tracks
+                            self.render_tracks(pl_tracks)
+                            if pl_tracks and isinstance(f, DataTable):
+                                new_row = max(0, min(found_idx, len(pl_tracks) - 1))
+                                f.move_cursor(row=new_row)
+                        self.playlists = load_saved_playlists()
+                        self.refresh_side_table()
 
-                            if not is_client_side_track(removed_track):
-                                def _sync_remove_bg():
-                                    ok, msg = remove_track_from_spotify_account(pl_id, pl_name, removed_track)
-                                    if ok:
-                                        self.call_from_thread(self.notify_user, f"Removed '{t_title}' from Spotify playlist '{pl_name}'.")
-                                threading.Thread(target=_sync_remove_bg, daemon=True).start()
+                        if not is_client_side_track(removed_track):
+                            def _sync_remove_bg():
+                                ok, msg = remove_track_from_spotify_account(pl_id, pl_name, removed_track)
+                                if ok:
+                                    self.call_from_thread(self.notify_user, f"Removed '{t_title}' from Spotify playlist '{pl_name}'.")
+                            threading.Thread(target=_sync_remove_bg, daemon=True).start()
 
                         if self.queue:
                             q_idx = None
@@ -5466,14 +5480,14 @@ class SpoffTUI(App):
                                     q_idx = i
                                     break
                         if q_idx is not None:
+                            was_current = (q_idx == self.current_index)
                             self.queue.pop(q_idx)
-                            if self.current_index > q_idx:
-                                self.current_index -= 1
-                            elif self.current_index == q_idx:
-                                if self.current_index >= len(self.queue):
-                                    self.current_index = len(self.queue) - 1
                             if not self.queue:
                                 self.current_index = -1
+                            elif was_current:
+                                self.current_index = q_idx - 1
+                            elif q_idx < self.current_index:
+                                self.current_index -= 1
                             self.update_player_hud()
                     self.notify_user(f"Removed '{t_title}' from offline disk cache.")
 
@@ -5494,14 +5508,14 @@ class SpoffTUI(App):
                                     q_idx = i
                                     break
                         if q_idx is not None:
+                            was_current = (q_idx == self.current_index)
                             self.queue.pop(q_idx)
-                            if self.current_index > q_idx:
-                                self.current_index -= 1
-                            elif self.current_index == q_idx:
-                                if self.current_index >= len(self.queue):
-                                    self.current_index = len(self.queue) - 1
                             if not self.queue:
                                 self.current_index = -1
+                            elif was_current:
+                                self.current_index = q_idx - 1
+                            elif q_idx < self.current_index:
+                                self.current_index -= 1
                             self.update_player_hud()
                     self.notify_user(f"Removed '{t.get('title')}' from search results.")
         else:
@@ -5526,6 +5540,9 @@ class SpoffTUI(App):
             if dur > 0:
                 bar.total = dur
                 bar.progress = pos
+            else:
+                bar.total = 100.0
+                bar.progress = 0.0
         except Exception:
             return
 
@@ -5656,14 +5673,18 @@ class SpoffTUI(App):
 
     @work(thread=True)
     def do_search(self, query: str):
+        req_id = getattr(self, "_search_request_id", 0) + 1
+        self._search_request_id = req_id
         engine_name = "Spotify" if self.search_engine == "spotify" else "YouTube Music"
         self.notify_user(f"Searching {engine_name} for '{query}'...")
 
         if self.search_engine == "spotify":
             ok, results, err_msg = search_spotify_tracks(query, limit=25)
             if not ok:
-                self.search_results = []
                 def _notify_err():
+                    if req_id != getattr(self, "_search_request_id", None):
+                        return
+                    self.search_results = []
                     if self.active_tab == "search":
                         self.render_tracks([])
                     self.notify_user(err_msg or "Failed to search Spotify.")
@@ -5672,9 +5693,10 @@ class SpoffTUI(App):
         else:
             results = live_search_tracks(query, limit=25)
 
-        self.search_results = results
-
         def _update_ui():
+            if req_id != getattr(self, "_search_request_id", None):
+                return
+            self.search_results = results
             if self.active_tab == "search":
                 self.render_tracks(results)
                 if results:
@@ -5863,12 +5885,17 @@ class SpoffTUI(App):
                 dur_sec = 0.0
             self.mpris.update_track(track, dur_sec)
 
+        def _commit_load(url_or_path: str):
+            if getattr(self, "_closing", False) or req_id != getattr(self, "_play_request_id", None):
+                return False
+            self.notify_user("")
+            if req_id != getattr(self, "_play_request_id", None):
+                return False
+            return self.player.load_and_play(url_or_path, track)
+
         cached = get_cached_track_path(t_id)
         if cached:
-            if req_id != self._play_request_id:
-                return
-            self.notify_user("")
-            self.player.load_and_play(str(cached), track)
+            _commit_load(str(cached))
             return
 
         self.notify_user(f"Connecting stream for '{title}'...")
@@ -5878,16 +5905,21 @@ class SpoffTUI(App):
             track_url = f"https://www.youtube.com/watch?v={t_id}"
 
         res = search_and_resolve_stream(title, artist, direct_url=track_url)
-        if req_id != self._play_request_id:
+        if req_id != getattr(self, "_play_request_id", None):
             return
 
         if not res or not res.get("stream_url"):
             self.notify_user(f"Could not stream '{title}'. Track may be unavailable.")
+            if hasattr(self, "action_next_track"):
+                if hasattr(self, "call_from_thread"):
+                    self.call_from_thread(self.action_next_track)
+                else:
+                    self.action_next_track()
             return
 
         stream_url = res["stream_url"]
-        self.notify_user("")
-        self.player.load_and_play(stream_url, track)
+        if not _commit_load(stream_url):
+            return
 
         def on_cached(path):
             self.notify_user(f"Saved '{title}' to offline library.")

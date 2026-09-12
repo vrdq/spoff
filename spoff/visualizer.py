@@ -279,7 +279,7 @@ bit_format = 8bit
                 interp_peaks.append((self._peaks[i] + nxt_p) / 2.0)
 
             chars = []
-            for c in range(24):
+            for c in range(min(self.bars_count, len(interp_vals) // 2)):
                 i1 = 2 * c
                 i2 = 2 * c + 1
                 lv = min(4, max(0, int(interp_vals[i1] * 4.4)))
@@ -304,14 +304,16 @@ bit_format = 8bit
             half = self.bars_count // 2
             left_v = self._smooth_values[:half][::-1]
             right_v = self._smooth_values[:half]
-            stereo_v = left_v + right_v
+            center_v = [self._smooth_values[half]] if self.bars_count % 2 else []
+            stereo_v = left_v + center_v + right_v
 
             left_p = self._peaks[:half][::-1]
             right_p = self._peaks[:half]
-            stereo_p = left_p + right_p
+            center_p = [self._peaks[half]] if self.bars_count % 2 else []
+            stereo_p = left_p + center_p + right_p
 
             chars = []
-            for i in range(self.bars_count):
+            for i in range(len(stereo_v)):
                 val = stereo_v[i]
                 peak = stereo_p[i]
                 if val <= 0.01:
@@ -333,26 +335,23 @@ bit_format = 8bit
             L_ROWS = [0x1, 0x2, 0x4, 0x40]
             R_ROWS = [0x8, 0x10, 0x20, 0x80]
             chars = []
-            for c in range(24):
+            for c in range(min(self.bars_count, len(self._smooth_values))):
                 i1 = 2 * c
                 i2 = 2 * c + 1
                 e1 = self._smooth_values[min(len(self._smooth_values) - 1, i1 // 2)]
                 e2 = self._smooth_values[min(len(self._smooth_values) - 1, i2 // 2)]
 
-                y1 = 1.5 + math.sin(self._sim_phase + i1 * 0.38) * (0.35 + 1.15 * e1)
-                y2 = 1.5 + math.sin(self._sim_phase + i2 * 0.38) * (0.35 + 1.15 * e2)
-
-                r1 = max(0, min(3, int(round(y1))))
-                r2 = max(0, min(3, int(round(y2))))
-
-                mask = L_ROWS[r1] | R_ROWS[r2]
+                l_idx = min(3, max(0, int(e1 * 3.5)))
+                r_idx = min(3, max(0, int(e2 * 3.5)))
+                mask = L_ROWS[l_idx] | R_ROWS[r_idx]
                 char = chr(0x2800 | mask)
-                avg_e = (e1 + e2) / 2.0
-                c_idx = min(len(palette) - 1, int(avg_e * (len(palette) - 1)))
+
+                avg_val = (e1 + e2) / 2.0
+                c_idx = min(len(palette) - 1, int(avg_val * (len(palette) - 1)))
                 chars.append(f"[{palette[c_idx]}]{char}[/]")
             return "".join(chars)
 
-        # 5. STYLE: Minimal Matrix (Discrete LED Pips)
+        # 5. STYLE: Quantum Dots (Stochastic Matrix)
         elif self.style == "dots":
             chars = []
             for i in range(self.bars_count):
@@ -376,6 +375,7 @@ bit_format = 8bit
             except Exception:
                 try:
                     self.proc.kill()
+                    self.proc.wait(timeout=0.5)
                 except Exception:
                     pass
             self.proc = None

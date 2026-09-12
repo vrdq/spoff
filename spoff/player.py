@@ -137,8 +137,13 @@ class MPVController:
             except Exception:
                 time.sleep(0.1)
 
-    def load_and_play(self, source_path_or_url: str, track_meta: Dict[str, Any]):
+    def load_and_play(self, source_path_or_url: str, track_meta: Dict[str, Any]) -> bool:
         self.start_mpv()
+        ok = self._send_command(["loadfile", source_path_or_url, "replace"])
+        if not ok:
+            self.current_track = None
+            self.is_paused = False
+            return False
         self.current_track = track_meta
         self.is_paused = False
         self._last_pos = 0.0
@@ -146,8 +151,8 @@ class MPVController:
             self._duration = float(track_meta.get("duration_ms") or 0) / 1000.0
         except (ValueError, TypeError):
             self._duration = 0.0
-        self._send_command(["loadfile", source_path_or_url, "replace"])
         self._send_command(["set_property", "pause", False])
+        return True
 
     def toggle_pause(self):
         self.is_paused = not self.is_paused
@@ -177,13 +182,25 @@ class MPVController:
         self._last_pos = 0.0
         self._duration = 0.0
         self.is_paused = False
-        if self.process:
+        proc = self.process
+        if proc is not None:
+            self.process = None
             try:
                 self._send_command(["quit"])
-                self.process.terminate()
+                proc.terminate()
+                try:
+                    proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait(timeout=1.0)
             except Exception:
                 pass
-            self.process = None
+        if self._listener_thread and self._listener_thread != threading.current_thread() and self._listener_thread.is_alive():
+            try:
+                self._listener_thread.join(timeout=0.5)
+            except Exception:
+                pass
+            self._listener_thread = None
         if os.path.exists(self.socket_path):
             try:
                 os.unlink(self.socket_path)
