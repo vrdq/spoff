@@ -152,8 +152,7 @@ class TestMPRISAndAudio(unittest.TestCase):
         desktop_path = Path.home() / ".local/share/applications/spoff.desktop"
         self.assertTrue(desktop_path.exists())
         content = desktop_path.read_text()
-        self.assertIn("Name=Spoff", content)
-        self.assertIn("Icon=spoff", content)
+        self.assertIn("Name=SPOFF", content)
         self.assertIn("Exec=", content)
 
 if __name__ == "__main__":

@@ -3303,25 +3303,25 @@ class SpoffTUI(App):
     }
 
     DataTable > .datatable--cursor {
-        background: transparent;
+        background: #1c1c1c;
         color: #cccccc;
         text-style: bold;
     }
 
     DataTable:focus > .datatable--cursor {
-        background: transparent;
+        background: #262626;
         color: #ffffff;
         text-style: bold;
     }
 
     #side-table > .datatable--cursor {
-        background: transparent;
+        background: #1c1c1c;
         color: #cccccc;
         text-style: bold;
     }
 
     #side-table:focus > .datatable--cursor {
-        background: transparent;
+        background: #262626;
         color: #ffffff;
         text-style: bold;
     }
@@ -3409,6 +3409,18 @@ class SpoffTUI(App):
         background: transparent;
     }
 
+    #track-table > .datatable--cursor {
+        background: #1c1c1c;
+        color: #cccccc;
+        text-style: bold;
+    }
+
+    #track-table:focus > .datatable--cursor {
+        background: #262626;
+        color: #ffffff;
+        text-style: bold;
+    }
+
     #lyrics-pane {
         height: 1fr;
         display: none;
@@ -3427,13 +3439,13 @@ class SpoffTUI(App):
     }
 
     #lyrics-table > .datatable--cursor {
-        background: transparent;
+        background: #1c1c1c;
         color: #cccccc;
         text-style: bold;
     }
 
     #lyrics-table:focus > .datatable--cursor {
-        background: transparent;
+        background: #262626;
         color: #ffffff;
         text-style: bold;
     }
@@ -3513,7 +3525,7 @@ class SpoffTUI(App):
     }
 
     #modal-table > .datatable--cursor {
-        background: transparent;
+        background: #262626;
         color: #ffffff;
         text-style: bold;
     }
@@ -4357,13 +4369,13 @@ class SpoffTUI(App):
     }
 
     #settings-table > .datatable--cursor {
-        background: transparent;
+        background: #1c1c1c;
         color: #cccccc;
         text-style: bold;
     }
 
     #settings-table:focus > .datatable--cursor {
-        background: transparent;
+        background: #262626;
         color: #ffffff;
         text-style: bold;
     }
@@ -4424,6 +4436,7 @@ class SpoffTUI(App):
         margin-top: 1;
     }
     """
+    TITLE = "SPOFF"
 
     BINDINGS = [
         Binding("space", "toggle_play", "Play/Pause"),
@@ -4860,6 +4873,12 @@ class SpoffTUI(App):
             yield Static("Enter: play  |  Space / F8: pause  |  s: shuf  |  r: rep  |  4: lyrics  |  : help  |  q: quit", id="deck-line-3")
 
     def on_mount(self) -> None:
+        self.title = "SPOFF"
+        try:
+            sys.stdout.write("\033]0;SPOFF\007")
+            sys.stdout.flush()
+        except Exception:
+            pass
         self.player.start_mpv()
         self.player.set_volume(self.volume)
         self.apply_transparency()
