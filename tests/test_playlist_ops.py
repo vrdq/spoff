@@ -10,7 +10,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from spoff import storage
-from spoff.auth import rename_spotify_playlist
+from spoff.auth import rename_spotify_playlist, clone_spotify_playlist
 from spoff.app import (
     DEFAULT_KEYBINDINGS, ACTION_INFO, SpoffTUI,
     RenamePlaylistModal, ClonePlaylistModal
@@ -158,6 +158,39 @@ class TestSpotifyRenameSync(unittest.TestCase):
             body={"name": "Renamed Hits"},
             token="valid_mock_token"
         )
+
+    def test_clone_spotify_playlist_without_auth(self):
+        with patch("spoff.auth.get_valid_token", return_value=None):
+            ok, sp_id, msg = clone_spotify_playlist("local_123", "New Cloned", [])
+            self.assertFalse(ok)
+            self.assertIsNone(sp_id)
+            self.assertIn("Not logged in", msg)
+
+    @patch("spoff.auth.get_valid_token", return_value="valid_mock_token")
+    @patch("spoff.auth.has_modify_scopes", return_value=True)
+    @patch("spoff.auth.spotify_api_request")
+    def test_clone_spotify_playlist_success(self, mock_api, mock_scopes, mock_token):
+        def api_side_effect(endpoint, method="GET", body=None, token=None):
+            if endpoint == "/me/playlists" and method == "POST":
+                return (True, {"id": "sp_cloned_pl_id"}, "")
+            elif "/tracks" in endpoint and method == "POST":
+                return (True, {}, "")
+            return (False, None, "unexpected endpoint")
+
+        mock_api.side_effect = api_side_effect
+        tracks = [
+            {"id": "t1", "uri": "spotify:track:4cOdK2wGLETKBW3PvgPWqT", "title": "Never Gonna Give You Up"},
+            {"id": "5ghIJD1mej0Y55Kc97XM9f", "title": "Song 2"}
+        ]
+        ok, new_sp_id, msg = clone_spotify_playlist(
+            local_playlist_id="pl_1",
+            cloned_name="My Cloned Jams",
+            tracks=tracks,
+            token="valid_mock_token"
+        )
+        self.assertTrue(ok)
+        self.assertEqual(new_sp_id, "sp_cloned_pl_id")
+        self.assertIn("My Cloned Jams", msg)
 
 
 class TestPlaylistBindingsAndModals(unittest.TestCase):

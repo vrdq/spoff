@@ -1005,8 +1005,13 @@ def delete_spotify_playlist(
     else:
         local_playlists = load_saved_playlists()
         for pl in local_playlists:
-            if pl.get("id") == playlist_id and pl.get("spotify_id"):
-                target_spotify_pl_id = pl["spotify_id"]
+            if pl.get("id") == playlist_id:
+                if pl.get("spotify_id"):
+                    target_spotify_pl_id = pl["spotify_id"]
+                elif pl.get("url") and "spotify.com/playlist/" in pl["url"]:
+                    m = re.search(r'playlist/([a-zA-Z0-9]{22})', pl["url"])
+                    if m:
+                        target_spotify_pl_id = m.group(1)
                 break
 
     if not target_spotify_pl_id:
@@ -1048,8 +1053,13 @@ def rename_spotify_playlist(
     else:
         local_playlists = load_saved_playlists()
         for pl in local_playlists:
-            if pl.get("id") == playlist_id and pl.get("spotify_id"):
-                target_spotify_pl_id = pl["spotify_id"]
+            if pl.get("id") == playlist_id:
+                if pl.get("spotify_id"):
+                    target_spotify_pl_id = pl["spotify_id"]
+                elif pl.get("url") and "spotify.com/playlist/" in pl["url"]:
+                    m = re.search(r'playlist/([a-zA-Z0-9]{22})', pl["url"])
+                    if m:
+                        target_spotify_pl_id = m.group(1)
                 break
 
     if not target_spotify_pl_id:
@@ -1064,6 +1074,84 @@ def rename_spotify_playlist(
     if ok:
         return True, f"Renamed playlist to '{new_name}' on Spotify"
     return False, err or "Failed to rename on Spotify"
+
+
+def clone_spotify_playlist(
+    local_playlist_id: str,
+    cloned_name: str,
+    tracks: List[Dict[str, Any]],
+    token: Optional[str] = None
+) -> Tuple[bool, Optional[str], str]:
+    """
+    Creates a new playlist on the user's Spotify account and copies all tracks to it.
+    Returns (success, spotify_playlist_id, message).
+    """
+    clean_name = cloned_name.strip() if cloned_name else ""
+    if not clean_name:
+        return False, None, "Invalid playlist name"
+    if not token:
+        token = get_valid_token()
+    if not token:
+        return False, None, "Not logged in to Spotify"
+    if not has_modify_scopes():
+        return False, None, "Spotify permission required"
+
+    # 1. Create the new playlist on Spotify
+    create_body = {
+        "name": clean_name,
+        "description": "Cloned with Spoff",
+        "public": False
+    }
+    ok_create, pl_data, err = spotify_api_request("/me/playlists", method="POST", body=create_body, token=token)
+    if not ok_create or not pl_data or "id" not in pl_data:
+        user_prof = fetch_current_user_profile(token)
+        if user_prof and user_prof.get("id"):
+            ok_create, pl_data, err = spotify_api_request(f"/users/{user_prof['id']}/playlists", method="POST", body=create_body, token=token)
+
+    if not ok_create or not pl_data or "id" not in pl_data:
+        return False, None, f"Failed to create playlist on Spotify: {err or 'Unknown error'}"
+
+    new_sp_id = pl_data["id"]
+
+    # 2. Extract track URIs
+    uris = []
+    if tracks:
+        for t in tracks:
+            if not isinstance(t, dict):
+                continue
+            res = resolve_spotify_track_info(t, token=token)
+            if res and res[1]:
+                uris.append(res[1])
+
+    # 3. Add tracks in batches of 100
+    added_count = 0
+    if uris:
+        for i in range(0, len(uris), 100):
+            chunk = uris[i:i + 100]
+            ok_add, _, add_err = spotify_api_request(
+                f"/playlists/{new_sp_id}/tracks",
+                method="POST",
+                body={"uris": chunk},
+                token=token
+            )
+            if ok_add:
+                added_count += len(chunk)
+            else:
+                logger.warning(f"Failed to add chunk of tracks to Spotify playlist {new_sp_id}: {add_err}")
+
+    # 4. Link the local playlist with spotify_id and Spotify URL
+    if local_playlist_id:
+        local_playlists = load_saved_playlists()
+        for pl in local_playlists:
+            if pl.get("id") == local_playlist_id:
+                pl["spotify_id"] = new_sp_id
+                if not pl.get("url") or not str(pl.get("url", "")).startswith("http"):
+                    pl["url"] = f"https://open.spotify.com/playlist/{new_sp_id}"
+                save_saved_playlists(local_playlists)
+                break
+
+    return True, new_sp_id, f"Synced to Spotify: '{clean_name}' with {added_count} tracks"
+
 
 
 

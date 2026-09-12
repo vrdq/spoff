@@ -209,8 +209,8 @@ class TestParametricEQDSP(unittest.TestCase):
         engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
         af_str = engine.to_ffmpeg_af()
 
-        # 1. Preamp must be first filter in chain
-        self.assertTrue(af_str.startswith("volume=volume=-5.00dB:precision=fixed"))
+        # 1. Preamp must be first filter in chain with double floating point precision
+        self.assertTrue(af_str.startswith("volume=volume=-5.00dB:precision=double"))
 
         # 2. Contains all 10 biquad stages with double precision (r=f64)
         self.assertIn("lowshelf=f=65.0:t=q:w=0.70:g=4.50:r=f64", af_str)

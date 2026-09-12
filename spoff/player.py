@@ -14,8 +14,9 @@ logger = logging.getLogger("player")
 
 def get_direct_hardware_audio_device() -> Optional[str]:
     """
-    Detects physical ALSA hardware output to bypass virtual filter-chain sinks
+    Detects physical ALSA or Bluetooth hardware output to bypass virtual filter-chain sinks
     (such as PipeWire samsung_akg_eq or easyeffects), avoiding double-equalization.
+    Preserves Bluetooth headsets (bluez_output) over internal ALSA speakers.
     """
     try:
         res = subprocess.run(
@@ -27,9 +28,15 @@ def get_direct_hardware_audio_device() -> Optional[str]:
         if res.returncode == 0:
             lines = [l.strip() for l in res.stdout.splitlines() if l.strip()]
             has_filter_sink = any(
-                not parts[1].startswith("alsa_output.") for parts in [l.split() for l in lines] if len(parts) >= 2
+                not (parts[1].startswith("alsa_output.") or parts[1].startswith("bluez_output.") or parts[1].startswith("bluez_sink."))
+                for parts in [l.split() for l in lines] if len(parts) >= 2
             )
             if has_filter_sink:
+                # Prioritize bluetooth headset if present, else ALSA hardware
+                for l in lines:
+                    parts = l.split()
+                    if len(parts) >= 2 and (parts[1].startswith("bluez_output.") or parts[1].startswith("bluez_sink.")):
+                        return f"pulse/{parts[1]}"
                 for l in lines:
                     parts = l.split()
                     if len(parts) >= 2 and parts[1].startswith("alsa_output."):
@@ -147,9 +154,13 @@ class MPVController:
                     s.sendall(json.dumps({"command": ["observe_property", 2, "duration"]}).encode("utf-8") + b"\n")
                     s.sendall(json.dumps({"command": ["observe_property", 3, "pause"]}).encode("utf-8") + b"\n")
 
+                    s.settimeout(0.5)
                     buffer = ""
                     while not self._stop_listener:
-                        data = s.recv(1024).decode("utf-8", errors="ignore")
+                        try:
+                            data = s.recv(1024).decode("utf-8", errors="ignore")
+                        except socket.timeout:
+                            continue
                         if not data:
                             break
                         buffer += data

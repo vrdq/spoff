@@ -63,7 +63,7 @@ try:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, has_modify_scopes,
+        reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track
     )
     from .lyrics import fetch_lyrics, get_active_lyric_index
@@ -105,7 +105,7 @@ except ImportError:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, has_modify_scopes,
+        reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track
     )
     from lyrics import fetch_lyrics, get_active_lyric_index
@@ -6339,7 +6339,7 @@ class SpoffTUI(App):
             else:
                 hint.styles.display = "block"
                 if self.playlists:
-                    hint.update("[dim]Enter: open  |  Del: delete[/dim]")
+                    hint.update("[dim]Enter: open  |  R: rename  |  Y: copy  |  Del: delete[/dim]")
                 else:
                     hint.update("[dim]Enter name or link above to create[/dim]")
         except Exception:
@@ -7052,6 +7052,20 @@ class SpoffTUI(App):
                     self.load_playlist_by_index(new_idx, focus_tracks=False)
 
                 self.notify_user(f"Copied '{cur_name}' -> '{clean_name}' ({track_count} tracks).")
+
+                # Sync clone to Spotify account in background if logged in
+                def _sync_clone_bg():
+                    s_ok, sp_id, s_msg = clone_spotify_playlist(
+                        local_playlist_id=cloned_pl.get("id", ""),
+                        cloned_name=clean_name,
+                        tracks=cloned_pl.get("tracks", []),
+                    )
+                    if s_ok:
+                        self.call_from_thread(
+                            self.notify_user,
+                            f"Synced '{clean_name}' to Spotify app ({track_count} tracks)."
+                        )
+                threading.Thread(target=_sync_clone_bg, daemon=True).start()
             else:
                 self.notify_user("Failed to copy playlist.")
 

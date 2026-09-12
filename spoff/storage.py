@@ -597,10 +597,13 @@ def clone_saved_playlist(playlist_id: str, new_name: Optional[str] = None) -> Op
             if isinstance(t, dict):
                 cloned_tracks.append(dict(t))
 
+    orig_url = target_p.get("url", "")
+    cloned_url = "" if (orig_url.startswith("http") or "spotify" in orig_url or "youtube" in orig_url) else orig_url
+
     cloned_playlist = {
         "id": new_pid,
         "name": c_name,
-        "url": target_p.get("url", ""),
+        "url": cloned_url,
         "tracks": cloned_tracks,
     }
 

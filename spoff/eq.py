@@ -710,8 +710,9 @@ class ParametricEQEngine:
         filters: List[str] = []
 
         # 1. Preamp Stage: Attenuation before filters prevents clipping inside and after biquads
+        vol_prec = "double" if self.precision == "f64" else "float"
         if abs(self.preamp_db) > 0.01:
-            filters.append(f"volume=volume={self.preamp_db:.2f}dB:precision=fixed")
+            filters.append(f"volume=volume={self.preamp_db:.2f}dB:precision={vol_prec}")
 
         # 2. Biquad Filter Chain
         prec = "f64" if self.precision == "f64" else "f32"
