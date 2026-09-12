@@ -705,6 +705,7 @@ def delete_cached_track(track_id: str) -> bool:
         removed = True
 
     for ext in (*CACHE_EXTENSIONS, ".part"):
+        p = None
         try:
             p = cache_path(val_id, ext)
             if p.exists() and p.is_file():
@@ -712,5 +713,5 @@ def delete_cached_track(track_id: str) -> bool:
                 removed = True
                 logger.info(f"Deleted cache file: {p}")
         except Exception as e:
-            logger.error(f"Failed to delete cache file {p}: {e}")
+            logger.error(f"Failed to delete cache file {p or ext}: {e}")
     return removed

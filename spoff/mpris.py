@@ -336,8 +336,8 @@ class MPRISService:
         if not track_url:
             if t_id and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
                 track_url = f"https://www.youtube.com/watch?v={t_id}"
-            elif track.get("uri", "").startswith("spotify:track:"):
-                s_id = track.get("uri").split(":")[-1]
+            elif str(track.get("uri") or "").startswith("spotify:track:"):
+                s_id = str(track.get("uri") or "").split(":")[-1]
                 track_url = f"https://open.spotify.com/track/{s_id}"
         if track_url:
             meta["xesam:url"] = GLib.Variant("s", str(track_url))
@@ -419,5 +419,11 @@ class MPRISService:
             except Exception:
                 pass
             self.loop = None
+        if self._thread and self._thread.is_alive():
+            try:
+                self._thread.join(timeout=0.2)
+            except Exception:
+                pass
+            self._thread = None
         self._started = False
         self.dbus_obj = None

@@ -1,5 +1,4 @@
 import unittest
-import os
 import inspect
 from pathlib import Path
 from spoff.mpris import SpoffMPRISDbus, MPRISService
@@ -117,7 +116,7 @@ class TestMPRISAndAudio(unittest.TestCase):
             service.stop()
 
     def test_art_resolver_cache_and_normalization(self):
-        from spoff.art import resolve_track_artwork, get_cached_artwork, _save_to_cache
+        from spoff.art import get_cached_artwork, _save_to_cache
         test_track = {
             "id": "unit_test_id_12345",
             "title": "Test Title",
@@ -141,6 +140,13 @@ class TestMPRISAndAudio(unittest.TestCase):
         }
         cached_var = get_cached_artwork(variant_track)
         self.assertEqual(cached_var.get("art_url"), "https://example.com/cached_cover.jpg")
+
+    def test_mpv_controller_position_and_duration(self):
+        ctrl = MPVController()
+        ctrl._last_pos = 42.5
+        ctrl._duration = 180.0
+        self.assertEqual(ctrl.get_position(), 42.5)
+        self.assertEqual(ctrl.get_duration(), 180.0)
 
     def test_spoff_desktop_file_and_icon(self):
         desktop_path = Path.home() / ".local/share/applications/spoff.desktop"

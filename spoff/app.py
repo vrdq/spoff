@@ -53,9 +53,9 @@ try:
     from .search import live_search_tracks
     from .player import MPVController
     from .eq import (
-        FilterType, EQBand, EQPreset, BUILTIN_PRESETS,
+        FilterType, BUILTIN_PRESETS,
         ParametricEQEngine, SAMSUNG_AKG_REFERENCE_PRESET,
-        format_gain_bar, render_braille_curve, render_curve,
+        format_gain_bar, render_curve,
         parse_equalizer_apo
     )
     from .auth import (
@@ -95,9 +95,9 @@ except ImportError:
     from search import live_search_tracks
     from player import MPVController
     from eq import (
-        FilterType, EQBand, EQPreset, BUILTIN_PRESETS,
+        FilterType, BUILTIN_PRESETS,
         ParametricEQEngine, SAMSUNG_AKG_REFERENCE_PRESET,
-        format_gain_bar, render_braille_curve, render_curve,
+        format_gain_bar, render_curve,
         parse_equalizer_apo
     )
     from auth import (
@@ -6813,8 +6813,8 @@ class SpoffTUI(App):
 
                     dl_ok = [False]
 
-                    def _done(path):
-                        dl_ok[0] = True
+                    def _done(path, ok_ref=dl_ok):
+                        ok_ref[0] = True
 
                     download_track_to_cache(
                         t_id,
@@ -6920,12 +6920,15 @@ class SpoffTUI(App):
             self.playlists = load_saved_playlists()
             self.refresh_side_table()
 
-            st = self.query_one("#side-table", DataTable)
-            if self.playlists:
-                new_row = max(0, min(target_idx or 0, len(self.playlists) - 1))
-                st.move_cursor(row=new_row)
-            else:
-                st.clear()
+            try:
+                st = self.query_one("#side-table", DataTable)
+                if self.playlists:
+                    new_row = max(0, min(target_idx or 0, len(self.playlists) - 1))
+                    st.move_cursor(row=new_row)
+                else:
+                    st.clear()
+            except Exception:
+                pass
 
             if self.current_playlist_id == pl_id:
                 if self.playlists:
@@ -6992,7 +6995,7 @@ class SpoffTUI(App):
                 if self.current_playlist_id == pl_id:
                     if self.playlists:
                         new_row = max(0, min(target_idx if target_idx is not None else 0, len(self.playlists) - 1))
-                        self.load_playlist_by_index(new_row, focus_tracks=(self.focused and getattr(self.focused, "id", None) == "track-table"))
+                        self.load_playlist_by_index(new_row, focus_tracks=bool(self.focused and getattr(self.focused, "id", None) == "track-table"))
 
                 # Sync rename to Spotify account asynchronously if linked
                 def _sync_rename_bg():
@@ -7079,7 +7082,7 @@ class SpoffTUI(App):
             return
 
         f = self.focused
-        if f and f.id == "side-table":
+        if f and getattr(f, "id", None) == "side-table":
             self.action_delete_playlist()
             return
 
@@ -7499,7 +7502,10 @@ class SpoffTUI(App):
         if not pid:
             pid = f"pl_{secrets.token_hex(6)}"
 
-        add_saved_playlist({"id": pid, "name": name, "url": url, "tracks": tracks})
+        new_entry = {"id": pid, "name": name, "url": url, "tracks": tracks}
+        if parsed_sp or ("spotify.com" in url or url.startswith("spotify:")):
+            new_entry["spotify_id"] = pid
+        add_saved_playlist(new_entry)
         self.playlists = load_saved_playlists()
         self.current_playlist_id = pid
         self.current_playlist_tracks = tracks

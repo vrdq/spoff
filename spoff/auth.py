@@ -471,6 +471,7 @@ def fetch_liked_songs(token: str, max_tracks: Optional[int] = 200) -> Optional[L
                 continue
             t = entry["track"]
             t_id = t.get("id") or str(hash(t.get("name", "") + str(t.get("artists", []))))
+            artists = ", ".join(a.get("name", "Unknown") for a in t.get("artists", []))
             album_info = t.get("album") or {}
             album_name = album_info.get("name")
             images = album_info.get("images") or []

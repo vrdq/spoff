@@ -1,9 +1,8 @@
 import math
 import cmath
-import json
 import logging
 import re
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from enum import Enum
 from typing import List, Dict, Any, Optional, Tuple
 
@@ -92,15 +91,19 @@ class BiquadFilter:
             self.s1_l = b1 * x - a1 * y + self.s2_l
             self.s2_l = b2 * x - a2 * y
             # Flush subnormals to zero to prevent CPU penalties
-            if abs(self.s1_l) < 1e-15: self.s1_l = 0.0
-            if abs(self.s2_l) < 1e-15: self.s2_l = 0.0
+            if abs(self.s1_l) < 1e-15:
+                self.s1_l = 0.0
+            if abs(self.s2_l) < 1e-15:
+                self.s2_l = 0.0
             return y
         else:
             y = b0 * x + self.s1_r
             self.s1_r = b1 * x - a1 * y + self.s2_r
             self.s2_r = b2 * x - a2 * y
-            if abs(self.s1_r) < 1e-15: self.s1_r = 0.0
-            if abs(self.s2_r) < 1e-15: self.s2_r = 0.0
+            if abs(self.s1_r) < 1e-15:
+                self.s1_r = 0.0
+            if abs(self.s2_r) < 1e-15:
+                self.s2_r = 0.0
             return y
 
     def process_buffer(self, samples: List[float], channel: int = 0) -> List[float]:

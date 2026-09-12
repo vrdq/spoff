@@ -2,18 +2,11 @@ import unittest
 import math
 from spoff.eq import (
     FilterType,
-    BiquadCoefficients,
     BiquadFilter,
     EQBand,
-    EQPreset,
     ParametricEQEngine,
-    SAMSUNG_AKG_AUDIOPHILE_PRO_PRESET,
     SAMSUNG_AKG_REFERENCE_PRESET,
     HARMAN_IN_EAR_2019_PRESET,
-    HARMAN_OVER_EAR_2018_PRESET,
-    IEF_NEUTRAL_PRESET,
-    DIFFUSE_FIELD_PRESET,
-    FREE_FIELD_PRESET,
     BUILTIN_PRESETS,
     format_gain_bar,
     render_braille_curve,
@@ -139,7 +132,7 @@ class TestParametricEQDSP(unittest.TestCase):
             (10, FilterType.HIGH_SHELF, 13500.0, 3.0, 0.70),
         ]
 
-        for b, (exp_idx, exp_type, exp_f, exp_g, exp_q) in zip(preset.bands, expected):
+        for b, (exp_idx, exp_type, exp_f, exp_g, exp_q) in zip(preset.bands, expected, strict=True):
             self.assertEqual(b.index, exp_idx)
             self.assertEqual(b.filter_type, exp_type)
             self.assertAlmostEqual(b.frequency, exp_f, delta=0.1)
@@ -232,7 +225,7 @@ class TestParametricEQDSP(unittest.TestCase):
         self.assertEqual(restored.preamp_db, engine.preamp_db)
         self.assertEqual(len(restored.bands), len(engine.bands))
 
-        for b1, b2 in zip(engine.bands, restored.bands):
+        for b1, b2 in zip(engine.bands, restored.bands, strict=True):
             self.assertEqual(b1.index, b2.index)
             self.assertEqual(b1.filter_type, b2.filter_type)
             self.assertEqual(b1.frequency, b2.frequency)

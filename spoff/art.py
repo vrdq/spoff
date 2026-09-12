@@ -4,7 +4,6 @@ import urllib.request
 import urllib.parse
 import logging
 import threading
-import time
 from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 

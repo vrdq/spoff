@@ -26,19 +26,19 @@ def get_direct_hardware_audio_device() -> Optional[str]:
             timeout=0.5
         )
         if res.returncode == 0:
-            lines = [l.strip() for l in res.stdout.splitlines() if l.strip()]
+            lines = [line.strip() for line in res.stdout.splitlines() if line.strip()]
             has_filter_sink = any(
                 not (parts[1].startswith("alsa_output.") or parts[1].startswith("bluez_output.") or parts[1].startswith("bluez_sink."))
-                for parts in [l.split() for l in lines] if len(parts) >= 2
+                for parts in [line.split() for line in lines] if len(parts) >= 2
             )
             if has_filter_sink:
                 # Prioritize bluetooth headset if present, else ALSA hardware
-                for l in lines:
-                    parts = l.split()
+                for line in lines:
+                    parts = line.split()
                     if len(parts) >= 2 and (parts[1].startswith("bluez_output.") or parts[1].startswith("bluez_sink.")):
                         return f"pulse/{parts[1]}"
-                for l in lines:
-                    parts = l.split()
+                for line in lines:
+                    parts = line.split()
                     if len(parts) >= 2 and parts[1].startswith("alsa_output."):
                         return f"pulse/{parts[1]}"
     except Exception:
@@ -267,6 +267,14 @@ class MPVController:
         if not self.current_track:
             return 0.0, 0.0
         return self._last_pos, self._duration
+
+    def get_position(self) -> float:
+        """Returns the current playback position in seconds."""
+        return float(self._last_pos)
+
+    def get_duration(self) -> float:
+        """Returns the current track duration in seconds."""
+        return float(self._duration)
 
     def stop(self):
         self._stop_listener = True

@@ -233,6 +233,7 @@ def fetch_ytmusic_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
                     uploader = re.sub(r'(?i)\s*-\s*topic$', '', uploader).strip()
                     raw_title = e.get("title") or "Unknown Track"
                     cleaned_title = re.sub(r'(?i)\s*[\(\[](official\s*(video|audio|lyric|music\s*video)|lyrics|audio|hd|4k)[\)\]]', '', raw_title).strip()
+                    thumb_url = e.get("thumbnail") or (f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg" if v_id else None)
                     tracks.append({
                         "id": v_id,
                         "title": cleaned_title if cleaned_title else raw_title,
@@ -240,6 +241,8 @@ def fetch_ytmusic_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
                         "duration_ms": int((e.get("duration") or 0) * 1000),
                         "url": f"https://www.youtube.com/watch?v={v_id}",
                         "source": "ytmusic",
+                        "art_url": thumb_url,
+                        "thumbnail": thumb_url,
                     })
                 return {
                     "id": p_id,

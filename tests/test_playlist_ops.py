@@ -2,9 +2,7 @@ import os
 import sys
 import unittest
 import tempfile
-import shutil
-import json
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, PropertyMock
 
 # Ensure spoff can be imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -192,6 +190,34 @@ class TestSpotifyRenameSync(unittest.TestCase):
         self.assertEqual(new_sp_id, "sp_cloned_pl_id")
         self.assertIn("My Cloned Jams", msg)
 
+    @patch("spoff.auth.spotify_api_get")
+    def test_fetch_liked_songs_artist_extraction(self, mock_get):
+        from spoff.auth import fetch_liked_songs
+        mock_get.return_value = {
+            "items": [
+                {
+                    "track": {
+                        "id": "trk_123",
+                        "name": "Liked Song 1",
+                        "artists": [{"name": "Daft Punk"}, {"name": "Pharrell Williams"}],
+                        "duration_ms": 240000,
+                        "uri": "spotify:track:trk_123",
+                        "album": {
+                            "name": "Random Access Memories",
+                            "images": [{"url": "https://example.com/ram.jpg"}]
+                        }
+                    }
+                }
+            ],
+            "next": None
+        }
+        tracks = fetch_liked_songs(token="valid_token")
+        self.assertIsNotNone(tracks)
+        self.assertEqual(len(tracks), 1)
+        self.assertEqual(tracks[0]["artist"], "Daft Punk, Pharrell Williams")
+        self.assertEqual(tracks[0]["album"], "Random Access Memories")
+        self.assertEqual(tracks[0]["art_url"], "https://example.com/ram.jpg")
+
 
 class TestPlaylistBindingsAndModals(unittest.TestCase):
     def test_keybindings_configured(self):
@@ -214,7 +240,6 @@ class TestPlaylistBindingsAndModals(unittest.TestCase):
         self.assertEqual(modal.default_clone_name, "Chill Beats (Copy)")
 
 
-from unittest.mock import PropertyMock
 
 class TestPlaylistAppLogic(unittest.TestCase):
     def setUp(self):
@@ -259,7 +284,7 @@ class TestPlaylistAppLogic(unittest.TestCase):
         self.app.current_playlist_id = "pl_1"
         SpoffTUI.action_rename_playlist(self.app)
         self.assertEqual(len(self.app.pushed_screens), 1)
-        scr, cb = self.app.pushed_screens[0]
+        scr, _cb = self.app.pushed_screens[0]
         self.assertIsInstance(scr, RenamePlaylistModal)
         self.assertEqual(scr.current_name, "Favorites")
 
@@ -267,7 +292,7 @@ class TestPlaylistAppLogic(unittest.TestCase):
         self.app.current_playlist_id = "pl_1"
         SpoffTUI.action_clone_playlist(self.app)
         self.assertEqual(len(self.app.pushed_screens), 1)
-        scr, cb = self.app.pushed_screens[0]
+        scr, _cb = self.app.pushed_screens[0]
         self.assertIsInstance(scr, ClonePlaylistModal)
         self.assertEqual(scr.original_name, "Favorites")
 
