@@ -37,6 +37,7 @@ try:
     )
     from .storage import (
         load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
+        rename_saved_playlist, clone_saved_playlist,
         create_local_playlist, add_track_to_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
         delete_cached_track, is_first_launch, mark_first_launch_done,
@@ -62,7 +63,7 @@ try:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        reorder_spotify_playlist_track, delete_spotify_playlist, has_modify_scopes,
+        reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track
     )
     from .lyrics import fetch_lyrics, get_active_lyric_index
@@ -78,6 +79,7 @@ except ImportError:
     )
     from storage import (
         load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
+        rename_saved_playlist, clone_saved_playlist,
         create_local_playlist, add_track_to_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
         delete_cached_track, is_first_launch, mark_first_launch_done,
@@ -103,7 +105,7 @@ except ImportError:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        reorder_spotify_playlist_track, delete_spotify_playlist, has_modify_scopes,
+        reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track
     )
     from lyrics import fetch_lyrics, get_active_lyric_index
@@ -392,6 +394,8 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "share_playlist": "y",
     "delete_item": "d",
     "delete_playlist": "D",
+    "rename_playlist": "R",
+    "clone_playlist": "Y",
     "open_spotify_auth": "L",
     "nav_search": "1",
     "nav_playlist": "2",
@@ -437,6 +441,8 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "share_playlist": ("Playlists", "Copy Playlist Link / Share"),
     "delete_item": ("Playlists", "Delete Selected Item"),
     "delete_playlist": ("Playlists", "Delete Entire Playlist"),
+    "rename_playlist": ("Playlists", "Rename Playlist (R)"),
+    "clone_playlist": ("Playlists", "Clone / Copy Playlist (Y)"),
     "open_spotify_auth": ("Integrations", "Spotify Menu & Login"),
     "nav_search": ("Navigation", "Switch to Search"),
     "nav_playlist": ("Navigation", "Switch to Playlists"),
@@ -1448,6 +1454,94 @@ class ConfirmModal(ModalScreen[bool]):
     def action_cancel(self) -> None:
         self.dismiss(False)
 
+
+class RenamePlaylistModal(ModalScreen[Optional[str]]):
+    BINDINGS = [
+        Binding("escape", "dismiss_modal", "Cancel", priority=True),
+        Binding("enter", "submit_name", "Rename", priority=True),
+    ]
+
+    def __init__(self, current_name: str):
+        super().__init__()
+        self.current_name = current_name
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="rename-dialog"):
+            yield Static("RENAME PLAYLIST", id="rename-title")
+            yield Static(f"Current: [bold #ffffff]{escape(self.current_name)}[/]", id="rename-sub")
+            yield Input(value=self.current_name, placeholder="Enter new playlist name...", id="rename-input")
+            hint_text = "" if getattr(self.app, "advanced_mode", False) else "[dim]Enter: save name  |  Esc: cancel[/dim]"
+            yield Static(hint_text, id="rename-hint")
+
+    def on_mount(self) -> None:
+        try:
+            inp = self.query_one("#rename-input", Input)
+            inp.focus()
+            inp.select_on_focus = True
+        except Exception:
+            pass
+
+    def action_submit_name(self) -> None:
+        try:
+            val = self.query_one("#rename-input", Input).value.strip()
+            self.dismiss(val if val else None)
+        except Exception:
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        val = event.value.strip()
+        self.dismiss(val if val else None)
+
+    def action_dismiss_modal(self) -> None:
+        self.dismiss(None)
+
+
+class ClonePlaylistModal(ModalScreen[Optional[str]]):
+    BINDINGS = [
+        Binding("escape", "dismiss_modal", "Cancel", priority=True),
+        Binding("enter", "submit_name", "Clone", priority=True),
+    ]
+
+    def __init__(self, original_name: str, track_count: int = 0):
+        super().__init__()
+        self.original_name = original_name
+        self.track_count = track_count
+        self.default_clone_name = f"{original_name} (Copy)"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="clone-dialog"):
+            yield Static("CLONE / COPY PLAYLIST", id="clone-title")
+            yield Static(
+                f"Source: [bold #ffffff]{escape(self.original_name)}[/]  [dim]({self.track_count} tracks)[/dim]",
+                id="clone-sub"
+            )
+            yield Input(value=self.default_clone_name, placeholder="Enter name for cloned playlist...", id="clone-input")
+            hint_text = "" if getattr(self.app, "advanced_mode", False) else "[dim]Enter: create copy  |  Esc: cancel[/dim]"
+            yield Static(hint_text, id="clone-hint")
+
+    def on_mount(self) -> None:
+        try:
+            inp = self.query_one("#clone-input", Input)
+            inp.focus()
+            inp.select_on_focus = True
+        except Exception:
+            pass
+
+    def action_submit_name(self) -> None:
+        try:
+            val = self.query_one("#clone-input", Input).value.strip()
+            self.dismiss(val if val else self.default_clone_name)
+        except Exception:
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        val = event.value.strip()
+        self.dismiss(val if val else self.default_clone_name)
+
+    def action_dismiss_modal(self) -> None:
+        self.dismiss(None)
+
+
 class SpotifyAuthModal(ModalScreen[Optional[str]]):
     BINDINGS = [
         Binding("escape", "dismiss_modal", "Close"),
@@ -1884,6 +1978,8 @@ class HelpModal(ModalScreen[None]):
         k_share_pl = format_key_display(kb.get("share_playlist", "y"))
         k_del = format_key_display(kb.get("delete_item", "d"))
         k_del_pl = format_key_display(kb.get("delete_playlist", "D"))
+        k_ren_pl = format_key_display(kb.get("rename_playlist", "R"))
+        k_cln_pl = format_key_display(kb.get("clone_playlist", "Y"))
         k_imp = format_key_display(kb.get("focus_import", "i"))
         k_upd = format_key_display(kb.get("check_update", "u"))
         k_quit = format_key_display(kb.get("quit_app", "q"))
@@ -1891,6 +1987,8 @@ class HelpModal(ModalScreen[None]):
         playlist_rows = [
             ("J / K, Shift+↑↓", "Reorder songs in playlist"),
             (f"{k_add}, +", "Add track to playlist"),
+            (f"{k_ren_pl}, F2", "Rename selected playlist"),
+            (f"{k_cln_pl}, Alt+c", "Clone / copy playlist"),
             (f"{k_share_pl}", "Copy playlist link to clipboard"),
             (f"{k_imp}", "New playlist / import link"),
             (f"{k_spot}", "Spotify login & sync"),
@@ -3455,6 +3553,46 @@ class SpoffTUI(App):
         margin-top: 1;
     }
 
+    /* MODAL: RENAME & CLONE PLAYLIST */
+    RenamePlaylistModal, ClonePlaylistModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.75);
+    }
+
+    #rename-dialog, #clone-dialog {
+        width: 60;
+        height: auto;
+        background: #181818;
+        border: solid #2a2a2a;
+        padding: 1 2;
+    }
+
+    #rename-title, #clone-title {
+        text-style: bold;
+        color: #ffffff;
+        margin-bottom: 1;
+    }
+
+    #rename-sub, #clone-sub {
+        color: #888888;
+        margin-bottom: 1;
+    }
+
+    #rename-input, #clone-input {
+        margin-bottom: 1;
+        background: #121212;
+        border: solid #333333;
+        color: #ffffff;
+    }
+
+    #rename-input:focus, #clone-input:focus {
+        border: solid #569f68;
+    }
+
+    #rename-hint, #clone-hint {
+        color: #767676;
+    }
+
     #notification-line {
         height: 1;
         color: #666666;
@@ -4346,6 +4484,11 @@ class SpoffTUI(App):
         Binding("e", "open_equalizer", "EQ"),
         Binding("E", "toggle_eq_bypass", "Toggle EQ", show=False),
         Binding("alt+e", "open_eq_settings", "EQ Settings", show=False),
+        Binding("R", "rename_playlist", "Rename Playlist", show=False),
+        Binding("shift+r", "rename_playlist", "Rename Playlist", show=False),
+        Binding("Y", "clone_playlist", "Copy Playlist", show=False),
+        Binding("shift+y", "clone_playlist", "Copy Playlist", show=False),
+        Binding("alt+c", "clone_playlist", "Copy Playlist", show=False),
     ]
 
     def _dispatch_mpris(self, callback, *args):
@@ -4616,6 +4759,11 @@ class SpoffTUI(App):
             bind_secondary("+", "add_to_playlist")
             if self.keybindings.get("open_spotify_auth") in ("L", "shift+l"):
                 bind_secondary("shift+l", "open_spotify_auth")
+            if self.keybindings.get("rename_playlist") in ("R", "shift+r"):
+                bind_secondary("shift+r", "rename_playlist")
+            if self.keybindings.get("clone_playlist") in ("Y", "shift+y"):
+                bind_secondary("shift+y", "clone_playlist")
+            bind_secondary("alt+c", "clone_playlist")
 
             # Dual playback & volume secondary bindings (hardware Fn & dedicated media keys only)
             bind_secondary("f8", "toggle_play")
@@ -5094,6 +5242,28 @@ class SpoffTUI(App):
                 matched_action = "open_settings"
             elif event.key in ("shift+delete",) and self.keybindings.get("delete_playlist") != "":
                 matched_action = "delete_playlist"
+            elif (
+                (event.key in ("shift+r", "R") or getattr(event, "character", None) == "R")
+                and not isinstance(self.focused, (Input, ScrubBar))
+                and self.keybindings.get("rename_playlist") != ""
+            ):
+                matched_action = "rename_playlist"
+            elif (
+                (event.key in ("shift+y", "Y") or getattr(event, "character", None) == "Y" or event.key == "alt+c")
+                and not isinstance(self.focused, (Input, ScrubBar))
+                and self.keybindings.get("clone_playlist") != ""
+            ):
+                matched_action = "clone_playlist"
+            elif (
+                event.key in ("f2",)
+                and not isinstance(self.focused, (Input, ScrubBar))
+                and (
+                    (self.focused and getattr(self.focused, "id", None) == "side-table")
+                    or self.active_tab == "playlist"
+                )
+                and self.keybindings.get("rename_playlist") != ""
+            ):
+                matched_action = "rename_playlist"
             elif event.key in ("delete",) and self.keybindings.get("delete_item") != "":
                 matched_action = "delete_item"
             elif event.key == "+" and self.keybindings.get("add_to_playlist") != "":
@@ -6691,15 +6861,13 @@ class SpoffTUI(App):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def action_delete_playlist(self):
-        if isinstance(self.focused, Input):
-            return
-
+    def _get_target_playlist(self) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
+        """Resolves the active or selected playlist and its index in self.playlists based on focus/active tab."""
         target_pl = None
         target_idx = None
 
         # 1. If focused on side-table, use sidebar cursor
-        if self.focused and self.focused.id == "side-table" and isinstance(self.focused, DataTable):
+        if self.focused and getattr(self.focused, "id", None) == "side-table" and isinstance(self.focused, DataTable):
             row_idx = self.focused.cursor_row
             if row_idx is not None and 0 <= row_idx < len(self.playlists):
                 target_idx = row_idx
@@ -6715,12 +6883,22 @@ class SpoffTUI(App):
 
         # 3. Fallback to sidebar cursor
         if not target_pl and self.playlists:
-            st = self.query_one("#side-table", DataTable)
-            idx = st.cursor_row if st.cursor_row is not None else 0
-            if 0 <= idx < len(self.playlists):
-                target_idx = idx
-                target_pl = self.playlists[idx]
+            try:
+                st = self.query_one("#side-table", DataTable)
+                idx = st.cursor_row if st.cursor_row is not None else 0
+                if 0 <= idx < len(self.playlists):
+                    target_idx = idx
+                    target_pl = self.playlists[idx]
+            except Exception:
+                pass
 
+        return target_idx, target_pl
+
+    def action_delete_playlist(self):
+        if isinstance(self.focused, Input):
+            return
+
+        target_idx, target_pl = self._get_target_playlist()
         if not target_pl:
             self.notify_user("No playlist selected to delete.")
             return
@@ -6729,6 +6907,10 @@ class SpoffTUI(App):
         pl_id = str(target_pl.get("id") or target_pl.get("name") or "")
         if not pl_id:
             self.notify_user("Cannot delete playlist: missing playlist ID.")
+            return
+
+        if pl_id == "spotify_liked_songs":
+            self.notify_user("Cannot delete Liked Songs.")
             return
 
         def handle_delete_confirm(confirmed: Optional[bool]) -> None:
@@ -6771,6 +6953,111 @@ class SpoffTUI(App):
                 confirm_label="Delete"
             ),
             handle_delete_confirm
+        )
+
+    def action_rename_playlist(self):
+        if isinstance(self.focused, Input):
+            return
+
+        target_idx, target_pl = self._get_target_playlist()
+        if not target_pl:
+            self.notify_user("No playlist selected to rename.")
+            return
+
+        pl_id = str(target_pl.get("id") or target_pl.get("name") or "")
+        if not pl_id:
+            self.notify_user("Cannot rename playlist: missing playlist ID.")
+            return
+
+        if pl_id == "spotify_liked_songs":
+            self.notify_user("Cannot rename Liked Songs.")
+            return
+
+        cur_name = target_pl.get("name", "Playlist")
+
+        def handle_rename_submit(new_name: Optional[str]) -> None:
+            if not new_name or not new_name.strip() or new_name.strip() == cur_name:
+                return
+            clean_name = new_name.strip()
+            ok = rename_saved_playlist(pl_id, clean_name)
+            if ok:
+                self.playlists = load_saved_playlists()
+                self.refresh_side_table()
+
+                st = self.query_one("#side-table", DataTable)
+                if self.playlists:
+                    new_row = max(0, min(target_idx if target_idx is not None else 0, len(self.playlists) - 1))
+                    st.move_cursor(row=new_row)
+
+                if self.current_playlist_id == pl_id:
+                    if self.playlists:
+                        new_row = max(0, min(target_idx if target_idx is not None else 0, len(self.playlists) - 1))
+                        self.load_playlist_by_index(new_row, focus_tracks=(self.focused and getattr(self.focused, "id", None) == "track-table"))
+
+                # Sync rename to Spotify account asynchronously if linked
+                def _sync_rename_bg():
+                    s_ok, s_msg = rename_spotify_playlist(pl_id, clean_name)
+                    if s_ok:
+                        self.call_from_thread(self.notify_user, f"Renamed on Spotify: '{clean_name}'")
+                threading.Thread(target=_sync_rename_bg, daemon=True).start()
+
+                self.notify_user(f"Renamed playlist to '{clean_name}'.")
+            else:
+                self.notify_user("Failed to rename playlist.")
+
+        self.push_screen(
+            RenamePlaylistModal(cur_name),
+            handle_rename_submit
+        )
+
+    def action_clone_playlist(self):
+        if isinstance(self.focused, Input):
+            return
+
+        target_idx, target_pl = self._get_target_playlist()
+        if not target_pl:
+            self.notify_user("No playlist selected to copy.")
+            return
+
+        pl_id = str(target_pl.get("id") or target_pl.get("name") or "")
+        if not pl_id:
+            self.notify_user("Cannot copy playlist: missing playlist ID.")
+            return
+
+        cur_name = target_pl.get("name", "Playlist")
+        tracks = target_pl.get("tracks", [])
+        track_count = len(tracks) if isinstance(tracks, list) else 0
+
+        def handle_clone_submit(cloned_name: Optional[str]) -> None:
+            if not cloned_name or not cloned_name.strip():
+                return
+            clean_name = cloned_name.strip()
+            cloned_pl = clone_saved_playlist(pl_id, clean_name)
+            if cloned_pl:
+                self.playlists = load_saved_playlists()
+                self.refresh_side_table()
+
+                new_idx = None
+                for idx, p in enumerate(self.playlists):
+                    if p.get("id") == cloned_pl.get("id"):
+                        new_idx = idx
+                        break
+
+                if new_idx is not None:
+                    try:
+                        st = self.query_one("#side-table", DataTable)
+                        st.move_cursor(row=new_idx)
+                    except Exception:
+                        pass
+                    self.load_playlist_by_index(new_idx, focus_tracks=False)
+
+                self.notify_user(f"Copied '{cur_name}' -> '{clean_name}' ({track_count} tracks).")
+            else:
+                self.notify_user("Failed to copy playlist.")
+
+        self.push_screen(
+            ClonePlaylistModal(cur_name, track_count),
+            handle_clone_submit
         )
 
     def action_delete_item(self):
@@ -7048,8 +7335,14 @@ class SpoffTUI(App):
                 hints = f"Enter/Click: seek to line  |  Space: pause  |  s: shuf  |  r: rep  |  Esc/{lyr_k}: back  |  q: quit"
             else:
                 if self.focused and getattr(self.focused, "id", None) == "side-table":
+                    pl_ren = self.keybindings.get("rename_playlist", "R")
+                    ren_hint = f"{format_key_display(pl_ren)}: rename  |  " if pl_ren else ""
+                    pl_cln = self.keybindings.get("clone_playlist", "Y")
+                    cln_hint = f"{format_key_display(pl_cln)}: copy  |  " if pl_cln else ""
+                    pl_del = self.keybindings.get("delete_playlist", "D")
+                    del_hint = f"{format_key_display(pl_del)}: del  |  " if pl_del else ""
                     pl_share = self.keybindings.get("share_playlist", "y")
-                    share_hint = f"{format_key_display(pl_share)}: share pl  |  " if pl_share else ""
+                    share_hint = f"{ren_hint}{cln_hint}{del_hint}" + (f"{format_key_display(pl_share)}: share pl  |  " if pl_share else "")
                 else:
                     share_bound = self.keybindings.get("share_track", "")
                     share_hint = f"{format_key_display(share_bound)}: share  |  " if share_bound else ""

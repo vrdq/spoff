@@ -1025,4 +1025,46 @@ def delete_spotify_playlist(
     return False, err
 
 
+def rename_spotify_playlist(
+    playlist_id: str,
+    new_name: str,
+    token: Optional[str] = None
+) -> Tuple[bool, str]:
+    """Syncs renaming of a playlist to the user's Spotify account."""
+    if not playlist_id or not new_name:
+        return False, "Invalid parameters"
+    if playlist_id == "spotify_liked_songs":
+        return False, "Cannot rename Liked Songs"
+    if not token:
+        token = get_valid_token()
+    if not token:
+        return False, "Not logged in to Spotify"
+    if not has_modify_scopes():
+        return False, "Spotify permission required"
+
+    target_spotify_pl_id = None
+    if len(playlist_id) == 22 and playlist_id.isalnum() and not playlist_id.startswith("local_"):
+        target_spotify_pl_id = playlist_id
+    else:
+        local_playlists = load_saved_playlists()
+        for pl in local_playlists:
+            if pl.get("id") == playlist_id and pl.get("spotify_id"):
+                target_spotify_pl_id = pl["spotify_id"]
+                break
+
+    if not target_spotify_pl_id:
+        return False, "Not a linked Spotify playlist"
+
+    ok, _, err = spotify_api_request(
+        f"/playlists/{target_spotify_pl_id}",
+        method="PUT",
+        body={"name": new_name.strip()},
+        token=token
+    )
+    if ok:
+        return True, f"Renamed playlist to '{new_name}' on Spotify"
+    return False, err or "Failed to rename on Spotify"
+
+
+
 

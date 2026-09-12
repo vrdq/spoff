@@ -552,6 +552,66 @@ def remove_saved_playlist(playlist_id: str) -> bool:
     return False
 
 @transactional
+def rename_saved_playlist(playlist_id: str, new_name: str) -> bool:
+    """Atomically renames a saved playlist."""
+    clean_name = new_name.strip()
+    if not playlist_id or not clean_name:
+        return False
+    existing = load_saved_playlists()
+    for p in existing:
+        if p.get("id") == playlist_id:
+            p["name"] = clean_name
+            save_saved_playlists(existing)
+            logger.info(f"Renamed playlist {playlist_id} to '{clean_name}'")
+            return True
+    return False
+
+@transactional
+def clone_saved_playlist(playlist_id: str, new_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Atomically duplicates a saved playlist with all its tracks into a new local playlist.
+    """
+    if not playlist_id:
+        return None
+    existing = load_saved_playlists()
+    target_idx = None
+    target_p = None
+    for idx, p in enumerate(existing):
+        if p.get("id") == playlist_id:
+            target_idx = idx
+            target_p = p
+            break
+
+    if target_p is None:
+        return None
+
+    orig_name = target_p.get("name", "Playlist")
+    c_name = new_name.strip() if new_name and new_name.strip() else f"{orig_name} (Copy)"
+    new_pid = f"local_{uuid.uuid4().hex[:8]}"
+
+    # Deep copy tracks list
+    raw_tracks = target_p.get("tracks", [])
+    cloned_tracks = []
+    if isinstance(raw_tracks, list):
+        for t in raw_tracks:
+            if isinstance(t, dict):
+                cloned_tracks.append(dict(t))
+
+    cloned_playlist = {
+        "id": new_pid,
+        "name": c_name,
+        "url": target_p.get("url", ""),
+        "tracks": cloned_tracks,
+    }
+
+    insert_at = (target_idx + 1) if target_idx is not None else 0
+    existing.insert(insert_at, cloned_playlist)
+    save_saved_playlists(existing)
+    logger.info(f"Cloned playlist {playlist_id} to '{c_name}' (id: {new_pid}, {len(cloned_tracks)} tracks)")
+    return cloned_playlist
+
+
+@transactional
 def move_saved_playlist(playlist_id: str, delta: int) -> bool:
     """Atomically moves a saved playlist up (-1) or down (+1)."""
     playlists = load_saved_playlists()
