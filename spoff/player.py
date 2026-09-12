@@ -12,7 +12,7 @@ from typing import Optional, Callable, Dict, Any
 logger = logging.getLogger("player")
 
 class MPVController:
-    def __init__(self, socket_path: Optional[str] = None, initial_volume: int = 80):
+    def __init__(self, socket_path: Optional[str] = None, initial_volume: int = 80, eq_engine: Optional[Any] = None):
         if socket_path is None:
             self.socket_path = f"/tmp/spoff_mpv_{os.getpid()}.sock"
         else:
@@ -26,6 +26,7 @@ class MPVController:
         self._last_pos = 0.0
         self._duration = 0.0
         self._volume = max(0, min(100, int(initial_volume)))
+        self.eq_engine: Optional[Any] = eq_engine
 
     def start_mpv(self):
         if self.process and self.process.poll() is None:
@@ -59,6 +60,11 @@ class MPVController:
             "--title=spoff",
             "--force-media-title=spoff",
         ]
+        if self.eq_engine:
+            af_str = self.eq_engine.to_ffmpeg_af()
+            if af_str:
+                cmd.append(f"--af={af_str}")
+
         self.process = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
@@ -76,6 +82,9 @@ class MPVController:
         self._stop_listener = False
         self._listener_thread = threading.Thread(target=self._ipc_listener, daemon=True)
         self._listener_thread.start()
+
+        if self.eq_engine:
+            self.apply_eq()
 
     def _send_command(self, cmd: list) -> bool:
         if not os.path.exists(self.socket_path):
@@ -140,8 +149,38 @@ class MPVController:
             except Exception:
                 time.sleep(0.1)
 
+    def apply_eq(self) -> bool:
+        """Applies active Parametric EQ filter graph to running MPV stream in real-time."""
+        if not self.eq_engine:
+            return False
+        af_str = self.eq_engine.to_ffmpeg_af()
+        return self._send_command(["set_property", "af", af_str])
+
+    def toggle_eq_bypass(self) -> bool:
+        """Seamlessly toggles EQ bypass without audio interruption (A-B testing)."""
+        if not self.eq_engine:
+            return False
+        bypassed = self.eq_engine.toggle_bypass()
+        self.apply_eq()
+        return bypassed
+
+    def set_eq_bypassed(self, bypassed: bool) -> bool:
+        """Sets EQ bypass state and updates MPV immediately."""
+        if not self.eq_engine:
+            return False
+        self.eq_engine.set_bypassed(bypassed)
+        self.apply_eq()
+        return self.eq_engine.bypassed
+
+    def set_eq_engine(self, engine: Any) -> None:
+        """Sets active EQ engine and updates MPV."""
+        self.eq_engine = engine
+        self.apply_eq()
+
     def load_and_play(self, source_path_or_url: str, track_meta: Dict[str, Any]) -> bool:
         self.start_mpv()
+        if self.eq_engine:
+            self.apply_eq()
         ok = self._send_command(["loadfile", source_path_or_url, "replace"])
         if not ok:
             self.current_track = None

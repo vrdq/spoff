@@ -412,6 +412,29 @@ def reset_custom_keybindings():
         logger.error(f"Error resetting custom keybindings: {e}")
         raise
 
+def load_eq_settings() -> Dict[str, Any]:
+    """Loads saved EQ engine parameters and active preset state."""
+    try:
+        cfg = load_config()
+        eq_data = cfg.get("eq")
+        if isinstance(eq_data, dict):
+            return eq_data
+    except Exception as e:
+        logger.error(f"Error reading EQ configuration: {e}")
+    return {}
+
+@transactional
+def save_eq_settings(eq_data: Dict[str, Any]) -> None:
+    """Persists EQ engine state atomically to config."""
+    try:
+        cfg = load_config()
+        cfg["eq"] = eq_data
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving EQ configuration: {e}")
+        raise
+
+
 def load_saved_playlists() -> List[Dict[str, Any]]:
     try:
         if PLAYLISTS_FILE.exists() and PLAYLISTS_FILE.stat().st_size > 0:

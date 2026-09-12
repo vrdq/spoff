@@ -45,11 +45,17 @@ try:
         get_saved_transparency, save_transparency, get_saved_instant_search, save_instant_search,
         get_saved_auto_update, save_auto_update,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
-        get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings
+        get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
+        load_eq_settings, save_eq_settings
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache
     from .search import live_search_tracks
     from .player import MPVController
+    from .eq import (
+        FilterType, EQBand, EQPreset, BUILTIN_PRESETS,
+        ParametricEQEngine, SAMSUNG_AKG_REFERENCE_PRESET,
+        format_gain_bar, render_braille_curve
+    )
     from .auth import (
         load_spotify_auth, save_spotify_auth, logout_spotify, get_valid_token,
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
@@ -79,11 +85,17 @@ except ImportError:
         get_saved_transparency, save_transparency, get_saved_instant_search, save_instant_search,
         get_saved_auto_update, save_auto_update,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
-        get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings
+        get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
+        load_eq_settings, save_eq_settings
     )
     from streamer import search_and_resolve_stream, download_track_to_cache
     from search import live_search_tracks
     from player import MPVController
+    from eq import (
+        FilterType, EQBand, EQPreset, BUILTIN_PRESETS,
+        ParametricEQEngine, SAMSUNG_AKG_REFERENCE_PRESET,
+        format_gain_bar, render_braille_curve
+    )
     from auth import (
         load_spotify_auth, save_spotify_auth, logout_spotify, get_valid_token,
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
@@ -340,6 +352,8 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "switch_engine": "ctrl+e",
     "toggle_visualizer": "v",
     "cycle_vis_color": "C",
+    "open_equalizer": "e",
+    "toggle_eq_bypass": "E",
 }
 
 ACTION_INFO: Dict[str, Tuple[str, str]] = {
@@ -373,6 +387,8 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "switch_engine": ("Navigation", "Switch Search Engine (YTM/Spotify)"),
     "toggle_visualizer": ("Visualizer", "Cycle Visualizer Style (v)"),
     "cycle_vis_color": ("Visualizer", "Cycle Visualizer Color (C)"),
+    "open_equalizer": ("Audio", "Parametric Equalizer (e)"),
+    "toggle_eq_bypass": ("Audio", "Toggle EQ Bypass / A-B (E)"),
     "open_settings": ("General", "Settings & Keybinds"),
     "show_help": ("General", "Help & Reference"),
     "check_update": ("General", "Check for Updates"),
@@ -1768,6 +1784,7 @@ class HelpModal(ModalScreen[None]):
             ("Left / Right", "Seek -/+ 5 seconds"),
             ("v / Click", "Cycle visualizer mode"),
             ("C", "Cycle visualizer color theme"),
+            ("e / E", "Parametric EQ / Toggle Bypass (A-B)"),
             ("F1", "Mute / Unmute audio"),
             ("F2 / F3", "Volume down / up 5%"),
         ]
@@ -1829,6 +1846,419 @@ class HelpModal(ModalScreen[None]):
 
     def action_dismiss_modal(self) -> None:
         self.dismiss(None)
+
+
+class EqualizerModal(ModalScreen[None]):
+    """
+    Studio-grade 10-band Parametric Equalizer Modal Screen.
+    Provides live interactive manipulation of RBJ biquad filters,
+    digital headroom anti-clipping metering, real-time MPV IPC audio graph compilation,
+    dynamic high-resolution Braille frequency response curve visualization,
+    built-in acoustic calibration presets (including Samsung AKG Master Reference),
+    A-B bypass testing, and EqualizerAPO export.
+    """
+    BINDINGS = [
+        Binding("escape", "dismiss_modal", "Close", priority=True),
+        Binding("q", "dismiss_modal", "Close", show=False),
+        Binding("up", "cursor_up", "Up", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+        Binding("down", "cursor_down", "Down", show=False),
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("left", "gain_down", "Gain -0.5dB", show=False),
+        Binding("h", "gain_down", "Gain -0.5dB", show=False),
+        Binding("right", "gain_up", "Gain +0.5dB", show=False),
+        Binding("l", "gain_up", "Gain +0.5dB", show=False),
+        Binding("shift+left", "gain_down_fast", "Gain -2.0dB", show=False),
+        Binding("H", "gain_down_fast", "Gain -2.0dB", show=False),
+        Binding("shift+right", "gain_up_fast", "Gain +2.0dB", show=False),
+        Binding("L", "gain_up_fast", "Gain +2.0dB", show=False),
+        Binding("left_square_bracket", "q_down", "Q -0.1", show=False),
+        Binding("right_square_bracket", "q_up", "Q +0.1", show=False),
+        Binding("left_curly_bracket", "freq_down", "Freq -5%", show=False),
+        Binding("right_curly_bracket", "freq_up", "Freq +5%", show=False),
+        Binding("less_than", "freq_down", "Freq -5%", show=False),
+        Binding("greater_than", "freq_up", "Freq +5%", show=False),
+        Binding("comma", "freq_down", "Freq -5%", show=False),
+        Binding("full_stop", "freq_up", "Freq +5%", show=False),
+        Binding("t", "cycle_filter_type", "Type", show=False),
+        Binding("space", "toggle_band", "Toggle Band", show=False),
+        Binding("b", "toggle_bypass", "Bypass A-B", show=False),
+        Binding("B", "toggle_bypass", "Bypass A-B", show=False),
+        Binding("p", "next_preset", "Next Preset", show=False),
+        Binding("P", "prev_preset", "Prev Preset", show=False),
+        Binding("a", "auto_headroom", "Auto Headroom", show=False),
+        Binding("A", "auto_headroom", "Auto Headroom", show=False),
+        Binding("r", "reset_preset", "Reset Preset", show=False),
+        Binding("c", "copy_apo", "Copy APO", show=False),
+        Binding("C", "copy_apo", "Copy APO", show=False),
+    ]
+
+    def __init__(self, engine: ParametricEQEngine):
+        super().__init__()
+        self.engine: ParametricEQEngine = engine
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="eq-dialog"):
+            with Horizontal(id="eq-header-bar"):
+                yield Static("PARAMETRIC EQUALIZER (10-BAND STUDIO DSP)", id="eq-title")
+                yield Static("[bold #569f68][ACTIVE][/]", id="eq-status-pill")
+                yield Static("[dim]Esc / q to close[/dim]", id="eq-close-hint")
+
+            with Vertical(id="eq-info-panel"):
+                yield Static("", id="eq-preset-info")
+                yield Static("", id="eq-headroom-meter")
+
+            with Vertical(id="eq-curve-box"):
+                yield Static("", id="eq-curve-plot")
+
+            yield DataTable(id="eq-table", cursor_type="row", show_header=True)
+            yield Static(
+                "[#767676]←/→: gain  |  Shift+←/→: ±2dB  |  \\[/]: Q  |  \\{/\\}: freq  |  t: type  |  Space: toggle  |  b: bypass A-B  |  p/P: preset  |  a: auto-headroom  |  c: copy APO[/]",
+                id="eq-footer"
+            )
+
+    def on_mount(self) -> None:
+        table = self.query_one("#eq-table", DataTable)
+        table.cursor_foreground_priority = "renderable"
+        table.add_column("#", key="idx", width=5)
+        table.add_column("Type", key="type", width=7)
+        table.add_column("Freq", key="freq", width=11)
+        table.add_column("Gain", key="gain", width=10)
+        table.add_column("Curve Bar", key="curve", width=15)
+        table.add_column("Q", key="q", width=7)
+        table.add_column("State", key="state", width=8)
+        table.add_column("Target / Acoustic Role", key="role", width=34)
+
+        self.rebuild_table()
+        self.update_header_and_curve()
+        table.focus()
+
+    def update_header_and_curve(self) -> None:
+        pill = self.query_one("#eq-status-pill", Static)
+        if self.engine.bypassed:
+            pill.update("[bold #c4a768][BYPASS (FLAT)][/]")
+        else:
+            pill.update("[bold #569f68][ACTIVE][/]")
+
+        p_info = self.query_one("#eq-preset-info", Static)
+        p_info.update(
+            f"[bold #ffffff]Preset:[/] [bold #569f68]{self.engine.preset_name}[/]  "
+            f"[dim]— {self.engine.description}[/dim]"
+        )
+
+        hr_stat = self.query_one("#eq-headroom-meter", Static)
+        peak_gain, peak_freq = self.engine.calculate_peak_gain(num_points=250)
+        preamp = self.engine.preamp_db
+        if self.engine.bypassed:
+            hr_stat.update(
+                f"[dim]Bypassed — Bit-perfect flat bypass  |  Preamp: {preamp:+.1f} dB[/dim]"
+            )
+        elif peak_gain <= 0.0:
+            headroom = -peak_gain
+            hr_stat.update(
+                f"Preamp: [bold #ffffff]{preamp:+.1f} dB[/]  |  "
+                f"[bold #569f68]Headroom: +{headroom:.2f} dBFS margin[/] "
+                f"[dim](Zero Clipping Guaranteed, peak {peak_gain:+.2f} dBFS at {peak_freq:.0f} Hz)[/dim]"
+            )
+        else:
+            hr_stat.update(
+                f"Preamp: [bold #ffffff]{preamp:+.1f} dB[/]  |  "
+                f"[bold #e06c75]HEADROOM ALERT: +{peak_gain:.2f} dBFS clipping risk at {peak_freq:.0f} Hz![/] "
+                f"[bold #c4a768](Press 'a' to auto-attenuate)[/]"
+            )
+
+        curve = self.query_one("#eq-curve-plot", Static)
+        curve.update(render_braille_curve(self.engine, width=68, height=6))
+
+    def rebuild_table(self) -> None:
+        table = self.query_one("#eq-table", DataTable)
+        saved_cursor = table.cursor_coordinate
+        table.clear()
+
+        preamp_gain = f"{self.engine.preamp_db:+.1f} dB"
+        p_bar = format_gain_bar(self.engine.preamp_db)
+        p_state = "[dim #c47676]BYPASS[/]" if self.engine.bypassed else "[bold #569f68]ACTIVE[/]"
+        table.add_row(
+            "PRE",
+            "GAIN",
+            "Global",
+            preamp_gain,
+            p_bar,
+            "—",
+            p_state,
+            "Digital Headroom / Anti-Clipping Stage",
+            key="row_preamp"
+        )
+
+        for b in self.engine.bands:
+            f_str = f"{b.frequency:.0f} Hz" if b.frequency < 1000 else f"{b.frequency/1000:.1f} kHz"
+            g_str = f"{b.gain_db:+.1f} dB"
+            b_bar = format_gain_bar(b.gain_db)
+            q_str = f"{b.q:.2f}"
+            s_str = "[bold #569f68]ON[/]" if b.enabled else "[dim #555555]OFF[/]"
+            table.add_row(
+                f"B{b.index:02d}",
+                b.filter_type.value,
+                f_str,
+                g_str,
+                b_bar,
+                q_str,
+                s_str,
+                b.label,
+                key=f"row_band_{b.index}"
+            )
+
+        if saved_cursor is not None and saved_cursor.row < len(table.rows):
+            table.move_cursor(row=saved_cursor.row, column=saved_cursor.column)
+
+    def _sync_and_refresh(self, row_only: Optional[int] = None) -> None:
+        app: Any = self.app
+        if hasattr(app, "player") and app.player:
+            app.player.apply_eq()
+        save_eq_settings(self.engine.to_dict())
+        self.update_header_and_curve()
+        if row_only is not None and 0 <= row_only <= len(self.engine.bands):
+            table = self.query_one("#eq-table", DataTable)
+            if row_only == 0:
+                p_gain = f"{self.engine.preamp_db:+.1f} dB"
+                p_bar = format_gain_bar(self.engine.preamp_db)
+                p_state = "[dim #c47676]BYPASS[/]" if self.engine.bypassed else "[bold #569f68]ACTIVE[/]"
+                table.update_cell("row_preamp", "gain", p_gain)
+                table.update_cell("row_preamp", "curve", p_bar)
+                table.update_cell("row_preamp", "state", p_state)
+            else:
+                b = self.engine.bands[row_only - 1]
+                f_str = f"{b.frequency:.0f} Hz" if b.frequency < 1000 else f"{b.frequency/1000:.1f} kHz"
+                g_str = f"{b.gain_db:+.1f} dB"
+                b_bar = format_gain_bar(b.gain_db)
+                q_str = f"{b.q:.2f}"
+                s_str = "[bold #569f68]ON[/]" if b.enabled else "[dim #555555]OFF[/]"
+                rk = f"row_band_{b.index}"
+                table.update_cell(rk, "type", b.filter_type.value)
+                table.update_cell(rk, "freq", f_str)
+                table.update_cell(rk, "gain", g_str)
+                table.update_cell(rk, "curve", b_bar)
+                table.update_cell(rk, "q", q_str)
+                table.update_cell(rk, "state", s_str)
+                table.update_cell(rk, "role", b.label)
+        else:
+            self.rebuild_table()
+
+    def action_cursor_up(self) -> None:
+        table = self.query_one("#eq-table", DataTable)
+        table.action_cursor_up()
+
+    def action_cursor_down(self) -> None:
+        table = self.query_one("#eq-table", DataTable)
+        table.action_cursor_down()
+
+    def action_gain_down(self) -> None:
+        self._adjust_gain(-0.5)
+
+    def action_gain_up(self) -> None:
+        self._adjust_gain(+0.5)
+
+    def action_gain_down_fast(self) -> None:
+        self._adjust_gain(-2.0)
+
+    def action_gain_up_fast(self) -> None:
+        self._adjust_gain(+2.0)
+
+    def _adjust_gain(self, delta: float) -> None:
+        table = self.query_one("#eq-table", DataTable)
+        row = table.cursor_row if table.cursor_row is not None else 0
+        if row == 0:
+            new_p = round(self.engine.preamp_db + delta, 1)
+            self.engine.set_preamp(new_p)
+            self._sync_and_refresh(row_only=0)
+        elif 1 <= row <= len(self.engine.bands):
+            b = self.engine.bands[row - 1]
+            new_g = round(b.gain_db + delta, 1)
+            self.engine.set_band(b.index, gain_db=new_g)
+            self._sync_and_refresh(row_only=row)
+
+    def action_q_down(self) -> None:
+        self._adjust_q(-0.05)
+
+    def action_q_up(self) -> None:
+        self._adjust_q(+0.05)
+
+    def _adjust_q(self, delta: float) -> None:
+        table = self.query_one("#eq-table", DataTable)
+        row = table.cursor_row if table.cursor_row is not None else 0
+        if 1 <= row <= len(self.engine.bands):
+            b = self.engine.bands[row - 1]
+            new_q = round(max(0.1, min(25.0, b.q + delta)), 2)
+            self.engine.set_band(b.index, q=new_q)
+            self._sync_and_refresh(row_only=row)
+
+    def action_freq_down(self) -> None:
+        self._adjust_freq(0.95)
+
+    def action_freq_up(self) -> None:
+        self._adjust_freq(1.05)
+
+    def _adjust_freq(self, factor: float) -> None:
+        table = self.query_one("#eq-table", DataTable)
+        row = table.cursor_row if table.cursor_row is not None else 0
+        if 1 <= row <= len(self.engine.bands):
+            b = self.engine.bands[row - 1]
+            new_f = round(max(10.0, min(22000.0, b.frequency * factor)), 1)
+            self.engine.set_band(b.index, frequency=new_f)
+            self._sync_and_refresh(row_only=row)
+
+    def action_cycle_filter_type(self) -> None:
+        table = self.query_one("#eq-table", DataTable)
+        row = table.cursor_row if table.cursor_row is not None else 0
+        if 1 <= row <= len(self.engine.bands):
+            b = self.engine.bands[row - 1]
+            if b.filter_type == FilterType.PEAKING:
+                next_t = FilterType.LOW_SHELF
+            elif b.filter_type == FilterType.LOW_SHELF:
+                next_t = FilterType.HIGH_SHELF
+            else:
+                next_t = FilterType.PEAKING
+            self.engine.set_band(b.index, filter_type=next_t)
+            self._sync_and_refresh(row_only=row)
+
+    def action_toggle_band(self) -> None:
+        table = self.query_one("#eq-table", DataTable)
+        row = table.cursor_row if table.cursor_row is not None else 0
+        if row == 0:
+            self.action_toggle_bypass()
+        elif 1 <= row <= len(self.engine.bands):
+            b = self.engine.bands[row - 1]
+            self.engine.set_band(b.index, enabled=not b.enabled)
+            self._sync_and_refresh(row_only=row)
+
+    def action_toggle_bypass(self) -> None:
+        bypassed = self.engine.toggle_bypass()
+        self._sync_and_refresh()
+        status_lbl = "Bypassed (Flat bit-perfect)" if bypassed else f"Active ({self.engine.preset_name})"
+        self.notify(f"EQ {status_lbl}", title="A-B Testing")
+
+    def action_next_preset(self) -> None:
+        names = [p.name for p in BUILTIN_PRESETS]
+        cur_idx = 0
+        if self.engine.preset_name in names:
+            cur_idx = names.index(self.engine.preset_name)
+        next_idx = (cur_idx + 1) % len(BUILTIN_PRESETS)
+        self.engine.load_preset(BUILTIN_PRESETS[next_idx])
+        self._sync_and_refresh()
+        self.notify(f"Loaded: {self.engine.preset_name}", title="Parametric EQ")
+
+    def action_prev_preset(self) -> None:
+        names = [p.name for p in BUILTIN_PRESETS]
+        cur_idx = 0
+        if self.engine.preset_name in names:
+            cur_idx = names.index(self.engine.preset_name)
+        prev_idx = (cur_idx - 1) % len(BUILTIN_PRESETS)
+        self.engine.load_preset(BUILTIN_PRESETS[prev_idx])
+        self._sync_and_refresh()
+        self.notify(f"Loaded: {self.engine.preset_name}", title="Parametric EQ")
+
+    def action_auto_headroom(self) -> None:
+        rec = self.engine.auto_preamp_headroom(margin_db=0.5)
+        self.engine.set_preamp(rec)
+        self._sync_and_refresh(row_only=0)
+        self.notify(
+            f"Anti-clipping active: Preamp set to {rec:+.1f} dB for guaranteed 0 dBFS ceiling",
+            title="Digital Headroom"
+        )
+
+    def action_reset_preset(self) -> None:
+        for p in BUILTIN_PRESETS:
+            if p.name == self.engine.preset_name:
+                self.engine.load_preset(p)
+                break
+        else:
+            self.engine.load_preset(SAMSUNG_AKG_REFERENCE_PRESET)
+        self._sync_and_refresh()
+        self.notify(f"Reset {self.engine.preset_name} to defaults", title="Parametric EQ")
+
+    def action_copy_apo(self) -> None:
+        apo = self.engine.to_equalizer_apo()
+        copy_to_clipboard(apo, self.app)
+        self.notify(
+            f"Copied EqualizerAPO config ({len(self.engine.bands)} bands) to clipboard",
+            title="Export EQ"
+        )
+
+    def action_dismiss_modal(self) -> None:
+        self.dismiss(None)
+
+    def on_key(self, event: events.Key) -> None:
+        k = event.key
+        ch = event.character
+        if k in ("escape", "q"):
+            self.action_dismiss_modal()
+            event.stop()
+            event.prevent_default()
+        elif k in ("left", "h"):
+            self.action_gain_down()
+            event.stop()
+            event.prevent_default()
+        elif k in ("right", "l"):
+            self.action_gain_up()
+            event.stop()
+            event.prevent_default()
+        elif k in ("shift+left", "H") or ch == "H":
+            self.action_gain_down_fast()
+            event.stop()
+            event.prevent_default()
+        elif k in ("shift+right", "L") or ch == "L":
+            self.action_gain_up_fast()
+            event.stop()
+            event.prevent_default()
+        elif k == "left_square_bracket" or ch == "[":
+            self.action_q_down()
+            event.stop()
+            event.prevent_default()
+        elif k == "right_square_bracket" or ch == "]":
+            self.action_q_up()
+            event.stop()
+            event.prevent_default()
+        elif k in ("left_curly_bracket", "less_than", "comma") or ch in ("{", "<", ","):
+            self.action_freq_down()
+            event.stop()
+            event.prevent_default()
+        elif k in ("right_curly_bracket", "greater_than", "full_stop") or ch in ("}", ">", "."):
+            self.action_freq_up()
+            event.stop()
+            event.prevent_default()
+        elif k == "t" or ch == "t":
+            self.action_cycle_filter_type()
+            event.stop()
+            event.prevent_default()
+        elif k == "space" or ch == " ":
+            self.action_toggle_band()
+            event.stop()
+            event.prevent_default()
+        elif k in ("b", "B") or ch in ("b", "B"):
+            self.action_toggle_bypass()
+            event.stop()
+            event.prevent_default()
+        elif k == "p" or ch == "p":
+            self.action_next_preset()
+            event.stop()
+            event.prevent_default()
+        elif k == "P" or ch == "P":
+            self.action_prev_preset()
+            event.stop()
+            event.prevent_default()
+        elif k in ("a", "A") or ch in ("a", "A"):
+            self.action_auto_headroom()
+            event.stop()
+            event.prevent_default()
+        elif k in ("r", "R") or ch in ("r", "R"):
+            self.action_reset_preset()
+            event.stop()
+            event.prevent_default()
+        elif k in ("c", "C") or ch in ("c", "C"):
+            self.action_copy_apo()
+            event.stop()
+            event.prevent_default()
+
 
 class ScrubBar(ProgressBar):
     can_focus = True
@@ -2535,6 +2965,79 @@ class SpoffTUI(App):
         margin-bottom: 1;
     }
 
+    /* MODAL: EQUALIZER */
+    EqualizerModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.75);
+    }
+
+    #eq-dialog {
+        width: 108;
+        max-width: 98%;
+        height: auto;
+        max-height: 94%;
+        background: #141414;
+        border: solid #2a2a2a;
+        padding: 1 2;
+    }
+
+    #eq-header-bar {
+        height: 2;
+        width: 100%;
+        border-bottom: solid #222222;
+        margin-bottom: 0;
+    }
+
+    #eq-title {
+        width: 1fr;
+        text-style: bold;
+        color: #ffffff;
+    }
+
+    #eq-status-pill {
+        width: auto;
+        margin-right: 2;
+        text-style: bold;
+    }
+
+    #eq-close-hint {
+        width: auto;
+        color: #555555;
+    }
+
+    #eq-info-panel {
+        height: auto;
+        width: 100%;
+        margin-top: 1;
+        margin-bottom: 1;
+    }
+
+    #eq-curve-box {
+        height: auto;
+        width: 100%;
+        background: #0d0d0d;
+        border: solid #222222;
+        padding: 0 1;
+        margin-bottom: 1;
+    }
+
+    #eq-curve-plot {
+        width: 100%;
+        height: auto;
+    }
+
+    #eq-table {
+        height: 13;
+        background: transparent;
+        margin-bottom: 1;
+    }
+
+    #eq-footer {
+        height: auto;
+        width: 100%;
+        color: #767676;
+    }
+
     /* MODAL: SPOTIFY AUTH */
     SpotifyAuthModal {
         align: center middle;
@@ -3034,6 +3537,8 @@ class SpoffTUI(App):
         Binding("h", "focus_sidebar", "Sidebar", show=False),
         Binding("l", "focus_tracks", "Tracks", show=False),
         Binding("tab", "toggle_focus", "Switch Pane", show=False, priority=True),
+        Binding("e", "open_equalizer", "EQ"),
+        Binding("E", "toggle_eq_bypass", "Toggle EQ", show=False),
     ]
 
     def _dispatch_mpris(self, callback, *args):
@@ -3061,7 +3566,17 @@ class SpoffTUI(App):
         self.advanced_mode: bool = get_saved_advanced_mode()
         self.custom_keybindings: Dict[str, str] = get_custom_keybindings()
         self.keybindings: Dict[str, str] = {**DEFAULT_KEYBINDINGS, **self.custom_keybindings}
-        self.player = MPVController(initial_volume=self.volume)
+        eq_data = load_eq_settings()
+        if eq_data:
+            try:
+                self.eq_engine = ParametricEQEngine.from_dict(eq_data)
+            except Exception as e:
+                logger.error(f"Error loading saved EQ configuration: {e}")
+                self.eq_engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
+        else:
+            self.eq_engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
+
+        self.player = MPVController(initial_volume=self.volume, eq_engine=self.eq_engine)
         self.vis_style: str = get_saved_visualizer_style()
         self.vis_color: str = get_saved_visualizer_color()
         self.visualizer = CavaVisualizer(bars=24, style=self.vis_style, color=self.vis_color)
@@ -4452,6 +4967,23 @@ class SpoffTUI(App):
             self.mpris.update_volume(self.volume)
         self.update_player_hud()
 
+    def action_open_equalizer(self):
+        if not getattr(self, "_is_ready", False):
+            return
+        if isinstance(self.screen, EqualizerModal):
+            return
+        self.push_screen(EqualizerModal(self.eq_engine))
+
+    def action_toggle_eq_bypass(self):
+        if hasattr(self, "player") and self.player:
+            bypassed = self.player.toggle_eq_bypass()
+            save_eq_settings(self.eq_engine.to_dict())
+            if bypassed:
+                self.notify_user("EQ Bypassed (Flat bit-perfect)")
+            else:
+                self.notify_user(f"EQ Active: {self.eq_engine.preset_name} ({self.eq_engine.preamp_db:+.1f}dB)")
+            self.update_player_hud()
+
     def action_show_help(self):
         if not getattr(self, "_is_ready", False):
             return
@@ -5673,7 +6205,8 @@ class SpoffTUI(App):
             if is_scrubbing:
                 stat_text = "[bold #c4a768]SEEKING[/]"
             else:
-                stat_text = f"[#767676]Vol: {vol_str}  Q: {queue_pos}[/]"
+                eq_pill = "[bold #569f68]EQ[/]" if (hasattr(self, "eq_engine") and not self.eq_engine.bypassed) else "[dim]EQ[/]"
+                stat_text = f"[#767676]Vol: {vol_str}  Q: {queue_pos}[/]  {eq_pill}"
             try:
                 stats_pill = self.query_one("#deck-stats-pill", Static)
                 stats_pill.update(stat_text)
@@ -5709,13 +6242,15 @@ class SpoffTUI(App):
                 rep_k = format_key_display(self.keybindings.get("toggle_repeat", "r"))
                 lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
                 vis_k = format_key_display(self.keybindings.get("toggle_visualizer", "v"))
+                eq_k = format_key_display(self.keybindings.get("open_equalizer", "e"))
+                eq_hint = f"{eq_k}: eq  |  " if eq_k else ""
                 dl_k = format_key_display(self.keybindings.get("download_offline", "b"))
                 dl_hint = f"{dl_k}: offline  |  " if dl_k else ""
                 sett_k = format_key_display(self.keybindings.get("open_settings", ","))
                 help_k = format_key_display(self.keybindings.get("show_help", ":"))
                 help_label = ": help" if help_k in (":", "colon") else f"{help_k}: help"
                 quit_k = format_key_display(self.keybindings.get("quit_app", "q"))
-                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {share_hint}{shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {vis_k}: vis  |  {dl_hint}{sett_k}: set  |  {help_label}  |  {quit_k}: quit"
+                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {share_hint}{shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {vis_k}: vis  |  {eq_hint}{dl_hint}{sett_k}: set  |  {help_label}  |  {quit_k}: quit"
             try:
                 deck_l3 = self.query_one("#deck-line-3", Static)
                 deck_l3.update(escape(hints))
