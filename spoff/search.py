@@ -83,13 +83,16 @@ def live_search_tracks(query: str, limit: int = 25) -> List[Dict[str, Any]]:
                         if uploader.lower() in ("unknown artist", "unknown", ""):
                             uploader = artist_part
                 
+                thumb_url = e.get("thumbnail") or (f"https://img.youtube.com/vi/{t_id}/hqdefault.jpg" if t_id else None)
                 tracks.append({
                     "id": t_id,
                     "title": cleaned_title if cleaned_title else title,
                     "artist": uploader,
                     "duration_ms": int((e.get("duration") or 0) * 1000),
                     "url": e.get("url") or f"https://www.youtube.com/watch?v={t_id}",
-                    "source": "ytmusic"
+                    "source": "ytmusic",
+                    "art_url": thumb_url,
+                    "thumbnail": thumb_url,
                 })
     except Exception as e:
         logger.error(f"Live search failed for '{query}': {e}")

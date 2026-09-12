@@ -297,13 +297,36 @@ class MPRISService:
             "mpris:length": GLib.Variant("x", max(0, dur_us))
         }
 
-        art_url = track.get("art_url") or track.get("thumbnail") or track.get("cover_url")
+        art_url = track.get("art_url") or track.get("thumbnail") or track.get("cover_url") or track.get("artist_art_url")
+        artist_art_url = track.get("artist_art_url")
+        album_art_url = track.get("album_art_url")
+
+        if not art_url or not artist_art_url:
+            try:
+                from .art import get_cached_artwork
+            except ImportError:
+                try:
+                    from art import get_cached_artwork
+                except ImportError:
+                    get_cached_artwork = None
+            if get_cached_artwork:
+                cached = get_cached_artwork(track)
+                if cached:
+                    art_url = art_url or cached.get("art_url") or cached.get("artist_art_url")
+                    artist_art_url = artist_art_url or cached.get("artist_art_url")
+                    album_art_url = album_art_url or cached.get("album_art_url")
+
         t_id = str(track.get("id") or "")
         if not art_url and t_id and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
             art_url = f"https://img.youtube.com/vi/{t_id}/hqdefault.jpg"
 
         if art_url:
             meta["mpris:artUrl"] = GLib.Variant("s", str(art_url))
+        if artist_art_url:
+            meta["xesam:artistArtUrl"] = GLib.Variant("s", str(artist_art_url))
+            meta["spoff:artistPicture"] = GLib.Variant("s", str(artist_art_url))
+        if album_art_url:
+            meta["xesam:albumArtUrl"] = GLib.Variant("s", str(album_art_url))
 
         album = track.get("album")
         if album:

@@ -89,6 +89,59 @@ class TestMPRISAndAudio(unittest.TestCase):
         self.assertIn("--title=spoff", src)
         self.assertIn("--force-media-title=spoff", src)
 
+    def test_mpris_artist_picture_and_custom_art_fields(self):
+        callbacks = {}
+        service = MPRISService(callbacks)
+        ok = service.start()
+        self.assertTrue(ok)
+        try:
+            track = {
+                "id": "53FhswemY3bkUOAZRi7Lpo",
+                "title": "Honey See You",
+                "artist": "ISTERIF",
+                "duration_ms": 88476,
+                "art_url": "https://example.com/cover.jpg",
+                "artist_art_url": "https://example.com/artist.jpg",
+                "album_art_url": "https://example.com/album.jpg"
+            }
+            service.update_track(track, 88.0)
+            self.assertIn("mpris:artUrl", service.dbus_obj.Metadata)
+            self.assertIn("xesam:artistArtUrl", service.dbus_obj.Metadata)
+            self.assertIn("spoff:artistPicture", service.dbus_obj.Metadata)
+            self.assertIn("xesam:albumArtUrl", service.dbus_obj.Metadata)
+            self.assertEqual(str(service.dbus_obj.Metadata["mpris:artUrl"]), "'https://example.com/cover.jpg'")
+            self.assertEqual(str(service.dbus_obj.Metadata["xesam:artistArtUrl"]), "'https://example.com/artist.jpg'")
+            self.assertEqual(str(service.dbus_obj.Metadata["spoff:artistPicture"]), "'https://example.com/artist.jpg'")
+            self.assertEqual(str(service.dbus_obj.Metadata["xesam:albumArtUrl"]), "'https://example.com/album.jpg'")
+        finally:
+            service.stop()
+
+    def test_art_resolver_cache_and_normalization(self):
+        from spoff.art import resolve_track_artwork, get_cached_artwork, _save_to_cache
+        test_track = {
+            "id": "unit_test_id_12345",
+            "title": "Test Title",
+            "artist": "Test Artist"
+        }
+        mock_data = {
+            "art_url": "https://example.com/cached_cover.jpg",
+            "artist_art_url": "https://example.com/cached_artist.jpg",
+            "album_art_url": "https://example.com/cached_cover.jpg",
+            "source": "mock"
+        }
+        _save_to_cache(test_track, mock_data)
+        cached = get_cached_artwork(test_track)
+        self.assertEqual(cached.get("art_url"), "https://example.com/cached_cover.jpg")
+        self.assertEqual(cached.get("artist_art_url"), "https://example.com/cached_artist.jpg")
+
+        # Also verify normalized query matching
+        variant_track = {
+            "title": "test title",
+            "artist": "Test Artist!"
+        }
+        cached_var = get_cached_artwork(variant_track)
+        self.assertEqual(cached_var.get("art_url"), "https://example.com/cached_cover.jpg")
+
     def test_spoff_desktop_file_and_icon(self):
         desktop_path = Path.home() / ".local/share/applications/spoff.desktop"
         self.assertTrue(desktop_path.exists())
@@ -99,3 +152,4 @@ class TestMPRISAndAudio(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

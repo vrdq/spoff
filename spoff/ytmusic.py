@@ -131,6 +131,24 @@ def parse_duration_str(dur_str: str) -> int:
     return 0
 
 
+def _extract_best_thumbnail(item: Dict[str, Any], default_vid: Optional[str] = None) -> Optional[str]:
+    thumbs = item.get("thumbnails")
+    if isinstance(thumbs, dict):
+        thumbs = thumbs.get("thumbnails")
+    if thumbs and isinstance(thumbs, list):
+        sorted_thumbs = sorted(thumbs, key=lambda x: int(x.get("width", 0) or x.get("height", 0)))
+        raw_url = sorted_thumbs[-1].get("url")
+        if raw_url:
+            if "=w" in raw_url:
+                raw_url = re.sub(r'=w\d+-h\d+.*$', '=w800-h800-l90-rj', raw_url)
+            elif "=s" in raw_url:
+                raw_url = re.sub(r'=s\d+.*$', '=s800', raw_url)
+            return raw_url
+    if default_vid and len(default_vid) == 11:
+        return f"https://img.youtube.com/vi/{default_vid}/hqdefault.jpg"
+    return None
+
+
 def fetch_ytmusic_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
     """
     Fetches full playlist metadata and tracks from YouTube Music / YouTube.
@@ -165,6 +183,8 @@ def fetch_ytmusic_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
                     if not dur_ms and item.get("duration_seconds"):
                         dur_ms = int(item["duration_seconds"]) * 1000
 
+                    thumb_url = _extract_best_thumbnail(item, default_vid=v_id)
+
                     tracks.append({
                         "id": v_id,
                         "title": item.get("title") or "Unknown Title",
@@ -172,6 +192,8 @@ def fetch_ytmusic_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
                         "duration_ms": dur_ms,
                         "url": f"https://www.youtube.com/watch?v={v_id}",
                         "source": "ytmusic",
+                        "art_url": thumb_url,
+                        "thumbnail": thumb_url,
                     })
 
                 name = data.get("title") or "YouTube Music Playlist"
@@ -263,6 +285,7 @@ def fetch_ytmusic_album(album_id_or_url: str) -> Optional[Dict[str, Any]]:
         if data:
             tracks: List[Dict[str, Any]] = []
             album_artist = ", ".join(a.get("name", "") for a in data.get("artists", []) if a.get("name")) or "Unknown Artist"
+            album_thumb = _extract_best_thumbnail(data)
 
             for item in data.get("tracks", []):
                 if not item or not item.get("videoId"):
@@ -273,6 +296,8 @@ def fetch_ytmusic_album(album_id_or_url: str) -> Optional[Dict[str, Any]]:
                 if not dur_ms and item.get("duration_seconds"):
                     dur_ms = int(item["duration_seconds"]) * 1000
 
+                track_thumb = _extract_best_thumbnail(item, default_vid=v_id) or album_thumb
+
                 tracks.append({
                     "id": v_id,
                     "title": item.get("title") or "Unknown Title",
@@ -280,6 +305,8 @@ def fetch_ytmusic_album(album_id_or_url: str) -> Optional[Dict[str, Any]]:
                     "duration_ms": dur_ms,
                     "url": f"https://www.youtube.com/watch?v={v_id}",
                     "source": "ytmusic",
+                    "art_url": track_thumb,
+                    "thumbnail": track_thumb,
                 })
 
             return {
@@ -287,7 +314,8 @@ def fetch_ytmusic_album(album_id_or_url: str) -> Optional[Dict[str, Any]]:
                 "name": data.get("title") or "YouTube Music Album",
                 "artist": album_artist,
                 "year": data.get("year"),
-                "tracks": tracks
+                "tracks": tracks,
+                "art_url": album_thumb,
             }
     except Exception as e:
         logger.error(f"Failed to fetch YouTube Music album {browse_id}: {e}")
@@ -312,6 +340,7 @@ def fetch_ytmusic_track(video_id_or_url: str) -> Optional[Dict[str, Any]]:
             if data and data.get("videoDetails"):
                 vd = data["videoDetails"]
                 dur_s = int(vd.get("lengthSeconds") or 0)
+                thumb = _extract_best_thumbnail(vd, default_vid=v_id)
                 return {
                     "id": v_id,
                     "title": vd.get("title") or "Unknown Title",
@@ -319,6 +348,8 @@ def fetch_ytmusic_track(video_id_or_url: str) -> Optional[Dict[str, Any]]:
                     "duration_ms": dur_s * 1000,
                     "url": f"https://www.youtube.com/watch?v={v_id}",
                     "source": "ytmusic",
+                    "art_url": thumb,
+                    "thumbnail": thumb,
                 }
         except Exception as e:
             logger.debug(f"ytmusicapi get_song failed for {v_id}: {e}")
@@ -330,6 +361,7 @@ def fetch_ytmusic_track(video_id_or_url: str) -> Optional[Dict[str, Any]]:
         with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
             res = ydl.extract_info(f"https://www.youtube.com/watch?v={v_id}", download=False)
             if res:
+                thumb = res.get("thumbnail") or f"https://img.youtube.com/vi/{v_id}/hqdefault.jpg"
                 return {
                     "id": v_id,
                     "title": res.get("title") or "Unknown Title",
@@ -337,6 +369,8 @@ def fetch_ytmusic_track(video_id_or_url: str) -> Optional[Dict[str, Any]]:
                     "duration_ms": int((res.get("duration") or 0) * 1000),
                     "url": f"https://www.youtube.com/watch?v={v_id}",
                     "source": "ytmusic",
+                    "art_url": thumb,
+                    "thumbnail": thumb,
                 }
     except Exception as e2:
         logger.error(f"yt-dlp track fallback failed for {v_id}: {e2}")
@@ -372,6 +406,8 @@ def search_ytmusic_tracks(query: str, limit: int = 25) -> List[Dict[str, Any]]:
                 if not dur_ms and r.get("duration_seconds"):
                     dur_ms = int(r["duration_seconds"]) * 1000
 
+                thumb_url = _extract_best_thumbnail(r, default_vid=v_id)
+
                 tracks.append({
                     "id": v_id,
                     "title": r.get("title") or "Unknown Title",
@@ -379,7 +415,9 @@ def search_ytmusic_tracks(query: str, limit: int = 25) -> List[Dict[str, Any]]:
                     "duration_ms": dur_ms,
                     "url": f"https://www.youtube.com/watch?v={v_id}",
                     "source": "ytmusic",
-                    "album": r.get("album", {}).get("name") if r.get("album") else None
+                    "album": r.get("album", {}).get("name") if r.get("album") else None,
+                    "art_url": thumb_url,
+                    "thumbnail": thumb_url,
                 })
 
             if tracks:
@@ -419,13 +457,16 @@ def search_ytmusic_tracks(query: str, limit: int = 25) -> List[Dict[str, Any]]:
                         if uploader.lower() in ("unknown artist", "unknown", ""):
                             uploader = artist_part
 
+                thumb = e.get("thumbnail") or f"https://img.youtube.com/vi/{t_id}/hqdefault.jpg"
                 tracks.append({
                     "id": t_id,
                     "title": cleaned_title if cleaned_title else title,
                     "artist": uploader,
                     "duration_ms": int((e.get("duration") or 0) * 1000),
                     "url": f"https://www.youtube.com/watch?v={t_id}",
-                    "source": "ytmusic"
+                    "source": "ytmusic",
+                    "art_url": thumb,
+                    "thumbnail": thumb,
                 })
     except Exception as e2:
         logger.error(f"Fallback search failed for '{q}': {e2}")

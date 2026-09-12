@@ -113,6 +113,7 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
                 "stream_url": stream_url,
                 "duration": item.get("duration", 0),
                 "webpage_url": item.get("webpage_url"),
+                "thumbnail": item.get("thumbnail"),
                 "ext": item.get("ext", "m4a")
             }
             if len(_stream_cache) > 500:

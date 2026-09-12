@@ -62,6 +62,7 @@ try:
     from .mpris import MPRISService
     from .visualizer import VisualizerWidget, CavaVisualizer
     from .updater import check_for_updates, perform_update, run_cli_update
+    from .art import resolve_track_artwork, get_cached_artwork
 except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, parse_spotify_url
     from ytmusic import (
@@ -95,6 +96,7 @@ except ImportError:
     from mpris import MPRISService
     from visualizer import VisualizerWidget, CavaVisualizer
     from updater import check_for_updates, perform_update, run_cli_update
+    from art import resolve_track_artwork, get_cached_artwork
 
 logger = logging.getLogger("spoff")
 
@@ -3404,6 +3406,7 @@ class SpoffTUI(App):
             self.mpris.update_shuffle(self.shuffle_mode)
         self.visualizer.start()
         self.check_github_updates_bg()
+        self.backfill_playlists_art_bg()
 
         st = self.query_one("#side-table", DataTable)
         st.cursor_foreground_priority = "renderable"
@@ -4658,6 +4661,46 @@ class SpoffTUI(App):
                     self.notify_user("Spoff is up to date on the latest GitHub commit.")
             threading.Thread(target=_check, daemon=True).start()
 
+    def backfill_playlists_art_bg(self) -> None:
+        """
+        Background worker that resolves missing art_url and artist_art_url
+        for saved playlist tracks without blocking or freezing UI.
+        """
+        def _worker():
+            time.sleep(1.0)
+            updated = False
+            for p in getattr(self, "playlists", []):
+                tracks = p.get("tracks", [])
+                p_updated = False
+                for t in tracks:
+                    if getattr(self, "_closing", False):
+                        return
+                    if not t.get("art_url") or not t.get("artist_art_url"):
+                        try:
+                            art = resolve_track_artwork(t, timeout=3.0)
+                            if art and (art.get("art_url") or art.get("artist_art_url")):
+                                if not t.get("art_url") and art.get("art_url"):
+                                    t["art_url"] = art["art_url"]
+                                    p_updated = True
+                                if not t.get("artist_art_url") and art.get("artist_art_url"):
+                                    t["artist_art_url"] = art["artist_art_url"]
+                                    p_updated = True
+                                if not t.get("album_art_url") and art.get("album_art_url"):
+                                    t["album_art_url"] = art["album_art_url"]
+                                    p_updated = True
+                        except Exception:
+                            pass
+                        time.sleep(0.12)
+                if p_updated:
+                    updated = True
+            if updated and not getattr(self, "_closing", False):
+                try:
+                    save_saved_playlists(self.playlists)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_worker, daemon=True).start()
+
     def action_next_track(self):
         if not self.queue:
             view_tracks = self._get_current_view_tracks()
@@ -5905,6 +5948,35 @@ class SpoffTUI(App):
                     self.call_from_thread(self.render_lyrics)
         threading.Thread(target=_fetch_lyr_bg, daemon=True).start()
 
+        # Attach cached artwork immediately if available
+        cached_art = get_cached_artwork(track)
+        if cached_art:
+            if not track.get("art_url") and cached_art.get("art_url"):
+                track["art_url"] = cached_art["art_url"]
+            if not track.get("artist_art_url") and cached_art.get("artist_art_url"):
+                track["artist_art_url"] = cached_art["artist_art_url"]
+            if not track.get("album_art_url") and cached_art.get("album_art_url"):
+                track["album_art_url"] = cached_art["album_art_url"]
+
+        def _fetch_art_bg():
+            if req_id != getattr(self, "_play_request_id", None):
+                return
+            art_dict = resolve_track_artwork(track)
+            if art_dict and (art_dict.get("art_url") or art_dict.get("artist_art_url")):
+                if not track.get("art_url") and art_dict.get("art_url"):
+                    track["art_url"] = art_dict["art_url"]
+                if not track.get("artist_art_url") and art_dict.get("artist_art_url"):
+                    track["artist_art_url"] = art_dict["artist_art_url"]
+                if not track.get("album_art_url") and art_dict.get("album_art_url"):
+                    track["album_art_url"] = art_dict["album_art_url"]
+                if req_id == getattr(self, "_play_request_id", None) and self.mpris:
+                    try:
+                        dur_s = float(track.get("duration_ms") or 0) / 1000.0
+                    except (ValueError, TypeError):
+                        dur_s = 0.0
+                    self.mpris.update_track(track, dur_s)
+        threading.Thread(target=_fetch_art_bg, daemon=True).start()
+
         if self.mpris:
             try:
                 dur_sec = float(track.get("duration_ms") or 0) / 1000.0
@@ -5943,6 +6015,15 @@ class SpoffTUI(App):
                 else:
                     self.action_next_track()
             return
+
+        if res and res.get("thumbnail") and not track.get("art_url"):
+            track["art_url"] = res["thumbnail"]
+            if req_id == getattr(self, "_play_request_id", None) and self.mpris:
+                try:
+                    dur_s = float(track.get("duration_ms") or 0) / 1000.0
+                except (ValueError, TypeError):
+                    dur_s = 0.0
+                self.mpris.update_track(track, dur_s)
 
         stream_url = res["stream_url"]
         if not _commit_load(stream_url):
