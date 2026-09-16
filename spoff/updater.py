@@ -5,6 +5,7 @@ import shutil
 import logging
 import subprocess
 import urllib.request
+import fcntl
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple
 
@@ -12,6 +13,7 @@ logger = logging.getLogger("updater")
 
 GITHUB_REPO = "vrdq/spoff"
 API_COMMITS_URL = f"https://api.github.com/repos/{GITHUB_REPO}/commits/main"
+UPDATE_LOCK_FILE = Path.home() / ".local" / "share" / "spoff" / "update.lock"
 
 _SAFE_SUBPROCESS_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 
@@ -174,116 +176,153 @@ def perform_update() -> Tuple[bool, str]:
     repo_root = Path(__file__).resolve().parent.parent
     python_bin = sys.executable
 
-    # 1. Git repository update flow
-    is_git = False
+    # Serialize perform_update across the installation with a nonblocking flock
+    UPDATE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+    lock_fd = None
     try:
-        is_git = subprocess.call(
-            ["git", "rev-parse", "--is-inside-work-tree"],
-            cwd=str(repo_root),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=_SAFE_SUBPROCESS_ENV
-        ) == 0
-    except Exception:
+        lock_fd = os.open(UPDATE_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            return False, "Another update is already running."
+    except Exception as e:
+        logger.debug(f"Could not open update lock file: {e}")
+
+    try:
+        # 1. Git repository update flow: verify git top-level is the project root containing pyproject.toml
+        pyproject_file = repo_root / "pyproject.toml"
         is_git = False
+        if pyproject_file.exists():
+            try:
+                top_level = subprocess.check_output(
+                    ["git", "rev-parse", "--show-toplevel"],
+                    cwd=str(repo_root),
+                    stdin=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=_SAFE_SUBPROCESS_ENV,
+                    timeout=5
+                ).decode().strip()
+                if Path(top_level).resolve() == repo_root.resolve():
+                    is_git = True
+            except Exception:
+                is_git = False
 
-    if is_git:
-        # Pull latest commits with autostash and rebase to preserve uncommitted local tweaks
-        pull_res = subprocess.run(
-            ["git", "pull", "--autostash", "--rebase", "origin", "main"],
-            cwd=str(repo_root),
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            env=_SAFE_SUBPROCESS_ENV
-        )
-        if pull_res.returncode != 0:
-            # Fallback to fetch + fast-forward merge
-            subprocess.run(
-                ["git", "fetch", "origin", "main"],
-                cwd=str(repo_root),
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                env=_SAFE_SUBPROCESS_ENV
-            )
-            merge_res = subprocess.run(
-                ["git", "merge", "--ff-only", "FETCH_HEAD"],
-                cwd=str(repo_root),
+        if is_git:
+            # Pull latest commits with autostash and rebase
+            try:
+                pull_res = subprocess.run(
+                    ["git", "pull", "--autostash", "--rebase", "origin", "main"],
+                    cwd=str(repo_root),
+                    stdin=subprocess.DEVNULL,
+                    capture_output=True,
+                    text=True,
+                    env=_SAFE_SUBPROCESS_ENV,
+                    timeout=30
+                )
+                if pull_res.returncode != 0:
+                    err = pull_res.stderr.strip() or "Git pull rebase failed"
+                    return False, f"Git pull failed: {err}"
+            except subprocess.TimeoutExpired:
+                return False, "Git pull timed out after 30 seconds."
+
+            # Reinstall package in virtualenv
+            uv_bin = shutil.which("uv")
+            installed = False
+            if uv_bin:
+                try:
+                    res = subprocess.run(
+                        [uv_bin, "pip", "install", "--python", python_bin, "-e", "."],
+                        cwd=str(repo_root),
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        text=True,
+                        env=_SAFE_SUBPROCESS_ENV,
+                        timeout=60
+                    )
+                    installed = (res.returncode == 0)
+                except subprocess.TimeoutExpired:
+                    return False, "Reinstallation via uv timed out."
+
+            if not installed:
+                try:
+                    res = subprocess.run(
+                        [python_bin, "-m", "pip", "install", "-e", "."],
+                        cwd=str(repo_root),
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        text=True,
+                        env=_SAFE_SUBPROCESS_ENV,
+                        timeout=120
+                    )
+                    if res.returncode != 0:
+                        return False, f"Reinstallation failed: {res.stderr.strip()}"
+                except subprocess.TimeoutExpired:
+                    return False, "Reinstallation via pip timed out."
+
+            new_sha = get_local_commit() or "latest"
+            return True, f"Successfully updated to commit {new_sha[:7]}."
+
+        # 2. Non-git installs: Check environment ownership
+        if "pipx/venvs" in sys.prefix or "pipx" in sys.prefix.lower():
+            pipx_bin = shutil.which("pipx")
+            if pipx_bin:
+                try:
+                    res = subprocess.run(
+                        [pipx_bin, "upgrade", "spoff"],
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        text=True,
+                        env=_SAFE_SUBPROCESS_ENV,
+                        timeout=120
+                    )
+                    if res.returncode == 0:
+                        return True, "Successfully updated Spoff via pipx."
+                    return False, f"pipx upgrade failed: {res.stderr.strip()}"
+                except subprocess.TimeoutExpired:
+                    return False, "pipx upgrade timed out."
+
+        if "uv/tools" in sys.prefix:
+            uv_bin = shutil.which("uv")
+            if uv_bin:
+                try:
+                    res = subprocess.run(
+                        [uv_bin, "tool", "upgrade", "spoff"],
+                        stdin=subprocess.DEVNULL,
+                        capture_output=True,
+                        text=True,
+                        env=_SAFE_SUBPROCESS_ENV,
+                        timeout=120
+                    )
+                    if res.returncode == 0:
+                        return True, "Successfully updated Spoff via uv."
+                    return False, f"uv tool upgrade failed: {res.stderr.strip()}"
+                except subprocess.TimeoutExpired:
+                    return False, "uv tool upgrade timed out."
+
+        # Standard pip update fallback for this Python executable
+        try:
+            pip_res = subprocess.run(
+                [python_bin, "-m", "pip", "install", "--upgrade", f"git+https://github.com/{GITHUB_REPO}.git"],
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,
-                env=_SAFE_SUBPROCESS_ENV
+                env=_SAFE_SUBPROCESS_ENV,
+                timeout=300
             )
-            if merge_res.returncode != 0:
-                err = pull_res.stderr.strip() or merge_res.stderr.strip()
-                return False, f"Git pull failed: {err}"
+            if pip_res.returncode == 0:
+                return True, "Updated this Python installation. Restart Spoff."
+            else:
+                return False, pip_res.stderr.strip() or "Pip upgrade failed."
+        except subprocess.TimeoutExpired:
+            return False, "Pip update timed out after 300 seconds."
 
-        # Reinstall package in virtualenv
-        uv_bin = shutil.which("uv")
-        installed = False
-        if uv_bin:
-            res = subprocess.run(
-                [uv_bin, "pip", "install", "--python", python_bin, "-e", "."],
-                cwd=str(repo_root),
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                env=_SAFE_SUBPROCESS_ENV
-            )
-            installed = (res.returncode == 0)
-
-        if not installed:
-            res = subprocess.run(
-                [python_bin, "-m", "pip", "install", "-e", "."],
-                cwd=str(repo_root),
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                env=_SAFE_SUBPROCESS_ENV
-            )
-            if res.returncode != 0:
-                return False, f"Reinstallation failed: {res.stderr.strip()}"
-
-        new_sha = get_local_commit() or "latest"
-        return True, f"Successfully updated to commit {new_sha[:7]}."
-
-    # 2. Non-git installs: Check pipx, uv tool, and pip
-    pipx_bin = shutil.which("pipx")
-    if pipx_bin:
-        res = subprocess.run(
-            [pipx_bin, "install", "--force", f"git+https://github.com/{GITHUB_REPO}.git"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            env=_SAFE_SUBPROCESS_ENV
-        )
-        if res.returncode == 0:
-            return True, "Successfully updated Spoff via pipx."
-
-    uv_bin = shutil.which("uv")
-    if uv_bin:
-        res = subprocess.run(
-            [uv_bin, "tool", "install", "--force", f"git+https://github.com/{GITHUB_REPO}.git"],
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            env=_SAFE_SUBPROCESS_ENV
-        )
-        if res.returncode == 0:
-            return True, "Successfully updated Spoff via uv."
-
-    pip_res = subprocess.run(
-        [python_bin, "-m", "pip", "install", "--upgrade", f"git+https://github.com/{GITHUB_REPO}.git"],
-        stdin=subprocess.DEVNULL,
-        capture_output=True,
-        text=True,
-        env=_SAFE_SUBPROCESS_ENV
-    )
-    if pip_res.returncode == 0:
-        return True, "Successfully updated Spoff via pip."
-
-    return False, "Could not determine package manager to execute update."
+    finally:
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+            except Exception:
+                pass
 
 def run_cli_update():
     """Runs the update process from the CLI."""

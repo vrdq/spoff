@@ -6,10 +6,21 @@ import tempfile
 import logging
 import threading
 import subprocess
+import signal
 from typing import Optional, List, Dict
 from textual.widgets import Static
 
 logger = logging.getLogger("visualizer")
+
+
+def _preexec_deathsig():
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None)
+        # PR_SET_PDEATHSIG = 1, SIGKILL = 9
+        libc.prctl(1, signal.SIGKILL, 0, 0, 0)
+    except Exception:
+        pass
 
 BAR_GLYPHS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
 DOT_GLYPHS = [" ", "·", "∶", "⁝", "⁞", "█"]
@@ -129,6 +140,7 @@ bit_format = 8bit
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
+                preexec_fn=_preexec_deathsig
             )
             self._thread = threading.Thread(target=self._reader_loop, daemon=True)
             self._thread.start()
@@ -386,6 +398,12 @@ bit_format = 8bit
             except Exception:
                 pass
             self.conf_path = None
+
+    def __del__(self):
+        try:
+            self.stop()
+        except Exception:
+            pass
 
 
 class VisualizerWidget(Static):

@@ -297,6 +297,122 @@ class TestPlaylistAppLogic(unittest.TestCase):
         self.assertEqual(scr.original_name, "Favorites")
 
 
+class TestSpotifyPlaylistSync(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.old_data_dir = storage.DATA_DIR
+        self.old_cache_dir = storage.CACHE_DIR
+        self.old_playlists_file = storage.PLAYLISTS_FILE
+        self.old_del_file = storage.DELETED_PLAYLISTS_FILE
+
+        storage.DATA_DIR = Path(self.temp_dir.name)
+        storage.CACHE_DIR = storage.DATA_DIR / "cache"
+        storage.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        storage.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        storage.PLAYLISTS_FILE = storage.DATA_DIR / "playlists.json"
+        storage.DELETED_PLAYLISTS_FILE = storage.DATA_DIR / "deleted_spotify_playlists.json"
+
+    def tearDown(self):
+        storage.DATA_DIR = self.old_data_dir
+        storage.CACHE_DIR = self.old_cache_dir
+        storage.PLAYLISTS_FILE = self.old_playlists_file
+        storage.DELETED_PLAYLISTS_FILE = self.old_del_file
+        self.temp_dir.cleanup()
+
+    def test_extract_spotify_playlist_id(self):
+        from spoff.auth import extract_spotify_playlist_id
+
+        # Direct 22-character ID
+        self.assertEqual(extract_spotify_playlist_id("37i9dQZF1DXcBWIGoYBM5M"), "37i9dQZF1DXcBWIGoYBM5M")
+
+        # URLs
+        self.assertEqual(
+            extract_spotify_playlist_id("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"),
+            "37i9dQZF1DXcBWIGoYBM5M"
+        )
+        self.assertEqual(
+            extract_spotify_playlist_id("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M?si=12345"),
+            "37i9dQZF1DXcBWIGoYBM5M"
+        )
+
+        # URIs
+        self.assertEqual(
+            extract_spotify_playlist_id("spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"),
+            "37i9dQZF1DXcBWIGoYBM5M"
+        )
+
+        # Dict structures
+        self.assertEqual(
+            extract_spotify_playlist_id({"spotify_id": "37i9dQZF1DXcBWIGoYBM5M"}),
+            "37i9dQZF1DXcBWIGoYBM5M"
+        )
+        self.assertEqual(
+            extract_spotify_playlist_id({"id": "37i9dQZF1DXcBWIGoYBM5M", "name": "Test"}),
+            "37i9dQZF1DXcBWIGoYBM5M"
+        )
+        self.assertEqual(
+            extract_spotify_playlist_id({"id": "local_1", "url": "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"}),
+            "37i9dQZF1DXcBWIGoYBM5M"
+        )
+        self.assertEqual(
+            extract_spotify_playlist_id({"id": "local_1", "uri": "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"}),
+            "37i9dQZF1DXcBWIGoYBM5M"
+        )
+
+        # Non-Spotify or invalid
+        self.assertIsNone(extract_spotify_playlist_id(None))
+        self.assertIsNone(extract_spotify_playlist_id(""))
+        self.assertIsNone(extract_spotify_playlist_id("spotify_liked_songs"))
+        self.assertIsNone(extract_spotify_playlist_id("local_12345"))
+        self.assertIsNone(extract_spotify_playlist_id("https://music.youtube.com/playlist?list=PL12345"))
+
+    def test_tombstone_operations(self):
+        from spoff.storage import (
+            get_deleted_spotify_playlist_ids,
+            record_deleted_spotify_playlist_id,
+            remove_deleted_spotify_playlist_id
+        )
+
+        self.assertEqual(get_deleted_spotify_playlist_ids(), set())
+
+        record_deleted_spotify_playlist_id("37i9dQZF1DXcBWIGoYBM5M")
+        self.assertIn("37i9dQZF1DXcBWIGoYBM5M", get_deleted_spotify_playlist_ids())
+
+        remove_deleted_spotify_playlist_id("37i9dQZF1DXcBWIGoYBM5M")
+        self.assertNotIn("37i9dQZF1DXcBWIGoYBM5M", get_deleted_spotify_playlist_ids())
+
+    @patch("spoff.auth.get_valid_token", return_value="fake_token")
+    @patch("spoff.auth.has_modify_scopes", return_value=True)
+    @patch("spoff.auth.spotify_api_request")
+    def test_delete_spotify_playlist_success(self, mock_api, mock_scopes, mock_token):
+        from spoff.auth import delete_spotify_playlist
+        from spoff.storage import get_deleted_spotify_playlist_ids
+
+        mock_api.return_value = (True, {}, "")
+
+        ok, msg = delete_spotify_playlist("37i9dQZF1DXcBWIGoYBM5M", "My Playlist")
+        self.assertTrue(ok)
+        self.assertIn("Deleted playlist 'My Playlist' from Spotify", msg)
+
+        # Check API called with DELETE on /followers
+        mock_api.assert_called_once_with("/playlists/37i9dQZF1DXcBWIGoYBM5M/followers", method="DELETE", token="fake_token")
+
+        # Check tombstone recorded
+        self.assertIn("37i9dQZF1DXcBWIGoYBM5M", get_deleted_spotify_playlist_ids())
+
+    @patch("spoff.auth.get_valid_token", return_value="fake_token")
+    @patch("spoff.auth.has_modify_scopes", return_value=True)
+    @patch("spoff.auth.spotify_api_request")
+    def test_delete_spotify_playlist_failure(self, mock_api, mock_scopes, mock_token):
+        from spoff.auth import delete_spotify_playlist
+
+        mock_api.return_value = (False, None, "HTTP 403: Forbidden")
+
+        ok, msg = delete_spotify_playlist("37i9dQZF1DXcBWIGoYBM5M", "My Playlist")
+        self.assertFalse(ok)
+        self.assertEqual(msg, "HTTP 403: Forbidden")
+
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 from contextlib import contextmanager
 from functools import wraps
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Callable
 
 DATA_DIR = Path.home() / ".local" / "share" / "spoff"
 OLD_DATA_DIR = Path.home() / ".local" / "share" / "spotato-tui"
@@ -25,6 +25,8 @@ if OLD_DATA_DIR.exists() and not DATA_DIR.exists():
 CACHE_DIR = DATA_DIR / "cache"
 CONFIG_FILE = DATA_DIR / "config.json"
 PLAYLISTS_FILE = DATA_DIR / "playlists.json"
+LIKED_SONGS_FILE = DATA_DIR / "liked_songs.json"
+DELETED_PLAYLISTS_FILE = DATA_DIR / "deleted_spotify_playlists.json"
 INDEX_FILE = DATA_DIR / "offline_index.json"
 LOG_FILE = DATA_DIR / "spoff.log"
 
@@ -119,6 +121,12 @@ def _init_storage_once():
         except Exception as e:
             logger.error(f"Failed to create empty playlists file: {e}")
 
+    if not LIKED_SONGS_FILE.exists():
+        try:
+            _atomic_json_dump(LIKED_SONGS_FILE, [])
+        except Exception as e:
+            logger.error(f"Failed to create empty liked songs file: {e}")
+
     if not INDEX_FILE.exists():
         try:
             _atomic_json_dump(INDEX_FILE, {})
@@ -139,13 +147,16 @@ def validate_track_id(track_id: str) -> str:
 def cache_path(track_id: str, suffix: str) -> Path:
     """Constructs a validated cache file path strictly inside CACHE_DIR."""
     val_id = validate_track_id(track_id)
-    path = (CACHE_DIR / f"{val_id}{suffix}").resolve()
-    cache_root = CACHE_DIR.resolve()
-    if not str(path).startswith(str(cache_root)):
-        raise ValueError("Cache path escapes cache directory")
-    if path.is_symlink():
+    if suffix not in (*CACHE_EXTENSIONS, ".part"):
+        raise ValueError("Unsupported cache suffix")
+    root = CACHE_DIR.resolve()
+    candidate = root / f"{val_id}{suffix}"
+    if candidate.is_symlink():
         raise ValueError("Cache files must not be symbolic links")
-    return path
+    resolved = candidate.resolve()
+    if resolved.parent != root:
+        raise ValueError("Cache path escapes cache directory")
+    return candidate
 
 def load_config() -> Dict[str, Any]:
     try:
@@ -293,6 +304,26 @@ def save_transparency(enabled: bool):
         logger.error(f"Error saving transparency setting: {e}")
         raise
 
+def get_saved_transparency_opacity() -> float:
+    """Retrieves transparency opacity level (0.1 to 1.0), defaulting to 0.85."""
+    try:
+        cfg = load_config()
+        val = float(cfg.get("transparency_opacity", 0.85))
+        return max(0.1, min(1.0, val))
+    except Exception:
+        return 0.85
+
+@transactional
+def save_transparency_opacity(opacity: float):
+    """Persists transparency opacity level to config."""
+    try:
+        cfg = load_config()
+        cfg["transparency_opacity"] = max(0.1, min(1.0, float(opacity)))
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving transparency opacity: {e}")
+        raise
+
 def get_saved_instant_search() -> bool:
     """Retrieves whether instant search is enabled, defaulting to True."""
     try:
@@ -435,6 +466,65 @@ def save_eq_settings(eq_data: Dict[str, Any]) -> None:
         raise
 
 
+def load_liked_songs() -> List[Dict[str, Any]]:
+    """Loads all tracks from dedicated liked_songs.json storage."""
+    try:
+        if LIKED_SONGS_FILE.exists() and LIKED_SONGS_FILE.stat().st_size > 0:
+            with open(LIKED_SONGS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return [t for t in data if isinstance(t, dict)]
+    except Exception as e:
+        logger.error(f"Error reading liked songs: {e}")
+    return []
+
+def save_liked_songs(tracks: List[Dict[str, Any]]) -> None:
+    """Atomically persists liked tracks to liked_songs.json."""
+    clean_tracks = [t for t in tracks if isinstance(t, dict)]
+    _atomic_json_dump(LIKED_SONGS_FILE, clean_tracks)
+
+@transactional
+def add_track_to_liked_songs(track: Dict[str, Any]) -> bool:
+    """Adds a track to Liked Songs if not already present. Returns True if added."""
+    if not isinstance(track, dict):
+        return False
+    t_id = track.get("id")
+    t_title = str(track.get("title") or "").strip().lower()
+    t_artist = str(track.get("artist") or "").strip().lower()
+
+    existing = load_liked_songs()
+    for t in existing:
+        if t_id and t.get("id") and t.get("id") == t_id:
+            return False
+        if t_title and str(t.get("title") or "").strip().lower() == t_title:
+            if t_artist and str(t.get("artist") or "").strip().lower() == t_artist:
+                return False
+    existing.insert(0, dict(track))
+    save_liked_songs(existing)
+    logger.info(f"Added track to Liked Songs: {track.get('title')}")
+    return True
+
+@transactional
+def remove_track_from_liked_songs(track_id_or_title: str) -> bool:
+    """Removes a track from Liked Songs by ID or title. Returns True if removed."""
+    if not track_id_or_title:
+        return False
+    clean_target = str(track_id_or_title).strip()
+    target_lower = clean_target.lower()
+    existing = load_liked_songs()
+    filtered = []
+    removed = False
+    for t in existing:
+        if not removed and (t.get("id") == clean_target or str(t.get("title") or "").strip().lower() == target_lower):
+            removed = True
+            continue
+        filtered.append(t)
+    if removed:
+        save_liked_songs(filtered)
+        logger.info(f"Removed track from Liked Songs: {clean_target}")
+        return True
+    return False
+
 def load_saved_playlists() -> List[Dict[str, Any]]:
     try:
         if PLAYLISTS_FILE.exists() and PLAYLISTS_FILE.stat().st_size > 0:
@@ -442,8 +532,14 @@ def load_saved_playlists() -> List[Dict[str, Any]]:
                 data = json.load(f)
                 if isinstance(data, list):
                     valid_playlists = []
+                    migrated_liked = None
+                    had_liked = False
                     for p in data:
                         if isinstance(p, dict):
+                            if p.get("id") == "spotify_liked_songs":
+                                had_liked = True
+                                migrated_liked = p.get("tracks", [])
+                                continue
                             if "id" not in p:
                                 p["id"] = f"pl_{uuid.uuid4().hex[:8]}"
                             if "tracks" not in p or not isinstance(p["tracks"], list):
@@ -451,6 +547,10 @@ def load_saved_playlists() -> List[Dict[str, Any]]:
                             else:
                                 p["tracks"] = [t for t in p["tracks"] if isinstance(t, dict)]
                             valid_playlists.append(p)
+                    if had_liked:
+                        if migrated_liked and not load_liked_songs():
+                            save_liked_songs(migrated_liked)
+                        save_saved_playlists(valid_playlists)
                     return valid_playlists
     except Exception as e:
         logger.error(f"Error reading playlists: {e}")
@@ -551,6 +651,45 @@ def remove_saved_playlist(playlist_id: str) -> bool:
         return True
     return False
 
+def get_deleted_spotify_playlist_ids() -> set:
+    """Returns set of Spotify playlist IDs that were deleted by the user."""
+    try:
+        if DELETED_PLAYLISTS_FILE.exists() and DELETED_PLAYLISTS_FILE.stat().st_size > 0:
+            with open(DELETED_PLAYLISTS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return {str(x).strip() for x in data if x}
+    except Exception as e:
+        logger.error(f"Error loading deleted Spotify playlists: {e}")
+    return set()
+
+@transactional
+def record_deleted_spotify_playlist_id(spotify_id: str) -> None:
+    """Records a Spotify playlist ID as deleted to prevent resurrection on sync."""
+    if not spotify_id or not isinstance(spotify_id, str):
+        return
+    clean_id = spotify_id.strip()
+    if not clean_id:
+        return
+    existing = get_deleted_spotify_playlist_ids()
+    existing.add(clean_id)
+    _atomic_json_dump(DELETED_PLAYLISTS_FILE, sorted(list(existing)))
+    logger.info(f"Recorded deleted Spotify playlist tombstone: {clean_id}")
+
+@transactional
+def remove_deleted_spotify_playlist_id(spotify_id: str) -> None:
+    """Removes a Spotify playlist ID from the tombstone set (e.g. if user re-imports it)."""
+    if not spotify_id or not isinstance(spotify_id, str):
+        return
+    clean_id = spotify_id.strip()
+    if not clean_id:
+        return
+    existing = get_deleted_spotify_playlist_ids()
+    if clean_id in existing:
+        existing.remove(clean_id)
+        _atomic_json_dump(DELETED_PLAYLISTS_FILE, sorted(list(existing)))
+        logger.info(f"Removed Spotify playlist tombstone: {clean_id}")
+
 @transactional
 def rename_saved_playlist(playlist_id: str, new_name: str) -> bool:
     """Atomically renames a saved playlist."""
@@ -624,6 +763,27 @@ def move_saved_playlist(playlist_id: str, delta: int) -> bool:
     playlists.insert(index + delta, playlists.pop(index))
     save_saved_playlists(playlists)
     return True
+
+@transactional
+def mutate_playlist(playlist_id: str, mutate: Callable[[Dict[str, Any]], None]) -> bool:
+    """Atomically loads, mutates, and saves a playlist by ID."""
+    playlists = load_saved_playlists()
+    for playlist in playlists:
+        if playlist.get("id") == playlist_id:
+            mutate(playlist)
+            save_saved_playlists(playlists)
+            return True
+    return False
+
+def merge_track_artwork(playlist_id: str, track_id: str, artwork: Dict[str, Any]) -> bool:
+    """Safely merges resolved artwork URLs into a track in a saved playlist."""
+    def merge(playlist: Dict[str, Any]) -> None:
+        for track in playlist.get("tracks", []):
+            if isinstance(track, dict) and track.get("id") == track_id:
+                for key in ("art_url", "artist_art_url", "album_art_url"):
+                    if artwork.get(key) and not track.get(key):
+                        track[key] = artwork[key]
+    return mutate_playlist(playlist_id, merge)
 
 def load_offline_index() -> Dict[str, Dict[str, Any]]:
     try:
@@ -704,14 +864,18 @@ def delete_cached_track(track_id: str) -> bool:
         save_offline_index(index)
         removed = True
 
+    root = CACHE_DIR.resolve()
     for ext in (*CACHE_EXTENSIONS, ".part"):
-        p = None
+        candidate = root / f"{val_id}{ext}"
         try:
-            p = cache_path(val_id, ext)
-            if p.exists() and p.is_file():
-                p.unlink()
+            if candidate.is_symlink():
+                candidate.unlink(missing_ok=True)
                 removed = True
-                logger.info(f"Deleted cache file: {p}")
+                continue
+            if candidate.exists() and candidate.is_file():
+                candidate.unlink()
+                removed = True
+                logger.info(f"Deleted cache file: {candidate}")
         except Exception as e:
-            logger.error(f"Failed to delete cache file {p or ext}: {e}")
+            logger.error(f"Failed to delete cache file {candidate}: {e}")
     return removed

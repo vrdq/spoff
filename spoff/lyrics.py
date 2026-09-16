@@ -2,6 +2,7 @@ import bisect
 import hashlib
 import json
 import logging
+import math
 import re
 import urllib.error
 import urllib.parse
@@ -115,7 +116,20 @@ def fetch_lyrics(title: str, artist: str = "", duration_ms: Optional[int] = None
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, dict) and isinstance(data.get("lines"), list):
+                valid_lines = isinstance(data, dict) and isinstance(data.get("lines"), list)
+                if valid_lines:
+                    for line in data["lines"]:
+                        if not isinstance(line, dict) or not isinstance(line.get("text"), str):
+                            valid_lines = False
+                            break
+                        timestamp = line.get("time")
+                        if timestamp is not None and (
+                            not isinstance(timestamp, (int, float)) or
+                            not math.isfinite(timestamp) or timestamp < 0
+                        ):
+                            valid_lines = False
+                            break
+                if valid_lines:
                     return data
         except Exception as e:
             logger.warning(f"Failed to read cached lyrics for '{clean_t}': {e}")
@@ -203,17 +217,21 @@ def get_active_lyric_index(lines: List[Dict[str, Any]], current_seconds: float) 
     Returns the index of the currently active lyric line in `lines` based on current playback seconds.
     Returns -1 if before the first line or if lines are empty/unsynced.
     """
-    if not lines:
+    if not lines or not isinstance(lines, list) or not isinstance(current_seconds, (int, float)) or not math.isfinite(current_seconds):
         return -1
 
-    timed_entries = [
-        (item["time"], i)
-        for i, item in enumerate(lines)
-        if item.get("time") is not None
-    ]
+    timed_entries = []
+    for i, item in enumerate(lines):
+        if not isinstance(item, dict):
+            continue
+        t = item.get("time")
+        if t is not None and isinstance(t, (int, float)) and math.isfinite(t) and t >= 0:
+            timed_entries.append((t, i))
+
     if not timed_entries:
         return -1
 
+    timed_entries.sort(key=lambda x: x[0])
     times = [t[0] for t in timed_entries]
     pos = bisect.bisect_right(times, current_seconds) - 1
     if pos < 0:

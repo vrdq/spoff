@@ -59,6 +59,8 @@ class SpoffMPRISDbus:
             <property name='PlaybackStatus' type='s' access='read'/>
             <property name='LoopStatus' type='s' access='readwrite'/>
             <property name='Rate' type='d' access='readwrite'/>
+            <property name='MinimumRate' type='d' access='read'/>
+            <property name='MaximumRate' type='d' access='read'/>
             <property name='Shuffle' type='b' access='readwrite'/>
             <property name='Metadata' type='a{sv}' access='read'/>
             <property name='Volume' type='d' access='readwrite'/>
@@ -82,14 +84,17 @@ class SpoffMPRISDbus:
     HasTrackList = False
     Identity = "Spoff"
     DesktopEntry = "spoff"
-    SupportedUriSchemes = ["file", "http", "https"]
+    SupportedUriSchemes = []
     SupportedMimeTypes = ["audio/mpeg", "audio/ogg", "audio/flac", "audio/webm"]
+    MinimumRate = 1.0
+    MaximumRate = 1.0
 
-    def __init__(self, callbacks: Dict[str, Callable]):
+    def __init__(self, callbacks: Dict[str, Callable], service: Optional["MPRISService"] = None):
         self.callbacks = callbacks
+        self.service = service
         self.PlaybackStatus = "Stopped"
         self._loop_status = "None"
-        self.Rate = 1.0
+        self._rate = 1.0
         self._shuffle = False
         self._volume = 0.8
         self.Position = 0
@@ -101,6 +106,17 @@ class SpoffMPRISDbus:
         self.CanGoPrevious = True
         self.Metadata: Dict[str, Any] = {}
 
+    def _emit_property_changed(self, prop_name: str, value: Any) -> None:
+        if self.service is not None:
+            self.service._emit_changed({prop_name: value})
+        else:
+            prop_sig = getattr(self, "PropertiesChanged", None)
+            if callable(prop_sig):
+                try:
+                    prop_sig("org.mpris.MediaPlayer2.Player", {prop_name: value}, [])
+                except Exception as e:
+                    logger.debug(f"Error emitting MPRIS PropertiesChanged: {e}")
+
     @property
     def LoopStatus(self) -> str:
         return self._loop_status
@@ -109,10 +125,28 @@ class SpoffMPRISDbus:
     def LoopStatus(self, val: str) -> None:
         val_str = str(val)
         if val_str in ("None", "Track", "Playlist"):
+            changed = (self._loop_status != val_str)
             self._loop_status = val_str
+            if changed:
+                self._emit_property_changed("LoopStatus", val_str)
             fn = self.callbacks.get("set_loop_status")
             if fn:
                 fn(val_str)
+
+    @property
+    def Rate(self) -> float:
+        return 1.0
+
+    @Rate.setter
+    def Rate(self, val: float) -> None:
+        try:
+            val_f = float(val)
+        except (ValueError, TypeError):
+            return
+        if val_f == 0.0:
+            fn = self.callbacks.get("pause")
+            if fn:
+                fn()
 
     @property
     def Shuffle(self) -> bool:
@@ -120,7 +154,11 @@ class SpoffMPRISDbus:
 
     @Shuffle.setter
     def Shuffle(self, val: bool) -> None:
-        self._shuffle = bool(val)
+        val_b = bool(val)
+        changed = (self._shuffle != val_b)
+        self._shuffle = val_b
+        if changed:
+            self._emit_property_changed("Shuffle", val_b)
         fn = self.callbacks.get("set_shuffle")
         if fn:
             fn(self._shuffle)
@@ -131,7 +169,11 @@ class SpoffMPRISDbus:
 
     @Volume.setter
     def Volume(self, val: float) -> None:
-        self._volume = max(0.0, min(1.0, float(val)))
+        v = max(0.0, min(1.0, float(val)))
+        changed = (abs(self._volume - v) >= 0.005)
+        self._volume = v
+        if changed:
+            self._emit_property_changed("Volume", v)
         fn = self.callbacks.get("set_volume")
         if fn:
             fn(int(round(self._volume * 100)))
@@ -184,9 +226,17 @@ class SpoffMPRISDbus:
             fn(float(offset_us) / 1_000_000.0)
 
     def SetPosition(self, track_id: str, pos_us: int) -> None:
-        fn = self.callbacks.get("set_position")
-        if fn:
-            fn(float(pos_us) / 1_000_000.0)
+        current = self.Metadata.get("mpris:trackid")
+        length = self.Metadata.get("mpris:length")
+        current = current.unpack() if (current is not None and hasattr(current, "unpack")) else current
+        length = length.unpack() if (length is not None and hasattr(length, "unpack")) else length
+        if not self.CanSeek or track_id != current or pos_us < 0:
+            return
+        if length is not None and pos_us > length:
+            return
+        callback = self.callbacks.get("set_position")
+        if callback:
+            callback(pos_us / 1_000_000.0)
 
     def OpenUri(self, uri: str) -> None:
         fn = self.callbacks.get("open_uri")
@@ -217,7 +267,7 @@ class MPRISService:
             self._thread.start()
 
             bus = SessionBus()
-            self.dbus_obj = SpoffMPRISDbus(self.callbacks)
+            self.dbus_obj = SpoffMPRISDbus(self.callbacks, service=self)
 
             primary_name = "org.mpris.MediaPlayer2.spoff"
             has_owner = False
@@ -247,6 +297,18 @@ class MPRISService:
             return True
         except Exception as e:
             logger.warning(f"Failed to publish MPRIS service: {e}")
+            if self.loop:
+                try:
+                    self.loop.quit()
+                except Exception:
+                    pass
+                self.loop = None
+            if self._thread and self._thread.is_alive():
+                try:
+                    self._thread.join(timeout=0.2)
+                except Exception:
+                    pass
+                self._thread = None
             self.dbus_obj = None
             return False
 
@@ -276,8 +338,8 @@ class MPRISService:
             return
 
         raw_id = str(track.get("id") or hash(track.get("title", "") + track.get("artist", "")))
-        clean_id = "".join(c for c in raw_id if c.isalnum() or c == "_") or "track"
-        track_obj_path = f"/org/mpris/MediaPlayer2/track/t_{clean_id}"
+        hex_id = raw_id.encode("utf-8").hex()
+        track_obj_path = f"/org/mpris/MediaPlayer2/track/t_{hex_id}"
 
         title = track.get("title", "Unknown Title")
         artist = track.get("artist", "Unknown Artist")
@@ -297,7 +359,7 @@ class MPRISService:
             "mpris:length": GLib.Variant("x", max(0, dur_us))
         }
 
-        art_url = track.get("art_url") or track.get("thumbnail") or track.get("cover_url") or track.get("artist_art_url")
+        art_url = track.get("art_url") or track.get("thumbnail") or track.get("cover_url")
         artist_art_url = track.get("artist_art_url")
         album_art_url = track.get("album_art_url")
 
@@ -312,7 +374,7 @@ class MPRISService:
             if get_cached_artwork:
                 cached = get_cached_artwork(track)
                 if cached:
-                    art_url = art_url or cached.get("art_url") or cached.get("artist_art_url")
+                    art_url = art_url or cached.get("art_url")
                     artist_art_url = artist_art_url or cached.get("artist_art_url")
                     album_art_url = album_art_url or cached.get("album_art_url")
 
@@ -343,11 +405,9 @@ class MPRISService:
             meta["xesam:url"] = GLib.Variant("s", str(track_url))
 
         self.dbus_obj.Metadata = meta
-        self.dbus_obj.PlaybackStatus = "Playing"
 
         self._emit_changed({
             "Metadata": meta,
-            "PlaybackStatus": "Playing",
         })
 
     def update_status(self, is_playing: bool, is_paused: bool) -> None:

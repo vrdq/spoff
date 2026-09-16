@@ -6,6 +6,7 @@ import hashlib
 import secrets
 import logging
 import threading
+import math
 import urllib.request
 import urllib.parse
 import urllib.error
@@ -13,9 +14,17 @@ from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, Any, List, Callable, Tuple
 
 try:
-    from .storage import DATA_DIR, load_saved_playlists, save_saved_playlists
+    from .storage import (
+        DATA_DIR, load_saved_playlists, save_saved_playlists, storage_transaction, mutate_playlist,
+        get_deleted_spotify_playlist_ids, record_deleted_spotify_playlist_id,
+        load_liked_songs, save_liked_songs
+    )
 except ImportError:
-    from storage import DATA_DIR, load_saved_playlists, save_saved_playlists
+    from storage import (
+        DATA_DIR, load_saved_playlists, save_saved_playlists, storage_transaction, mutate_playlist,
+        get_deleted_spotify_playlist_ids, record_deleted_spotify_playlist_id,
+        load_liked_songs, save_liked_songs
+    )
 
 logger = logging.getLogger("auth")
 
@@ -282,13 +291,14 @@ def save_spotify_auth(data: Dict[str, Any]):
 
 def logout_spotify() -> bool:
     """Removes saved Spotify auth session."""
-    if AUTH_FILE.exists():
-        try:
-            AUTH_FILE.unlink()
-            return True
-        except Exception as e:
-            logger.error(f"Error removing {AUTH_FILE}: {e}")
-    return False
+    with storage_transaction():
+        if AUTH_FILE.exists():
+            try:
+                AUTH_FILE.unlink()
+                return True
+            except Exception as e:
+                logger.error(f"Error removing {AUTH_FILE}: {e}")
+        return False
 
 def get_valid_token() -> Optional[str]:
     """Returns a valid, unexpired access token, auto-refreshing if necessary."""
@@ -297,17 +307,30 @@ def get_valid_token() -> Optional[str]:
         return None
 
     access_token = auth.get("access_token")
-    expires_at = auth.get("expires_at", 0)
+    try:
+        expires_at = float(auth.get("expires_at", 0))
+        if not math.isfinite(expires_at):
+            expires_at = 0.0
+    except (ValueError, TypeError):
+        expires_at = 0.0
     refresh_token = auth.get("refresh_token")
 
     # Refresh 60s before expiration
     if time.time() >= expires_at - 60:
         if refresh_token:
             new_tokens = refresh_spotify_token(refresh_token)
-            if new_tokens:
-                auth.update(new_tokens)
-                save_spotify_auth(auth)
-                return auth.get("access_token")
+            if not new_tokens:
+                return None
+            with storage_transaction():
+                current = load_spotify_auth()
+                if not current or current.get("refresh_token") != refresh_token:
+                    return None
+                # Do not overwrite a refresh another worker already committed
+                if current.get("access_token") != auth.get("access_token"):
+                    return current.get("access_token")
+                current.update(new_tokens)
+                save_spotify_auth(current)
+                return current.get("access_token")
         return None
 
     return access_token
@@ -332,14 +355,16 @@ def spotify_api_request(
     payload = json.dumps(body).encode("utf-8") if body is not None else None
 
     for attempt in range(max_retries + 1):
+        req_headers = {
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "Spoff/0.1.0",
+        }
+        if payload is not None:
+            req_headers["Content-Type"] = "application/json"
         req = urllib.request.Request(
             url,
             data=payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "User-Agent": "Spoff/0.1.0",
-                "Content-Type": "application/json"
-            },
+            headers=req_headers,
             method=method.upper()
         )
         try:
@@ -589,74 +614,84 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
     """
     if progress_callback:
         progress_callback("Syncing Liked Songs...")
-    
-    liked = fetch_liked_songs(token)
-    existing_playlists = load_saved_playlists()
-    
-    synced_count = 0
-    
-    # Sync Liked Songs if successfully fetched
-    if liked is not None:
-        found = False
-        for p in existing_playlists:
-            if p.get("id") == "spotify_liked_songs":
-                existing_tracks = p.get("tracks", [])
-                p["tracks"] = merge_spotify_and_client_tracks(liked, existing_tracks)
-                found = True
-                break
-        if not found and liked:
-            existing_playlists.insert(0, {
-                "id": "spotify_liked_songs",
-                "name": "Liked Songs",
-                "url": "",
-                "tracks": liked
-            })
-        synced_count += 1
 
-    # Sync User Playlists
+    initial_local = load_saved_playlists()
+    initial_ids = {p.get("id") for p in initial_local if p.get("id")}
+    initial_sp_ids = {p.get("spotify_id") for p in initial_local if p.get("spotify_id")}
+
+    liked = fetch_liked_songs(token, max_tracks=None)
+
     if progress_callback:
         progress_callback("Fetching user playlists from Spotify...")
-    
+
+    deleted_ids = get_deleted_spotify_playlist_ids()
+    fetched_remote: List[Tuple[Dict[str, Any], List[Dict[str, Any]]]] = []
     user_pls = fetch_user_playlists(token)
     for idx, pl in enumerate(user_pls):
         p_id = pl.get("id")
         p_name = pl.get("name", "Playlist")
-        if not p_id:
+        if not p_id or p_id in deleted_ids:
             continue
         if progress_callback:
             progress_callback(f"Syncing playlist ({idx+1}/{len(user_pls)}): '{p_name}'...")
-        
+
         tracks = fetch_playlist_tracks(token, p_id)
         if tracks is None:
             logger.warning(f"Skipping sync for playlist '{p_name}' due to fetch error")
             continue
+        fetched_remote.append((pl, tracks))
 
-        found = False
-        for p in existing_playlists:
-            matches = (
-                p.get("id") == p_id
-                or (p.get("spotify_id") and p.get("spotify_id") == p_id)
-            )
-            if matches:
-                p["name"] = p_name
-                existing_tracks = p.get("tracks", [])
-                p["tracks"] = merge_spotify_and_client_tracks(tracks, existing_tracks)
-                if not p.get("url"):
-                    p["url"] = pl.get("url", "")
-                if p.get("id") != p_id and not p.get("spotify_id"):
-                    p["spotify_id"] = p_id
-                found = True
-                break
-        if not found:
-            existing_playlists.append({
-                "id": p_id,
-                "name": p_name,
-                "url": pl.get("url", ""),
-                "tracks": tracks
-            })
-        synced_count += 1
+    synced_count = 0
+    with storage_transaction():
+        current_playlists = load_saved_playlists()
+        current_ids = {p.get("id") for p in current_playlists if p.get("id")}
+        current_sp_ids = {p.get("spotify_id") for p in current_playlists if p.get("spotify_id")}
 
-    save_saved_playlists(existing_playlists)
+        # Sync Liked Songs if successfully fetched
+        if liked is not None:
+            current_liked = load_liked_songs()
+            merged_liked = merge_spotify_and_client_tracks(liked, current_liked)
+            save_liked_songs(merged_liked)
+            synced_count += 1
+
+        # Ensure spotify_liked_songs is not in current_playlists
+        current_playlists = [p for p in current_playlists if p.get("id") != "spotify_liked_songs"]
+
+        for pl, tracks in fetched_remote:
+            p_id = pl.get("id")
+            p_name = pl.get("name", "Playlist")
+            if p_id in deleted_ids:
+                continue
+            found = False
+            for p in current_playlists:
+                matches = (
+                    p.get("id") == p_id
+                    or (p.get("spotify_id") and p.get("spotify_id") == p_id)
+                )
+                if matches:
+                    p["name"] = p_name
+                    existing_tracks = p.get("tracks", [])
+                    p["tracks"] = merge_spotify_and_client_tracks(tracks, existing_tracks)
+                    if not p.get("url"):
+                        p["url"] = pl.get("url", "")
+                    if p.get("id") != p_id and not p.get("spotify_id"):
+                        p["spotify_id"] = p_id
+                    found = True
+                    break
+            if not found:
+                was_known = (p_id in initial_ids or p_id in initial_sp_ids)
+                is_currently_known = (p_id in current_ids or p_id in current_sp_ids)
+                if not was_known or is_currently_known:
+                    current_playlists.append({
+                        "id": p_id,
+                        "name": p_name,
+                        "url": pl.get("url", ""),
+                        "tracks": tracks
+                    })
+            synced_count += 1
+
+        save_saved_playlists(current_playlists)
+
     return synced_count
 
 def has_modify_scopes() -> bool:
@@ -814,7 +849,7 @@ def add_track_to_spotify_account(
     spotify_track_id, spotify_track_uri = res
 
     # 1. Liked Songs
-    if playlist_id == "spotify_liked_songs" or playlist_name.strip().lower() == "liked songs":
+    if playlist_id in ("spotify_liked_songs", "liked"):
         ok, _, err = spotify_api_request(f"/me/tracks?ids={spotify_track_id}", method="PUT", token=token)
         if ok:
             return True, "Synced to Spotify Liked Songs"
@@ -831,15 +866,7 @@ def add_track_to_spotify_account(
                 target_spotify_pl_id = pl["spotify_id"]
                 break
 
-    # 3. If not found by ID, search user's playlists by name
-    if not target_spotify_pl_id:
-        user_pls = fetch_user_playlists(token)
-        for pl in user_pls:
-            if pl.get("name", "").strip().lower() == playlist_name.strip().lower():
-                target_spotify_pl_id = pl["id"]
-                break
-
-    # 4. If still not found, create the playlist on Spotify
+    # 3. If not found, create the playlist on Spotify
     if not target_spotify_pl_id:
         create_body = {
             "name": playlist_name,
@@ -854,16 +881,11 @@ def add_track_to_spotify_account(
 
         if ok_create and pl_data and "id" in pl_data:
             target_spotify_pl_id = pl_data["id"]
-            local_playlists = load_saved_playlists()
-            for pl in local_playlists:
-                if pl.get("id") == playlist_id:
-                    pl["spotify_id"] = target_spotify_pl_id
-                    save_saved_playlists(local_playlists)
-                    break
+            mutate_playlist(playlist_id, lambda p: p.update(spotify_id=target_spotify_pl_id))
         else:
             return False, f"Failed to create playlist on Spotify: {err}"
 
-    # 5. Add track to Spotify playlist
+    # 4. Add track to Spotify playlist
     add_body = {
         "uris": [spotify_track_uri]
     }
@@ -900,7 +922,7 @@ def remove_track_from_spotify_account(
         return False, "Track not found on Spotify"
     spotify_track_id, spotify_track_uri = res
 
-    if playlist_id == "spotify_liked_songs" or playlist_name.strip().lower() == "liked songs":
+    if playlist_id in ("spotify_liked_songs", "liked"):
         ok, _, err = spotify_api_request(f"/me/tracks?ids={spotify_track_id}", method="DELETE", token=token)
         if ok:
             return True, "Removed from Spotify Liked Songs"
@@ -917,14 +939,7 @@ def remove_track_from_spotify_account(
                 break
 
     if not target_spotify_pl_id:
-        user_pls = fetch_user_playlists(token)
-        for pl in user_pls:
-            if pl.get("name", "").strip().lower() == playlist_name.strip().lower():
-                target_spotify_pl_id = pl["id"]
-                break
-
-    if not target_spotify_pl_id:
-        return False, "Playlist not found on Spotify"
+        return False, "Playlist is not linked to Spotify"
 
     del_body = {
         "tracks": [{"uri": spotify_track_uri}]
@@ -978,16 +993,79 @@ def reorder_spotify_playlist_track(
         return True, "Reordered on Spotify"
     return False, err
 
+def extract_spotify_playlist_id(pl_data: Any) -> Optional[str]:
+    """
+    Extracts a 22-character Spotify playlist ID from a playlist dict, ID string,
+    Spotify web URL, Spotify URI, or API href.
+    """
+    if not pl_data:
+        return None
+
+    if isinstance(pl_data, str):
+        s = pl_data.strip()
+        if not s or s == "spotify_liked_songs":
+            return None
+        if re.fullmatch(r"[A-Za-z0-9]{22}", s) and not s.startswith("local_") and not s.startswith("pl_"):
+            return s
+        m = re.search(r'playlist/([a-zA-Z0-9]{22})', s)
+        if m:
+            return m.group(1)
+        if s.startswith("spotify:playlist:"):
+            parts = s.split(":")
+            if len(parts) >= 3 and re.fullmatch(r"[A-Za-z0-9]{22}", parts[2]):
+                return parts[2]
+        m = re.search(r'/playlists/([a-zA-Z0-9]{22})', s)
+        if m:
+            return m.group(1)
+        return None
+
+    if isinstance(pl_data, dict):
+        sp_id = pl_data.get("spotify_id")
+        if sp_id and isinstance(sp_id, str):
+            extracted = extract_spotify_playlist_id(sp_id)
+            if extracted:
+                return extracted
+
+        pid = pl_data.get("id")
+        if pid and isinstance(pid, str):
+            extracted = extract_spotify_playlist_id(pid)
+            if extracted:
+                return extracted
+
+        url = pl_data.get("url")
+        if url and isinstance(url, str):
+            extracted = extract_spotify_playlist_id(url)
+            if extracted:
+                return extracted
+
+        uri = pl_data.get("uri")
+        if uri and isinstance(uri, str):
+            extracted = extract_spotify_playlist_id(uri)
+            if extracted:
+                return extracted
+
+        href = pl_data.get("href")
+        if href and isinstance(href, str):
+            extracted = extract_spotify_playlist_id(href)
+            if extracted:
+                return extracted
+
+    return None
+
 def delete_spotify_playlist(
     playlist_id: str,
     playlist_name: str,
-    token: Optional[str] = None
+    token: Optional[str] = None,
+    remote_id: Optional[str] = None
 ) -> Tuple[bool, str]:
     """
     Syncs the deletion / unfollowing of a playlist from the user's Spotify account.
     """
-    if not playlist_id:
+    if not playlist_id and not remote_id:
         return False, "Invalid playlist ID"
+
+    if playlist_id == "spotify_liked_songs" or remote_id == "spotify_liked_songs":
+        return False, "Cannot delete Liked Songs collection"
 
     if not token:
         token = get_valid_token()
@@ -995,51 +1073,51 @@ def delete_spotify_playlist(
         return False, "Not logged in to Spotify"
 
     if not has_modify_scopes():
-        return False, "Spotify permission required"
+        return False, "Spotify write permission required"
 
-    if playlist_id == "spotify_liked_songs" or playlist_name.strip().lower() == "liked songs":
-        return False, "Cannot delete Liked Songs collection"
-
-    target_spotify_pl_id = None
-    if len(playlist_id) == 22 and playlist_id.isalnum() and not playlist_id.startswith("local_"):
-        target_spotify_pl_id = playlist_id
-    else:
+    target_spotify_pl_id = remote_id or extract_spotify_playlist_id(playlist_id)
+    if not target_spotify_pl_id:
         local_playlists = load_saved_playlists()
         for pl in local_playlists:
-            if pl.get("id") == playlist_id:
-                if pl.get("spotify_id"):
-                    target_spotify_pl_id = pl["spotify_id"]
-                elif pl.get("url") and "spotify.com/playlist/" in pl["url"]:
-                    m = re.search(r'playlist/([a-zA-Z0-9]{22})', pl["url"])
-                    if m:
-                        target_spotify_pl_id = m.group(1)
-                break
+            if pl.get("id") == playlist_id or (playlist_name and pl.get("name") == playlist_name):
+                extracted = extract_spotify_playlist_id(pl)
+                if extracted:
+                    target_spotify_pl_id = extracted
+                    break
 
-    if not target_spotify_pl_id:
-        user_pls = fetch_user_playlists(token)
-        for pl in user_pls:
-            if pl.get("name", "").strip().lower() == playlist_name.strip().lower():
-                target_spotify_pl_id = pl["id"]
-                break
+    # If still not found, check user's Spotify playlists for matching name
+    if not target_spotify_pl_id and playlist_name:
+        try:
+            user_pls = fetch_user_playlists(token)
+            clean_pname = playlist_name.strip().lower()
+            for upl in user_pls:
+                if upl.get("name", "").strip().lower() == clean_pname:
+                    target_spotify_pl_id = upl.get("id")
+                    break
+        except Exception as e:
+            logger.warning(f"Error querying Spotify playlists by name for deletion: {e}")
 
     if not target_spotify_pl_id:
         return False, "Playlist not found on Spotify"
 
     ok, _, err = spotify_api_request(f"/playlists/{target_spotify_pl_id}/followers", method="DELETE", token=token)
     if ok:
+        record_deleted_spotify_playlist_id(target_spotify_pl_id)
+        logger.info(f"Deleted playlist '{playlist_name}' ({target_spotify_pl_id}) from Spotify")
         return True, f"Deleted playlist '{playlist_name}' from Spotify"
-    return False, err
+    return False, err or "Spotify API deletion failed"
 
 
 def rename_spotify_playlist(
     playlist_id: str,
     new_name: str,
-    token: Optional[str] = None
+    token: Optional[str] = None,
+    remote_id: Optional[str] = None
 ) -> Tuple[bool, str]:
     """Syncs renaming of a playlist to the user's Spotify account."""
-    if not playlist_id or not new_name:
+    if (not playlist_id and not remote_id) or not new_name:
         return False, "Invalid parameters"
-    if playlist_id == "spotify_liked_songs":
+    if playlist_id == "spotify_liked_songs" or remote_id == "spotify_liked_songs":
         return False, "Cannot rename Liked Songs"
     if not token:
         token = get_valid_token()
@@ -1048,33 +1126,28 @@ def rename_spotify_playlist(
     if not has_modify_scopes():
         return False, "Spotify permission required"
 
-    target_spotify_pl_id = None
-    if len(playlist_id) == 22 and playlist_id.isalnum() and not playlist_id.startswith("local_"):
-        target_spotify_pl_id = playlist_id
-    else:
+    target_spotify_pl_id = remote_id or extract_spotify_playlist_id(playlist_id)
+    if not target_spotify_pl_id:
         local_playlists = load_saved_playlists()
         for pl in local_playlists:
             if pl.get("id") == playlist_id:
-                if pl.get("spotify_id"):
-                    target_spotify_pl_id = pl["spotify_id"]
-                elif pl.get("url") and "spotify.com/playlist/" in pl["url"]:
-                    m = re.search(r'playlist/([a-zA-Z0-9]{22})', pl["url"])
-                    if m:
-                        target_spotify_pl_id = m.group(1)
+                extracted = extract_spotify_playlist_id(pl)
+                if extracted:
+                    target_spotify_pl_id = extracted
                 break
 
     if not target_spotify_pl_id:
-        return False, "Not a linked Spotify playlist"
+        return False, "Playlist not linked to Spotify"
 
     ok, _, err = spotify_api_request(
         f"/playlists/{target_spotify_pl_id}",
         method="PUT",
-        body={"name": new_name.strip()},
+        body={"name": new_name},
         token=token
     )
     if ok:
-        return True, f"Renamed playlist to '{new_name}' on Spotify"
-    return False, err or "Failed to rename on Spotify"
+        return True, f"Renamed playlist on Spotify"
+    return False, err
 
 
 def clone_spotify_playlist(
@@ -1139,21 +1212,19 @@ def clone_spotify_playlist(
                 added_count += len(chunk)
             else:
                 logger.warning(f"Failed to add chunk of tracks to Spotify playlist {new_sp_id}: {add_err}")
+                return (
+                    False,
+                    new_sp_id,
+                    f"Created Spotify playlist, but copied only {added_count}/{len(uris)} "
+                    f"tracks: {add_err}. Remote playlist: {new_sp_id}"
+                )
 
     # 4. Link the local playlist with spotify_id and Spotify URL
     if local_playlist_id:
-        local_playlists = load_saved_playlists()
-        for pl in local_playlists:
-            if pl.get("id") == local_playlist_id:
-                pl["spotify_id"] = new_sp_id
-                if not pl.get("url") or not str(pl.get("url", "")).startswith("http"):
-                    pl["url"] = f"https://open.spotify.com/playlist/{new_sp_id}"
-                save_saved_playlists(local_playlists)
-                break
+        def link_sp(pl: Dict[str, Any]) -> None:
+            pl["spotify_id"] = new_sp_id
+            if not pl.get("url") or not str(pl.get("url", "")).startswith("http"):
+                pl["url"] = f"https://open.spotify.com/playlist/{new_sp_id}"
+        mutate_playlist(local_playlist_id, link_sp)
 
     return True, new_sp_id, f"Synced to Spotify: '{clean_name}' with {added_count} tracks"
-
-
-
-
-

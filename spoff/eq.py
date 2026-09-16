@@ -222,12 +222,36 @@ class EQPreset:
                 enabled=bool(bd.get("enabled", True)),
                 label=str(bd.get("label", "")),
             ))
-        return cls(
+        preset = cls(
             name=str(data.get("name") or data.get("preset_name") or "Custom"),
             description=str(data.get("description", "")),
             preamp_db=float(data.get("preamp_db", 0.0)),
             bands=bands
         )
+        return validate_preset(preset)
+
+
+def checked_number(value: Any, name: str, low: float, high: float) -> float:
+    number = float(value)
+    if not math.isfinite(number) or not (low <= number <= high):
+        raise ValueError(f"{name} must be between {low} and {high}")
+    return number
+
+
+def validate_preset(preset: EQPreset, sample_rate: float = 48000.0) -> EQPreset:
+    checked_number(sample_rate, "Sample rate", 8000.0, 192000.0)
+    checked_number(preset.preamp_db, "Preamp", -120.0, 12.0)
+    if len(preset.bands) > 64:
+        raise ValueError("At most 64 EQ bands are supported")
+    seen = set()
+    for band in preset.bands:
+        if band.index in seen:
+            raise ValueError("Duplicate EQ band index")
+        seen.add(band.index)
+        checked_number(band.frequency, "Frequency", 10.0, sample_rate * 0.495)
+        checked_number(band.gain_db, "Gain", -36.0, 24.0)
+        checked_number(band.q, "Q", 0.1, 25.0)
+    return preset
 
 
 # ============================================================================
@@ -483,12 +507,13 @@ def parse_equalizer_apo(text: str, default_name: str = "Imported AutoEQ") -> Opt
         return None
 
     desc = f"Imported AutoEQ / EqualizerAPO profile ({len(bands)} bands)"
-    return EQPreset(
+    preset = EQPreset(
         name=preset_name,
         description=desc,
         preamp_db=preamp_db,
         bands=bands
     )
+    return validate_preset(preset, 48000.0)
 
 
 # ============================================================================
@@ -515,6 +540,7 @@ class ParametricEQEngine:
         curve_range_db: float = 12.0,
     ):
         p = preset or SAMSUNG_AKG_REFERENCE_PRESET
+        validate_preset(p, sample_rate)
         self.preset_name: str = p.name
         self.description: str = p.description
         self.preamp_db: float = p.preamp_db
@@ -573,6 +599,7 @@ class ParametricEQEngine:
 
     def load_preset(self, preset: EQPreset) -> None:
         """Loads a preset while maintaining smooth transition."""
+        validate_preset(preset, self.sample_rate)
         self.preset_name = preset.name
         self.description = preset.description
         self.preamp_db = preset.preamp_db
@@ -632,7 +659,7 @@ class ParametricEQEngine:
             tot_db += coeffs.magnitude_db(freq_hz, self.sample_rate)
         return tot_db
 
-    def calculate_peak_gain(self, num_points: int = 250) -> Tuple[float, float]:
+    def calculate_peak_gain(self, num_points: int = 16384) -> Tuple[float, float]:
         """
         Scans the 20 Hz - 20 kHz audio range to find the maximum composite peak gain.
         Returns (peak_gain_dbfs, peak_frequency_hz).
@@ -647,12 +674,14 @@ class ParametricEQEngine:
         if not coeffs_list:
             return self.preamp_db, 1000.0
 
-        # Logarithmic frequency sweep from 20 Hz to 20,000 Hz
+        # Dense logarithmic frequency sweep + band center frequencies
         max_gain_db = -999.0
         peak_freq = 20.0
 
-        for i in range(num_points):
-            f = 20.0 * (1000.0 ** (i / (num_points - 1)))
+        freq_list = [20.0 * (1000.0 ** (i / (num_points - 1))) for i in range(num_points)]
+        freq_list.extend([b.frequency for b in self.bands if b.enabled and 20.0 <= b.frequency <= 20000.0])
+
+        for f in freq_list:
             w = 2.0 * math.pi * f / self.sample_rate
             z_inv = cmath.exp(-1j * w)
             z_inv2 = z_inv * z_inv
@@ -681,7 +710,7 @@ class ParametricEQEngine:
 
         saved_preamp = self.preamp_db
         self.preamp_db = 0.0
-        peak_gain_no_preamp, _ = self.calculate_peak_gain(num_points=300)
+        peak_gain_no_preamp, _ = self.calculate_peak_gain(num_points=16384)
         self.preamp_db = saved_preamp
 
         if peak_gain_no_preamp > 0.0:
@@ -711,6 +740,8 @@ class ParametricEQEngine:
             return ""
 
         filters: List[str] = []
+        if int(self.sample_rate) != 48000:
+            filters.append(f"aresample={int(self.sample_rate)}")
 
         # 1. Preamp Stage: Attenuation before filters prevents clipping inside and after biquads
         vol_prec = "double" if self.precision == "f64" else "float"
@@ -797,20 +828,19 @@ class ParametricEQEngine:
     def to_equalizer_apo(self) -> str:
         """Exports the EQ configuration to EqualizerAPO / Peace format."""
         lines = [
-            f"# Spoff Parametric EQ Profile: {self.preset_name}",
+            f"# Profile: {self.preset_name}",
             f"# {self.description}",
             f"Preamp: {self.preamp_db:.1f} dB"
         ]
         for b in self.bands:
-            if not b.enabled:
-                continue
             if b.filter_type == FilterType.LOW_SHELF:
                 ft = "LSC"
             elif b.filter_type == FilterType.HIGH_SHELF:
                 ft = "HSC"
             else:
                 ft = "PK"
-            lines.append(f"Filter {b.index}: ON {ft} Fc {b.frequency:.1f} Hz Gain {b.gain_db:+.1f} dB Q {b.q:.2f}")
+            state = "ON" if b.enabled else "OFF"
+            lines.append(f"Filter {b.index}: {state} {ft} Fc {b.frequency:.1f} Hz Gain {b.gain_db:+.1f} dB Q {b.q:.2f}")
         return "\n".join(lines)
 
 

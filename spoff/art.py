@@ -8,12 +8,22 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 
 try:
-    from .storage import DATA_DIR
+    from .storage import DATA_DIR, storage_transaction, _atomic_json_dump
 except ImportError:
     try:
-        from storage import DATA_DIR
+        from storage import DATA_DIR, storage_transaction, _atomic_json_dump
     except ImportError:
         DATA_DIR = Path.home() / ".local" / "share" / "spoff"
+        import contextlib
+        @contextlib.contextmanager
+        def storage_transaction():
+            yield
+        def _atomic_json_dump(filepath: Path, data: Any, mode: int = 0o644) -> None:
+            filepath.parent.mkdir(parents=True, exist_ok=True)
+            tmp = filepath.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            tmp.replace(filepath)
 
 logger = logging.getLogger("art")
 
@@ -34,7 +44,13 @@ def _load_disk_cache() -> None:
             with open(ART_CACHE_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
-                    _memory_art_cache.update(data)
+                    for key, value in data.items():
+                        if isinstance(key, str) and isinstance(value, dict):
+                            _memory_art_cache[key] = {
+                                field: item for field, item in value.items()
+                                if field in ("art_url", "artist_art_url", "album_art_url", "source")
+                                and (item is None or isinstance(item, str))
+                            }
     except Exception as e:
         logger.debug(f"Failed to load art cache from disk: {e}")
     finally:
@@ -43,13 +59,21 @@ def _load_disk_cache() -> None:
 
 def _save_disk_cache() -> None:
     try:
-        ART_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        temp_file = ART_CACHE_FILE.with_suffix(".tmp")
-        with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(_memory_art_cache, f, indent=2)
-        temp_file.replace(ART_CACHE_FILE)
-    except Exception as e:
-        logger.debug(f"Failed to write art cache to disk: {e}")
+        with storage_transaction():
+            disk = {}
+            if ART_CACHE_FILE.exists():
+                try:
+                    with ART_CACHE_FILE.open(encoding="utf-8") as stream:
+                        loaded = json.load(stream)
+                    if isinstance(loaded, dict):
+                        disk = {k: v for k, v in loaded.items()
+                                if isinstance(k, str) and isinstance(v, dict)}
+                except (OSError, ValueError):
+                    logger.exception("Could not read artwork cache before merge")
+            disk.update(_memory_art_cache)
+            _atomic_json_dump(ART_CACHE_FILE, disk)
+    except (OSError, ValueError):
+        logger.exception("Could not save artwork cache")
 
 
 def _normalize_key(title: str, artist: str) -> str:
@@ -66,17 +90,26 @@ def get_cached_artwork(track: Dict[str, Any]) -> Dict[str, Optional[str]]:
     with _art_cache_lock:
         _load_disk_cache()
 
+        def _safe_entry(val: Any) -> Optional[Dict[str, Optional[str]]]:
+            if isinstance(val, dict):
+                return dict(val)
+            return None
+
         # 1. Check ID key
         raw_id = str(track.get("id") or "").strip()
         if raw_id and raw_id in _memory_art_cache:
-            return dict(_memory_art_cache[raw_id])
+            entry = _safe_entry(_memory_art_cache[raw_id])
+            if entry is not None:
+                return entry
 
         # 2. Check Spotify URI / ID
         raw_uri = str(track.get("uri") or "").strip()
         if raw_uri.startswith("spotify:track:"):
             sp_id = raw_uri.split(":")[-1]
             if sp_id in _memory_art_cache:
-                return dict(_memory_art_cache[sp_id])
+                entry = _safe_entry(_memory_art_cache[sp_id])
+                if entry is not None:
+                    return entry
 
         # 3. Check normalized artist::title
         title = str(track.get("title") or "").strip()
@@ -84,7 +117,9 @@ def get_cached_artwork(track: Dict[str, Any]) -> Dict[str, Optional[str]]:
         if title:
             norm_key = _normalize_key(title, artist)
             if norm_key in _memory_art_cache:
-                return dict(_memory_art_cache[norm_key])
+                entry = _safe_entry(_memory_art_cache[norm_key])
+                if entry is not None:
+                    return entry
 
     return {}
 
@@ -253,11 +288,12 @@ def resolve_track_artwork(track: Dict[str, Any], timeout: float = 3.5) -> Dict[s
     # 1. Fast check if track already has both
     existing_art = track.get("art_url") or track.get("thumbnail") or track.get("cover_url")
     existing_artist = track.get("artist_art_url")
+    existing_album = track.get("album_art_url") or existing_art
     if existing_art and existing_artist:
         return {
             "art_url": str(existing_art),
             "artist_art_url": str(existing_artist),
-            "album_art_url": str(existing_art),
+            "album_art_url": str(existing_album),
             "source": "existing"
         }
 
@@ -316,13 +352,6 @@ def resolve_track_artwork(track: Dict[str, Any], timeout: float = 3.5) -> Dict[s
         cover_url = f"https://img.youtube.com/vi/{t_id}/hqdefault.jpg"
         if provider == "none":
             provider = "youtube"
-
-    # If artist picture is found but no cover art, cover = artist picture
-    if not cover_url and artist_url:
-        cover_url = artist_url
-    # If cover art is found but no artist picture, artist picture = cover art
-    if not artist_url and cover_url:
-        artist_url = cover_url
 
     main_art = cover_url or artist_url
 
