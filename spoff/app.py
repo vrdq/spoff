@@ -1578,7 +1578,7 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
     def compose(self) -> ComposeResult:
         with Vertical(id="spotify-dialog"):
             if self.first_run and not (self.auth_session and get_valid_token()):
-                yield Static("WELCOME TO SPOFF · SPOTIFY SETUP", id="spotify-title")
+                yield Static("WELCOME TO SPOFF - SPOTIFY SETUP", id="spotify-title")
             else:
                 yield Static("SPOTIFY ACCOUNT", id="spotify-title")
             if self.auth_session and get_valid_token():
@@ -5570,7 +5570,7 @@ class SpoffTUI(App):
         artist = curr.get("artist", "Unknown")
 
         if self.current_lyrics is None:
-            lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]  [dim #767676]· FETCHING LYRICS...[/dim]")
+            lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]  [dim #767676]FETCHING LYRICS...[/dim]")
             lt.clear()
             lt.add_row("", "[dim]Searching synchronized lyrics on LRCLIB...[/dim]")
             return
