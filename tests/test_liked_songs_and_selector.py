@@ -84,6 +84,21 @@ class TestLikedSongsStorage(unittest.TestCase):
         # Non-existent track returns False
         self.assertFalse(storage.remove_track_from_liked_songs("non_existent"))
 
+    def test_is_track_liked_and_remove_with_artist(self):
+        track1 = {"id": "t1", "title": "My Song", "artist": "Singer"}
+        self.assertFalse(storage.is_track_liked(track1))
+        storage.add_track_to_liked_songs(track1)
+        self.assertTrue(storage.is_track_liked(track1))
+        # Matching by title and artist without ID
+        self.assertTrue(storage.is_track_liked({"title": "My Song", "artist": "Singer"}))
+        # Different artist
+        self.assertFalse(storage.is_track_liked({"title": "My Song", "artist": "Other Singer"}))
+
+        # Remove with artist check
+        self.assertFalse(storage.remove_track_from_liked_songs("My Song", artist="Other Singer"))
+        self.assertTrue(storage.remove_track_from_liked_songs("My Song", artist="Singer"))
+        self.assertFalse(storage.is_track_liked(track1))
+
     def test_migration_from_playlists_json_spotify_liked_songs(self):
         # Suppose playlists.json has an old spotify_liked_songs entry
         old_playlists = [
@@ -147,6 +162,7 @@ class TestPlaylistSelectorAndLikedTabAppLogic(unittest.TestCase):
 
         self.app.active_tab = "playlist"
         self.app.advanced_mode = False
+        self.app._is_ready = True
         self.app.queue = []
         self.app.current_index = -1
         self.app._failed_indices = set()
@@ -175,7 +191,9 @@ class TestPlaylistSelectorAndLikedTabAppLogic(unittest.TestCase):
         self.assertEqual(DEFAULT_KEYBINDINGS.get("nav_offline"), "3")
         self.assertEqual(DEFAULT_KEYBINDINGS.get("nav_lyrics"), "4")
         self.assertEqual(DEFAULT_KEYBINDINGS.get("nav_liked"), "5")
+        self.assertEqual(DEFAULT_KEYBINDINGS.get("like_track"), "l")
         self.assertIn("nav_liked", ACTION_INFO)
+        self.assertIn("like_track", ACTION_INFO)
 
     def test_playlist_active_bold_and_inactive_normal(self):
         side_table = Mock(spec=DataTable)
@@ -349,6 +367,45 @@ class TestPlaylistSelectorAndLikedTabAppLogic(unittest.TestCase):
         self.assertIn("Offline", parts[2])
         self.assertIn("Lyrics", parts[3])
         self.assertIn("Liked Songs", parts[4])
+
+    def test_action_like_track_toggle_and_sync(self):
+        self.app.active_tab = "playlist"
+        tt = Mock(spec=DataTable)
+        tt.cursor_row = 0
+        test_track = {"id": "4iV5W9uYEdYUVa79Axb7Rh", "title": "New Track", "artist": "New Artist", "source": "spotify"}
+        self.app.current_playlist_tracks = [test_track]
+
+        mock_add_spotify = Mock(return_value=(True, "Synced to Spotify Liked Songs"))
+        mock_rm_spotify = Mock(return_value=(True, "Removed from Spotify Liked Songs"))
+
+        # 1. Like track when not liked
+        with patch.object(self.app, "query_one", return_value=tt), \
+             patch("spoff.app.add_track_to_spotify_account", mock_add_spotify), \
+             patch("spoff.app.remove_track_from_spotify_account", mock_rm_spotify), \
+             patch("threading.Thread", side_effect=lambda target, daemon: Mock(start=lambda: target())):
+            self.app.action_like_track()
+
+        # Should be added to storage
+        self.assertTrue(storage.is_track_liked(test_track))
+        # Notification sent
+        self.assertTrue(any("Added 'New Track' to Liked Songs" in n for n in self.app.notifications))
+        # Spotify sync invoked
+        mock_add_spotify.assert_called_once_with("liked", "Liked Songs", test_track)
+
+        # 2. Pressing like again should UNLIKE and remove
+        self.app.notifications.clear()
+        with patch.object(self.app, "query_one", return_value=tt), \
+             patch("spoff.app.add_track_to_spotify_account", mock_add_spotify), \
+             patch("spoff.app.remove_track_from_spotify_account", mock_rm_spotify), \
+             patch("threading.Thread", side_effect=lambda target, daemon: Mock(start=lambda: target())):
+            self.app.action_like_track()
+
+        # Should be removed from storage
+        self.assertFalse(storage.is_track_liked(test_track))
+        # Notification sent
+        self.assertTrue(any("Removed 'New Track' from Liked Songs" in n for n in self.app.notifications))
+        # Spotify unlike sync invoked
+        mock_rm_spotify.assert_called_once_with("liked", "Liked Songs", test_track)
 
 
 if __name__ == "__main__":

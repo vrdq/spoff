@@ -504,20 +504,45 @@ def add_track_to_liked_songs(track: Dict[str, Any]) -> bool:
     logger.info(f"Added track to Liked Songs: {track.get('title')}")
     return True
 
+def is_track_liked(track: Dict[str, Any]) -> bool:
+    """Checks whether a track is present in Liked Songs."""
+    if not isinstance(track, dict):
+        return False
+    t_id = track.get("id")
+    t_title = str(track.get("title") or "").strip().lower()
+    t_artist = str(track.get("artist") or "").strip().lower()
+
+    existing = load_liked_songs()
+    for t in existing:
+        if t_id and t.get("id") and t.get("id") == t_id:
+            return True
+        if t_title and str(t.get("title") or "").strip().lower() == t_title:
+            if not t_artist or not t.get("artist") or str(t.get("artist") or "").strip().lower() == t_artist:
+                return True
+    return False
+
 @transactional
-def remove_track_from_liked_songs(track_id_or_title: str) -> bool:
-    """Removes a track from Liked Songs by ID or title. Returns True if removed."""
+def remove_track_from_liked_songs(track_id_or_title: str, artist: Optional[str] = None) -> bool:
+    """Removes a track from Liked Songs by ID or title (and optional artist). Returns True if removed."""
     if not track_id_or_title:
         return False
     clean_target = str(track_id_or_title).strip()
     target_lower = clean_target.lower()
+    artist_lower = str(artist).strip().lower() if artist else None
     existing = load_liked_songs()
     filtered = []
     removed = False
     for t in existing:
-        if not removed and (t.get("id") == clean_target or str(t.get("title") or "").strip().lower() == target_lower):
-            removed = True
-            continue
+        if not removed:
+            id_match = bool(clean_target and t.get("id") and t.get("id") == clean_target)
+            title_match = bool(target_lower and str(t.get("title") or "").strip().lower() == target_lower)
+            if artist_lower and title_match:
+                t_artist = str(t.get("artist") or "").strip().lower()
+                if t_artist and t_artist != artist_lower:
+                    title_match = False
+            if id_match or title_match:
+                removed = True
+                continue
         filtered.append(t)
     if removed:
         save_liked_songs(filtered)

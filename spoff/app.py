@@ -50,7 +50,8 @@ try:
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
         load_eq_settings, save_eq_settings, remove_deleted_spotify_playlist_id,
-        load_liked_songs, save_liked_songs, add_track_to_liked_songs, remove_track_from_liked_songs
+        load_liked_songs, save_liked_songs, add_track_to_liked_songs, remove_track_from_liked_songs,
+        is_track_liked
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache
     from .search import live_search_tracks
@@ -94,7 +95,8 @@ except ImportError:
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
         load_eq_settings, save_eq_settings, remove_deleted_spotify_playlist_id,
-        load_liked_songs, save_liked_songs, add_track_to_liked_songs, remove_track_from_liked_songs
+        load_liked_songs, save_liked_songs, add_track_to_liked_songs, remove_track_from_liked_songs,
+        is_track_liked
     )
     from streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache
     from search import live_search_tracks
@@ -412,7 +414,8 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "check_update": "u",
     "quit_app": "q",
     "focus_sidebar": "h",
-    "focus_tracks": "l",
+    "focus_tracks": "right",
+    "like_track": "l",
     "toggle_focus": "tab",
     "move_item_up": "K",
     "move_item_down": "J",
@@ -444,6 +447,7 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "focus_bar": ("Playback", "Focus Seek Bar"),
     "focus_import": ("Playlists", "New Playlist / Import"),
     "add_to_playlist": ("Playlists", "Add Song to Playlist"),
+    "like_track": ("Library", "Like / Unlike Song (l)"),
     "share_playlist": ("Playlists", "Copy Playlist Link / Share"),
     "delete_item": ("Playlists", "Delete Selected Item"),
     "delete_playlist": ("Playlists", "Delete Entire Playlist"),
@@ -466,7 +470,7 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "check_update": ("General", "Check for Updates"),
     "quit_app": ("General", "Quit Spoff"),
     "focus_sidebar": ("Navigation", "Focus Sidebar (h)"),
-    "focus_tracks": ("Navigation", "Focus Main Table (l)"),
+    "focus_tracks": ("Navigation", "Focus Main Table (Right)"),
     "toggle_focus": ("Navigation", "Cycle Sidebar / Main"),
     "move_item_up": ("Playlists", "Reorder Song Up (K)"),
     "move_item_down": ("Playlists", "Reorder Song Down (J)"),
@@ -1953,7 +1957,7 @@ class HelpModal(ModalScreen[None]):
         nav_rows = [
             (f"{k_s1} / {k_s2} / {k_s3} / {k_s5}", "Search / Playlists / Offline / Liked"),
             (f"{k_s4}", "Synchronized lyrics view"),
-            ("h / l", "Switch Sidebar / Main pane"),
+            ("h / Right, Tab", "Switch Sidebar / Main pane"),
             ("j / k, Arrows", "Navigate table rows"),
             ("gg / Home", "Jump to top row"),
             ("G / End", "Jump to bottom row"),
@@ -1990,6 +1994,7 @@ class HelpModal(ModalScreen[None]):
             ("Esc / k", "Return to table"),
         ]
 
+        k_like = format_key_display(kb.get("like_track", "l"))
         k_spot = format_key_display(kb.get("open_spotify_auth", "L"))
         k_add = format_key_display(kb.get("add_to_playlist", "a"))
         k_share_pl = format_key_display(kb.get("share_playlist", "y"))
@@ -2003,6 +2008,7 @@ class HelpModal(ModalScreen[None]):
 
         playlist_rows = [
             ("J / K, Shift+↑↓", "Reorder songs in playlist"),
+            (f"{k_like}", "Like / Unlike song (Spotify sync)"),
             (f"{k_add}, +", "Add track to playlist"),
             (f"{k_ren_pl}, F2", "Rename selected playlist"),
             (f"{k_cln_pl}, Alt+c", "Clone / copy playlist"),
@@ -4532,7 +4538,8 @@ class SpoffTUI(App):
         Binding("shift+down", "move_item_down", "Move Down", show=False),
         Binding("shift+up", "move_item_up", "Move Up", show=False),
         Binding("h", "focus_sidebar", "Sidebar", show=False),
-        Binding("l", "focus_tracks", "Tracks", show=False),
+        Binding("right", "focus_tracks", "Tracks", show=False),
+        Binding("l", "like_track", "Like Song", show=False),
         Binding("tab", "toggle_focus", "Switch Pane", show=False, priority=True),
         Binding("e", "open_equalizer", "EQ"),
         Binding("E", "toggle_eq_bypass", "Toggle EQ", show=False),
@@ -4959,7 +4966,7 @@ class SpoffTUI(App):
                 yield Static("00:00", id="time-elapsed")
                 yield ScrubBar(total=100, show_eta=False, id="playback-bar")
                 yield Static("00:00", id="time-total")
-            yield Static("Enter: play  |  Space / F8: pause  |  s: shuf  |  r: rep  |  4: lyrics  |  : help  |  q: quit", id="deck-line-3")
+            yield Static("Enter: play  |  Space / F8: pause  |  l: like  |  s: shuf  |  r: rep  |  4: lyrics  |  : help  |  q: quit", id="deck-line-3")
 
     def on_mount(self) -> None:
         self._thread_id = threading.get_ident()
@@ -6572,6 +6579,78 @@ class SpoffTUI(App):
                 else:
                     st.focus()
 
+    def action_like_track(self):
+        if not getattr(self, "_is_ready", False):
+            return
+        if isinstance(self.focused, Input):
+            return
+
+        track = None
+        f = self.focused
+
+        # 1. Prefer highlighted row in #track-table if focused on it
+        if isinstance(f, DataTable) and getattr(f, "id", None) == "track-table":
+            row_idx = f.cursor_row
+            tracks = self._get_current_view_tracks()
+            if row_idx is not None and 0 <= row_idx < len(tracks):
+                track = tracks[row_idx]
+
+        # 2. If no track selected from focused table, prefer current playing track
+        if not track and getattr(getattr(self, "player", None), "current_track", None):
+            track = self.player.current_track
+
+        # 3. Fallback to track-table cursor row even if focus is elsewhere (e.g. lyrics/deck)
+        if not track:
+            try:
+                tt = self.query_one("#track-table", DataTable)
+                row_idx = tt.cursor_row
+                tracks = self._get_current_view_tracks()
+                if row_idx is not None and 0 <= row_idx < len(tracks):
+                    track = tracks[row_idx]
+            except Exception:
+                pass
+
+        if not track:
+            self.notify_user("No track selected or playing to like.")
+            return
+
+        t_title = str(track.get("title") or "Track")
+        liked = is_track_liked(track)
+
+        if liked:
+            t_id = track.get("id") or ""
+            remove_track_from_liked_songs(t_id if t_id else t_title, artist=track.get("artist"))
+            self.current_liked_tracks = load_liked_songs()
+            if self.active_tab == "liked":
+                self.render_tracks(self.current_liked_tracks)
+            self.notify_user(f"Removed '{t_title}' from Liked Songs.")
+
+            if not is_client_side_track(track):
+                def _sync_unlike_bg():
+                    ok, msg = remove_track_from_spotify_account("liked", "Liked Songs", track)
+                    if ok:
+                        self.call_from_thread(self.notify_user, f"'{t_title}' removed from Spotify Liked Songs.")
+                    elif msg and not msg.startswith("Not logged in"):
+                        logger.info(f"Spotify unlike sync notice: {msg}")
+                threading.Thread(target=_sync_unlike_bg, daemon=True).start()
+        else:
+            add_track_to_liked_songs(track)
+            self.current_liked_tracks = load_liked_songs()
+            if self.active_tab == "liked":
+                self.render_tracks(self.current_liked_tracks)
+            self.notify_user(f"Added '{t_title}' to Liked Songs.")
+
+            if not is_client_side_track(track):
+                def _sync_like_bg():
+                    ok, msg = add_track_to_spotify_account("liked", "Liked Songs", track)
+                    if ok:
+                        self.call_from_thread(self.notify_user, f"'{t_title}' synced to Spotify Liked Songs.")
+                    elif msg and not msg.startswith("Not logged in"):
+                        logger.info(f"Spotify like sync notice: {msg}")
+                        if "permission" in msg.lower() or "re-link" in msg.lower():
+                            self.call_from_thread(self.notify_user, msg)
+                threading.Thread(target=_sync_like_bg, daemon=True).start()
+
     def action_add_to_playlist(self):
         f = self.focused
         row_idx = None
@@ -7642,6 +7721,8 @@ class SpoffTUI(App):
                 else:
                     share_bound = self.keybindings.get("share_track", "")
                     share_hint = f"{format_key_display(share_bound)}: share  |  " if share_bound else ""
+                like_k = format_key_display(self.keybindings.get("like_track", "l"))
+                like_hint = f"{like_k}: like  |  " if like_k else ""
                 shuf_k = format_key_display(self.keybindings.get("toggle_shuffle", "s"))
                 rep_k = format_key_display(self.keybindings.get("toggle_repeat", "r"))
                 lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
@@ -7654,7 +7735,7 @@ class SpoffTUI(App):
                 help_k = format_key_display(self.keybindings.get("show_help", ":"))
                 help_label = ": help" if help_k in (":", "colon") else f"{help_k}: help"
                 quit_k = format_key_display(self.keybindings.get("quit_app", "q"))
-                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {share_hint}{shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {vis_k}: vis  |  {eq_hint}{dl_hint}{sett_k}: set  |  {help_label}  |  {quit_k}: quit"
+                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {share_hint}{like_hint}{shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {vis_k}: vis  |  {eq_hint}{dl_hint}{sett_k}: set  |  {help_label}  |  {quit_k}: quit"
             try:
                 deck_l3 = self.query_one("#deck-line-3", Static)
                 deck_l3.update(escape(hints))
