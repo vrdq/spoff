@@ -1,24 +1,16 @@
-# SPOFF
+# spoff
 
-A fast, dark-monochrome music player for the Linux terminal that streams from YouTube Music and Spotify, caches every song for offline listening, and syncs real-time lyrics.
+Terminal music player for Linux that streams audio from YouTube Music and Spotify metadata with automatic local caching, synchronized LRC lyrics, and a CAVA audio visualizer.
 
-No Spotify Premium. No API keys. No ads. Built for dotfiles and distraction-free terminal workflows.
+## Overview & Architecture
 
----
+- **Playback & Caching**: Controlled via `mpv` through an IPC socket. Audio streams cache automatically to `~/.local/share/spoff/cache/` for offline listening without requiring Spotify Premium or API keys.
+- **Spectrum Visualizer**: Connects to a `cava` FIFO pipe to render raw PCM audio spectrum data at 60 FPS in 5 selectable rendering modes.
+- **Metadata & Dual Search**: Queries YouTube Music for audio streams and syncs with Spotify user libraries (`Ctrl+E` to toggle search backends).
+- **Synchronized Lyrics**: Parses LRC timestamps for line-by-line synced lyrics with click-to-seek playback.
+- **Desktop & D-Bus**: Exposes an MPRIS 2 interface for integration with `playerctl`, Waybar, Hyprland binds, and system lock screens.
+- **Interface**: Built with Textual for terminal rendering with full vim navigation (`h`/`j`/`k`/`l`).
 
-## Why Spoff?
-
-- **No Spotify Premium Required**: Stream any track, album, or playlist from YouTube Music and Spotify with zero ads and zero subscription fees.
-- **Two-Way Spotify Sync**: Press `L` to link your Spotify account. Imports your Liked Songs and playlists, with changes syncing back to Spotify in real time.
-- **Dual Search Engines (`Ctrl+E`)**: Switch on the fly between **YouTube Music** (studio-accurate audio releases) and **Spotify** metadata.
-- **Automatic Offline Caching**: Every song you stream saves automatically to `~/.local/share/spoff/cache/`. Listen once, and it stays playable offline forever in `[3] Offline`.
-- **Synced Real-Time Lyrics (`[4] Lyrics`)**: Precision synchronized LRC lyrics follow song playback line by line. Click or press Enter on any lyric line to instantly jump to that point in the song.
-- **60 FPS CAVA Audio Visualizer**: Integrated spectrum visualizer with 5 distinct rendering modes (Stereo Mirrored, Peak Dots, Centered Diamond, Wave Split, Classic Bars) and custom color palettes.
-- **Vim & Mouse Ergonomics**: Full `h` / `j` / `k` / `l` navigation, instant tab switching, a mouse-draggable sidebar splitter, and true terminal transparency.
-- **System Media Integration (MPRIS 2)**: Works out of the box with Waybar, Hyprland, lock screens, hardware media keys (`Play`, `Pause`, `Next`, `Prev`), and `playerctl`.
-- **In-App Settings & Custom Keybinds (`,`)**: Configure Instant Search, audio visualizer palettes, transparency, and rebind any shortcut right inside the TUI.
-
----
 
 ## Installation
 
