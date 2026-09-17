@@ -3735,9 +3735,7 @@ class SpoffTUI(App):
     }
 
     #deck-track {
-        text-style: bold;
         width: 1fr;
-        color: #ffffff;
     }
 
     #deck-source {
@@ -4929,7 +4927,7 @@ class SpoffTUI(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-bar"):
-            yield Static(r"[bold #ffffff]\[1] Search[/]    [#555555]\[2] Playlists    \[3] Offline    \[4] Lyrics[/]", id="nav-bar")
+            yield Static(r"[bold #ffffff]\[1] Search[/]    [#555555]\[2] Playlists    \[3] Offline    \[4] Lyrics    \[5] Liked Songs[/]", id="nav-bar")
             yield Static("", id="update-pill")
             yield Static("[#555555]L: Spotify[/]", id="spotify-pill")
             yield Static("[#555555],: Settings[/]", id="settings-pill")
@@ -4956,7 +4954,7 @@ class SpoffTUI(App):
         with Vertical(id="player-deck"):
             yield Static("", id="notification-line")
             with Horizontal(id="deck-line-1"):
-                yield Static("No track playing", id="deck-track")
+                yield Static("[dim]No track playing[/dim]", id="deck-track")
                 yield Static("", id="deck-stats-pill")
                 yield VisualizerWidget(self.visualizer, id="deck-visualizer")
                 yield Static("[dim]SHUF[/dim]", id="shuf-pill")
@@ -7666,13 +7664,17 @@ class SpoffTUI(App):
             is_cached = get_cached_track_path(curr.get("id", "")) is not None
             src = "[bold #569f68]LOCAL DISK[/]" if is_cached else "[bold #c4a768]STREAMING[/]"
             self.query_one("#deck-source", Static).update(src)
-            safe_title = escape(str(curr.get("title", "")))
-            safe_artist = escape(str(curr.get("artist", "")))
-            self.query_one("#deck-track", Static).update(f"{safe_title}  -  {safe_artist}")
+            safe_title = escape(str(curr.get("title", "") or "Unknown Track"))
+            safe_artist = escape(str(curr.get("artist", "") or "")).strip()
+            if safe_artist and safe_artist.lower() not in ("unknown", "unknown artist", ""):
+                track_display = f"[bold #ffffff]{safe_title}[/]  [#555555]—[/]  [#cccccc]{safe_artist}[/]"
+            else:
+                track_display = f"[bold #ffffff]{safe_title}[/]"
+            self.query_one("#deck-track", Static).update(track_display)
         else:
             self.query_one("#status-pill", Static).update("[dim]STANDBY[/dim]")
             self.query_one("#deck-source", Static).update("[dim]IDLE[/dim]")
-            self.query_one("#deck-track", Static).update("No track playing")
+            self.query_one("#deck-track", Static).update("[dim]No track playing[/dim]")
 
         queue_len = len(self.queue)
         queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "empty"

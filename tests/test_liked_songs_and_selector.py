@@ -408,5 +408,63 @@ class TestPlaylistSelectorAndLikedTabAppLogic(unittest.TestCase):
         mock_rm_spotify.assert_called_once_with("liked", "Liked Songs", test_track)
 
 
+class TestDeckTrackFormatting(unittest.TestCase):
+    def setUp(self):
+        self.app = SpoffTUI()
+        self.app.player = Mock()
+        self.app.player.get_progress.return_value = (10, 100)
+        self.app.player.is_paused = False
+        self.app.mpris = None
+        self.focused_patch = patch.object(SpoffTUI, "focused", new_callable=PropertyMock, return_value=None)
+        self.focused_patch.start()
+
+    def tearDown(self):
+        self.focused_patch.stop()
+
+    def test_deck_track_with_artist_uses_dimmed_em_dash_separator(self):
+        from collections import defaultdict
+        self.app.player.current_track = {"id": "1", "title": "Cool Song", "artist": "Cool Artist"}
+        widgets = defaultdict(Mock)
+        self.app.query_one = Mock(side_effect=lambda sel, *args, **kwargs: widgets[sel])
+
+        self.app.update_player_hud()
+
+        updated_text = widgets["#deck-track"].update.call_args[0][0]
+        self.assertEqual(updated_text, "[bold #ffffff]Cool Song[/]  [#555555]—[/]  [#cccccc]Cool Artist[/]")
+        self.assertNotIn("  -  ", updated_text)
+
+    def test_deck_track_without_artist_has_no_trailing_dash_or_white_dash(self):
+        from collections import defaultdict
+        # Empty artist
+        self.app.player.current_track = {"id": "2", "title": "Solo Song", "artist": ""}
+        widgets = defaultdict(Mock)
+        self.app.query_one = Mock(side_effect=lambda sel, *args, **kwargs: widgets[sel])
+
+        self.app.update_player_hud()
+
+        updated_text = widgets["#deck-track"].update.call_args[0][0]
+        self.assertEqual(updated_text, "[bold #ffffff]Solo Song[/]")
+        self.assertNotIn("-", updated_text)
+
+        # "Unknown Artist"
+        self.app.player.current_track = {"id": "3", "title": "Stream Item", "artist": "Unknown Artist"}
+        self.app.update_player_hud()
+        updated_text2 = widgets["#deck-track"].update.call_args[0][0]
+        self.assertEqual(updated_text2, "[bold #ffffff]Stream Item[/]")
+        self.assertNotIn("-", updated_text2)
+
+    def test_deck_track_no_track_playing(self):
+        from collections import defaultdict
+        self.app.player.current_track = None
+        widgets = defaultdict(Mock)
+        self.app.query_one = Mock(side_effect=lambda sel, *args, **kwargs: widgets[sel])
+
+        self.app.update_player_hud()
+
+        updated_text = widgets["#deck-track"].update.call_args[0][0]
+        self.assertEqual(updated_text, "[dim]No track playing[/dim]")
+
+
 if __name__ == "__main__":
     unittest.main()
+
