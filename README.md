@@ -2,6 +2,10 @@
 
 Terminal audio player for Linux that streams from YouTube Music and syncs Spotify metadata with local caching, synchronized LRC lyrics, and a CAVA spectrum visualizer.
 
+![spoff library view](assets/spoff-library.png)
+
+![spoff synchronized lyrics view](assets/spoff-lyrics.png)
+
 ## Architecture
 
 - Playback: streams audio via YouTube Music through a background `mpv` process over a local Unix domain socket. Played tracks save automatically to `~/.local/share/spoff/cache/` for offline playback without requiring Spotify Premium.
