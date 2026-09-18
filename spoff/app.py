@@ -4575,14 +4575,15 @@ class SpoffTUI(App):
         self.custom_keybindings: Dict[str, str] = get_custom_keybindings()
         self.keybindings: Dict[str, str] = {**DEFAULT_KEYBINDINGS, **self.custom_keybindings}
         eq_data = load_eq_settings()
+        default_preset = BUILTIN_PRESETS[0] if BUILTIN_PRESETS else SAMSUNG_AKG_REFERENCE_PRESET
         if eq_data:
             try:
                 self.eq_engine = ParametricEQEngine.from_dict(eq_data)
             except Exception as e:
                 logger.error(f"Error loading saved EQ configuration: {e}")
-                self.eq_engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
+                self.eq_engine = ParametricEQEngine(default_preset)
         else:
-            self.eq_engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
+            self.eq_engine = ParametricEQEngine(default_preset)
 
         self.player = MPVController(initial_volume=self.volume, eq_engine=self.eq_engine)
         self.vis_style: str = get_saved_visualizer_style()
