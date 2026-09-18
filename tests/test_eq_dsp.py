@@ -7,6 +7,7 @@ from spoff.eq import (
     ParametricEQEngine,
     SAMSUNG_AKG_REFERENCE_PRESET,
     HARMAN_IN_EAR_2019_PRESET,
+    MOONDROP_CHU_2_REFERENCE_PRESET,
     BUILTIN_PRESETS,
     format_gain_bar,
     render_braille_curve,
@@ -561,11 +562,24 @@ class TestEQEngineAdvancedSettings(unittest.TestCase):
         self.assertIn("Harman Target 2018 (Over-Ear)", names)
         self.assertIn("IEF Neutral 2020", names)
         self.assertIn("Diffuse Field (DF)", names)
+        self.assertIn("Moondrop Chu II Audiophile Reference", names)
         self.assertIn("Free Field (FF)", names)
 
         for p in BUILTIN_PRESETS:
             self.assertTrue(len(p.bands) > 0)
             self.assertLessEqual(p.preamp_db, 0.0)
+
+    def test_moondrop_chu_2_preset_dsp_integrity(self):
+        preset = MOONDROP_CHU_2_REFERENCE_PRESET
+        self.assertEqual(len(preset.bands), 10)
+        self.assertEqual(preset.preamp_db, -4.0)
+
+        engine = ParametricEQEngine(preset)
+        self.assertEqual(len(engine.bands), 10)
+        # Verify 0 dBFS clipping immunity across audio band
+        for f in range(20, 20001, 50):
+            mag = engine.get_magnitude_at_freq(float(f))
+            self.assertLess(mag, 0.0, f"Clipping detected at {f}Hz with magnitude {mag} dB")
 
 
 class TestEQSettingsModalUI(unittest.TestCase):

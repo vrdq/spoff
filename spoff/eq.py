@@ -404,7 +404,26 @@ FREE_FIELD_PRESET = EQPreset(
     ]
 )
 
+MOONDROP_CHU_2_REFERENCE_PRESET = EQPreset(
+    name="Moondrop Chu II Audiophile Reference",
+    description="Studio-grade calibration for Moondrop Chu 2: sub-bass rumble, 200Hz mid-bass mud purge, vocal warmth, 3.1kHz pinna anti-glare, 5.8k/8.2k nozzle resonance elimination, and 13.5kHz holographic air extension",
+    preamp_db=-4.0,
+    bands=[
+        EQBand(1, FilterType.LOW_SHELF, 40.0, +2.0, 0.71, label="Sub-Bass Visceral Rumble"),
+        EQBand(2, FilterType.PEAKING, 200.0, -2.2, 1.00, label="Mid-Bass Mud Purge"),
+        EQBand(3, FilterType.PEAKING, 750.0, +1.2, 1.20, label="Vocal Body & Warmth"),
+        EQBand(4, FilterType.PEAKING, 1500.0, -1.0, 1.80, label="Boxiness Tamer"),
+        EQBand(5, FilterType.PEAKING, 3100.0, -2.0, 2.20, label="Pinna Anti-Shout Notch"),
+        EQBand(6, FilterType.PEAKING, 4500.0, +1.8, 2.50, label="Transient Attack & Snap"),
+        EQBand(7, FilterType.PEAKING, 5800.0, -3.2, 3.20, label="Nozzle Sibilance Killer"),
+        EQBand(8, FilterType.PEAKING, 8200.0, -3.0, 3.50, label="Coupler Splash Tamer"),
+        EQBand(9, FilterType.PEAKING, 10500.0, +2.0, 2.00, label="Brilliance Micro-Detail"),
+        EQBand(10, FilterType.HIGH_SHELF, 13500.0, +3.5, 0.71, label="Holographic 3D Air Shelf"),
+    ]
+)
+
 BUILTIN_PRESETS: List[EQPreset] = [
+    MOONDROP_CHU_2_REFERENCE_PRESET,
     SAMSUNG_AKG_AUDIOPHILE_PRO_PRESET,
     SAMSUNG_AKG_REFERENCE_PRESET,
     HARMAN_IN_EAR_2019_PRESET,
