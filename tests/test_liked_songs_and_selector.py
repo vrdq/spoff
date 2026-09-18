@@ -558,6 +558,78 @@ class TestDeckTrackFormatting(unittest.TestCase):
         mock_table.move_cursor.assert_called_with(row=0)
 
 
+class TestVisualizerRemovalAndToggle(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.old_data_dir = storage.DATA_DIR
+        self.old_config_file = storage.CONFIG_FILE
+        storage.DATA_DIR = Path(self.temp_dir.name)
+        storage.CONFIG_FILE = storage.DATA_DIR / "config.json"
+        storage.DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        storage.DATA_DIR = self.old_data_dir
+        storage.CONFIG_FILE = self.old_config_file
+        self.temp_dir.cleanup()
+
+    def test_storage_visualizer_enabled_persistence(self):
+        self.assertTrue(storage.get_saved_visualizer_enabled())
+        storage.save_visualizer_enabled(False)
+        self.assertFalse(storage.get_saved_visualizer_enabled())
+        storage.save_visualizer_enabled(True)
+        self.assertTrue(storage.get_saved_visualizer_enabled())
+
+    def test_storage_visualizer_style_off(self):
+        storage.save_visualizer_style("off")
+        self.assertEqual(storage.get_saved_visualizer_style(), "off")
+        cfg = storage.load_config()
+        cfg.pop("visualizer_enabled", None)
+        storage.save_config(cfg)
+        self.assertFalse(storage.get_saved_visualizer_enabled())
+
+    def test_cava_visualizer_off_cycle(self):
+        from spoff.visualizer import CavaVisualizer, STYLE_NAMES
+        vis = CavaVisualizer(style="bars")
+        self.assertIn("off", STYLE_NAMES)
+        vis.set_style("off")
+        self.assertEqual(vis.style, "off")
+        self.assertFalse(vis.running)
+        self.assertEqual(vis.get_markup(is_playing=True, is_paused=False), "")
+        next_style = vis.cycle_style()
+        self.assertNotEqual(next_style, "off")
+
+    def test_app_toggle_visualizer_and_deck_visibility(self):
+        with patch("spoff.app.MPVController"), \
+             patch("spoff.app.MPRISService"), \
+             patch("spoff.app.ParametricEQEngine"):
+            app = SpoffTUI()
+            mock_widget = Mock()
+            app.query_one = Mock(return_value=mock_widget)
+
+            app.vis_enabled = True
+            app.visualizer.set_style("bars")
+
+            new_state = app.toggle_visualizer()
+            self.assertFalse(new_state)
+            self.assertFalse(app.vis_enabled)
+            self.assertEqual(app.visualizer.style, "off")
+            self.assertFalse(mock_widget.display)
+
+            new_state = app.toggle_visualizer()
+            self.assertTrue(new_state)
+            self.assertTrue(app.vis_enabled)
+            self.assertNotEqual(app.visualizer.style, "off")
+            self.assertTrue(mock_widget.display)
+
+    def test_app_init_cli_visualizer_flag(self):
+        with patch("spoff.app.MPVController"), \
+             patch("spoff.app.MPRISService"), \
+             patch("spoff.app.ParametricEQEngine"):
+            app_disabled = SpoffTUI(visualizer_enabled=False)
+            self.assertFalse(app_disabled.vis_enabled)
+            self.assertEqual(app_disabled.visualizer.style, "off")
+
+
 if __name__ == "__main__":
     unittest.main()
 

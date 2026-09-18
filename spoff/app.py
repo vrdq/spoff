@@ -48,6 +48,7 @@ try:
         get_saved_instant_search, save_instant_search,
         get_saved_auto_update, save_auto_update,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
+        get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
         load_eq_settings, save_eq_settings, remove_deleted_spotify_playlist_id,
         load_liked_songs, save_liked_songs, add_track_to_liked_songs, remove_track_from_liked_songs,
@@ -93,6 +94,7 @@ except ImportError:
         get_saved_instant_search, save_instant_search,
         get_saved_auto_update, save_auto_update,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
+        get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
         load_eq_settings, save_eq_settings, remove_deleted_spotify_playlist_id,
         load_liked_songs, save_liked_songs, add_track_to_liked_songs, remove_track_from_liked_songs,
@@ -421,6 +423,7 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "move_item_down": "J",
     "switch_engine": "ctrl+e",
     "toggle_visualizer": "v",
+    "toggle_vis_on_off": "V",
     "cycle_vis_color": "C",
     "open_equalizer": "e",
     "toggle_eq_bypass": "E",
@@ -461,6 +464,7 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "nav_liked": ("Navigation", "Switch to Liked Songs"),
     "switch_engine": ("Navigation", "Switch Search Engine (YTM/Spotify)"),
     "toggle_visualizer": ("Visualizer", "Cycle Visualizer Style (v)"),
+    "toggle_vis_on_off": ("Visualizer", "Toggle Visualizer On / Off (Shift+V)"),
     "cycle_vis_color": ("Visualizer", "Cycle Visualizer Color (C)"),
     "open_equalizer": ("Audio", "Parametric Equalizer (e)"),
     "toggle_eq_bypass": ("Audio", "Toggle EQ Bypass / A-B (E)"),
@@ -712,6 +716,13 @@ class SearchEngineToggle(Static):
         if isinstance(self.screen, SettingsModal):
             self.screen.toggle_search_engine()
 
+class VisualizerToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_visualizer()
+
 class VisualizerStyleToggle(Static):
     can_focus = True
 
@@ -904,6 +915,7 @@ class SettingsModal(ModalScreen[None]):
                 yield InstantSearchToggle(id="instant-search-toggle", classes="setting-toggle-item")
                 yield AutoUpdateToggle(id="auto-update-toggle", classes="setting-toggle-item")
                 yield SearchEngineToggle(id="engine-toggle", classes="setting-toggle-item")
+                yield VisualizerToggle(id="vis-toggle", classes="setting-toggle-item")
                 yield VisualizerStyleToggle(id="vis-style-toggle", classes="setting-toggle-item")
                 yield VisualizerColorToggle(id="vis-color-toggle", classes="setting-toggle-item")
                 yield EQSettingsNavToggle(id="eq-settings-nav-toggle", classes="setting-toggle-item")
@@ -976,6 +988,13 @@ class SettingsModal(ModalScreen[None]):
             else:
                 eng_toggle.update("[bold #ffffff]● YT MUSIC[/]  [#cccccc]Search Engine[/]  [dim]— YouTube Music streams (local playlists only)[/dim]")
 
+            vis_toggle = self.query_one("#vis-toggle", VisualizerToggle)
+            vis_enabled = getattr(self.spoff_app, "vis_enabled", True) and (getattr(self.spoff_app.visualizer, "style", "bars") != "off")
+            if vis_enabled:
+                vis_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]CAVA Visualizer[/]  [dim]— Live audio frequency spectrum bars on player deck (Shift+V)[/dim]")
+            else:
+                vis_toggle.update("[#767676]○ DISABLED (HIDDEN)[/]  [#cccccc]CAVA Visualizer[/]  [dim]— Visualizer removed, freeing player deck width (Shift+V)[/dim]")
+
             vis_style_toggle = self.query_one("#vis-style-toggle", VisualizerStyleToggle)
             style_name = self.spoff_app.visualizer.get_style_name() if hasattr(self.spoff_app, "visualizer") else "Studio Bars"
             vis_style_toggle.update(f"[bold #569f68]● {style_name.upper()}[/]   [#ffffff]Visualizer Style[/]  [dim]— Bars, Braille EQ, Mirrored, Wave, Matrix (v)[/dim]")
@@ -1021,6 +1040,12 @@ class SettingsModal(ModalScreen[None]):
         self.update_toggle_ui()
         label = "Spotify" if new_engine == "spotify" else "YouTube Music"
         self.query_one("#settings-status-line", Static).update(f"Search engine set to {label}.")
+
+    def toggle_visualizer(self) -> None:
+        new_state = self.spoff_app.toggle_visualizer()
+        self.update_toggle_ui()
+        state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled (Hidden)[/]"
+        self.query_one("#settings-status-line", Static).update(f"CAVA Visualizer {state_text}.")
 
     def cycle_visualizer_style(self) -> None:
         if hasattr(self.spoff_app, "cycle_visualizer_style"):
@@ -1149,7 +1174,7 @@ class SettingsModal(ModalScreen[None]):
         self.dismiss(None)
 
     def action_switch_focus(self) -> None:
-        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "instant-search-toggle", "auto-update-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle", "eq-settings-nav-toggle"]
+        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "instant-search-toggle", "auto-update-toggle", "engine-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "eq-settings-nav-toggle"]
         focused_id = self.focused.id if self.focused else None
         if focused_id in toggle_ids:
             idx = toggle_ids.index(focused_id)
@@ -1172,6 +1197,8 @@ class SettingsModal(ModalScreen[None]):
             self.toggle_auto_update()
         elif focused_id == "engine-toggle":
             self.toggle_search_engine()
+        elif focused_id == "vis-toggle":
+            self.toggle_visualizer()
         elif focused_id == "vis-style-toggle":
             self.cycle_visualizer_style()
         elif focused_id == "vis-color-toggle":
@@ -1197,7 +1224,7 @@ class SettingsModal(ModalScreen[None]):
 
     def on_key(self, event: events.Key) -> None:
         table = self.query_one("#settings-table", DataTable)
-        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "instant-search-toggle", "auto-update-toggle", "engine-toggle", "vis-style-toggle", "vis-color-toggle", "eq-settings-nav-toggle"]
+        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "instant-search-toggle", "auto-update-toggle", "engine-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "eq-settings-nav-toggle"]
         focused_id = self.focused.id if self.focused else None
 
         if focused_id in toggle_ids:
@@ -1227,6 +1254,8 @@ class SettingsModal(ModalScreen[None]):
                     self.toggle_auto_update()
                 elif focused_id == "engine-toggle":
                     self.toggle_search_engine()
+                elif focused_id == "vis-toggle":
+                    self.toggle_visualizer()
                 elif focused_id == "vis-style-toggle":
                     self.cycle_visualizer_style()
                 elif focused_id == "vis-color-toggle":
@@ -1969,6 +1998,8 @@ class HelpModal(ModalScreen[None]):
         ]
 
         k_dl = format_key_display(kb.get("download_offline", "b"))
+        k_vis_cycle = format_key_display(kb.get("toggle_visualizer", "v"))
+        k_vis_toggle = format_key_display(kb.get("toggle_vis_on_off", "V"))
 
         playback_rows = [
             (f"{k_play}, Fn+F8", "Play / Pause toggle"),
@@ -1978,7 +2009,8 @@ class HelpModal(ModalScreen[None]):
             (f"{k_dl}", "Download song / playlist offline"),
             (f"{k_share}", "Copy track link to clipboard"),
             ("Left / Right", "Seek -/+ 5 seconds"),
-            ("v / Click", "Cycle visualizer mode"),
+            (f"{k_vis_cycle} / Click", "Cycle visualizer mode"),
+            (f"{k_vis_toggle}, Shift+V", "Toggle visualizer on / off"),
             ("C", "Cycle visualizer color theme"),
             ("e / E", "Parametric EQ / Toggle Bypass (A-B)"),
             ("F1", "Mute / Unmute audio"),
@@ -4547,6 +4579,9 @@ class SpoffTUI(App):
         Binding("Y", "clone_playlist", "Copy Playlist", show=False),
         Binding("shift+y", "clone_playlist", "Copy Playlist", show=False),
         Binding("alt+c", "clone_playlist", "Copy Playlist", show=False),
+        Binding("v", "toggle_visualizer", "Visualizer", show=False),
+        Binding("V", "toggle_vis_on_off", "Visualizer On/Off", show=False),
+        Binding("shift+v", "toggle_vis_on_off", "Visualizer On/Off", show=False),
     ]
 
     def _dispatch_mpris(self, callback, *args):
@@ -4565,7 +4600,7 @@ class SpoffTUI(App):
             return False
         return super().check_action(action, parameters)
 
-    def __init__(self):
+    def __init__(self, visualizer_enabled: Optional[bool] = None):
         super().__init__()
         self._thread_id: int = threading.get_ident()
         self._mount_time: float = time.monotonic()
@@ -4588,7 +4623,13 @@ class SpoffTUI(App):
         self.player = MPVController(initial_volume=self.volume, eq_engine=self.eq_engine)
         self.vis_style: str = get_saved_visualizer_style()
         self.vis_color: str = get_saved_visualizer_color()
-        self.visualizer = CavaVisualizer(bars=24, style=self.vis_style, color=self.vis_color)
+        if visualizer_enabled is not None:
+            self.vis_enabled: bool = visualizer_enabled
+        else:
+            self.vis_enabled: bool = get_saved_visualizer_enabled() and (self.vis_style != "off")
+
+        effective_style = "off" if not self.vis_enabled else (self.vis_style if self.vis_style != "off" else "bars")
+        self.visualizer = CavaVisualizer(bars=24, style=effective_style, color=self.vis_color)
         mpris_callbacks = {
             "play_pause": lambda: self._dispatch_mpris(self.action_toggle_play),
             "play": lambda: self._dispatch_mpris(self._mpris_play),
@@ -4791,15 +4832,53 @@ class SpoffTUI(App):
         style_name = self.visualizer.get_style_name()
         self.notify_user(f"Visualizer: {style_name}")
 
+    def action_toggle_vis_on_off(self) -> None:
+        new_state = self.toggle_visualizer()
+        status_text = "Enabled" if new_state else "Disabled (Hidden)"
+        self.notify_user(f"Visualizer: {status_text}")
+
     def action_cycle_vis_color(self) -> None:
         self.cycle_visualizer_color()
         color_name = self.visualizer.get_color_name()
         self.notify_user(f"Visualizer Theme: {color_name}")
 
+    def toggle_visualizer(self) -> bool:
+        self.vis_enabled = not self.vis_enabled
+        save_visualizer_enabled(self.vis_enabled)
+        if not self.vis_enabled:
+            self.visualizer.stop()
+            self.visualizer.set_style("off")
+            self.vis_style = "off"
+            save_visualizer_style("off")
+        else:
+            prev_style = get_saved_visualizer_style()
+            if prev_style == "off":
+                prev_style = "bars"
+            self.vis_style = prev_style
+            self.visualizer.set_style(prev_style)
+            save_visualizer_style(prev_style)
+            self.visualizer.start()
+        self._apply_visualizer_visibility()
+        return self.vis_enabled
+
+    def _apply_visualizer_visibility(self) -> None:
+        try:
+            widget = self.query_one("#deck-visualizer", VisualizerWidget)
+            widget.display = bool(self.vis_enabled and self.visualizer.style != "off")
+        except Exception:
+            pass
+
     def cycle_visualizer_style(self) -> str:
         new_style = self.visualizer.cycle_style()
         self.vis_style = new_style
         save_visualizer_style(new_style)
+        if new_style == "off":
+            self.vis_enabled = False
+            save_visualizer_enabled(False)
+        else:
+            self.vis_enabled = True
+            save_visualizer_enabled(True)
+        self._apply_visualizer_visibility()
         return new_style
 
     def cycle_visualizer_color(self) -> str:
@@ -4866,6 +4945,8 @@ class SpoffTUI(App):
             if self.keybindings.get("clone_playlist") in ("Y", "shift+y"):
                 bind_secondary("shift+y", "clone_playlist")
             bind_secondary("alt+c", "clone_playlist")
+            if self.keybindings.get("toggle_vis_on_off") in ("V", "shift+v"):
+                bind_secondary("shift+v", "toggle_vis_on_off")
 
             # Dual playback & volume secondary bindings (hardware Fn & dedicated media keys only)
             bind_secondary("f8", "toggle_play")
@@ -4989,7 +5070,9 @@ class SpoffTUI(App):
             self.mpris.update_volume(self.volume)
             self.mpris.update_loop_status(self.repeat_mode)
             self.mpris.update_shuffle(self.shuffle_mode)
-        self.visualizer.start()
+        if self.vis_enabled and self.visualizer.style != "off":
+            self.visualizer.start()
+        self._apply_visualizer_visibility()
         self.check_github_updates_bg()
         self.backfill_playlists_art_bg()
 
@@ -8207,8 +8290,14 @@ def main():
     watchdog_thread = threading.Thread(target=_parent_watchdog, daemon=True)
     watchdog_thread.start()
 
+    vis_arg: Optional[bool] = None
+    if any(arg in sys.argv for arg in ("--no-visualizer", "--no-vis", "--no-cava", "--disable-visualizer")):
+        vis_arg = False
+    elif any(arg in sys.argv for arg in ("--visualizer", "--vis", "--cava", "--enable-visualizer")):
+        vis_arg = True
+
     try:
-        app = SpoffTUI()
+        app = SpoffTUI(visualizer_enabled=vis_arg)
         app.run()
     finally:
         try:

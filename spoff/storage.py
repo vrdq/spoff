@@ -364,12 +364,35 @@ def save_auto_update(enabled: bool):
         logger.error(f"Error saving auto update setting: {e}")
         raise
 
+def get_saved_visualizer_enabled() -> bool:
+    """Retrieves whether the CAVA visualizer is enabled, defaulting to True."""
+    try:
+        cfg = load_config()
+        if "visualizer_enabled" in cfg:
+            return bool(cfg["visualizer_enabled"])
+        if cfg.get("visualizer_style") == "off":
+            return False
+    except Exception as e:
+        logger.error(f"Error reading visualizer_enabled: {e}")
+    return True
+
+@transactional
+def save_visualizer_enabled(enabled: bool) -> None:
+    """Persists visualizer enabled state to config."""
+    try:
+        cfg = load_config()
+        cfg["visualizer_enabled"] = bool(enabled)
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving visualizer_enabled: {e}")
+        raise
+
 def get_saved_visualizer_style() -> str:
-    """Retrieves active visualizer style ('bars', 'braille', 'stereo', 'wave', 'dots'), defaulting to 'bars'."""
+    """Retrieves active visualizer style ('bars', 'braille', 'stereo', 'wave', 'dots', 'off'), defaulting to 'bars'."""
     try:
         cfg = load_config()
         style = cfg.get("visualizer_style", "bars")
-        if style in ("bars", "braille", "stereo", "wave", "dots"):
+        if style in ("bars", "braille", "stereo", "wave", "dots", "off"):
             return style
     except Exception as e:
         logger.error(f"Error reading visualizer style: {e}")
@@ -380,7 +403,7 @@ def save_visualizer_style(style: str):
     """Persists visualizer style choice to config."""
     try:
         cfg = load_config()
-        if style in ("bars", "braille", "stereo", "wave", "dots"):
+        if style in ("bars", "braille", "stereo", "wave", "dots", "off"):
             cfg["visualizer_style"] = style
             save_config(cfg)
     except Exception as e:

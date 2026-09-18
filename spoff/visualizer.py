@@ -40,6 +40,7 @@ STYLE_NAMES: Dict[str, str] = {
     "stereo": "Mirrored Stereo Pulse",
     "wave": "Liquid Oscilloscope",
     "dots": "Minimal Matrix",
+    "off": "Disabled (Hidden)",
 }
 
 COLOR_NAMES: Dict[str, str] = {
@@ -101,7 +102,7 @@ class CavaVisualizer:
         self._has_cava = shutil.which("cava") is not None
 
     def start(self) -> None:
-        if self.running:
+        if self.running or self.style == "off":
             return
         self.running = True
 
@@ -177,8 +178,12 @@ bit_format = 8bit
 
     def cycle_style(self) -> str:
         styles = list(STYLE_NAMES.keys())
-        idx = (styles.index(self.style) + 1) % len(styles)
+        idx = (styles.index(self.style) + 1) % len(styles) if self.style in styles else 0
         self.style = styles[idx]
+        if self.style == "off":
+            self.stop()
+        elif not self.running:
+            self.start()
         return self.style
 
     def cycle_color(self) -> str:
@@ -196,6 +201,10 @@ bit_format = 8bit
     def set_style(self, style: str) -> None:
         if style in STYLE_NAMES:
             self.style = style
+            if style == "off":
+                self.stop()
+            elif not self.running:
+                self.start()
 
     def set_color(self, color: str) -> None:
         if color in PALETTES:
@@ -206,7 +215,7 @@ bit_format = 8bit
         Returns a 24-character Rich markup string representing the current
         audio spectrum at 60+ FPS.
         """
-        if not is_playing:
+        if not is_playing or self.style == "off":
             return ""
 
         if is_paused:
@@ -381,6 +390,11 @@ bit_format = 8bit
     def stop(self) -> None:
         self.running = False
         if self.proc:
+            if self.proc.stdout:
+                try:
+                    self.proc.stdout.close()
+                except Exception:
+                    pass
             try:
                 self.proc.terminate()
                 self.proc.wait(timeout=0.2)
@@ -431,15 +445,28 @@ class VisualizerWidget(Static):
         self.set_interval(1.0 / self.fps, self._tick)
 
     def on_click(self, event) -> None:
-        self.visualizer.cycle_style()
+        new_style = self.visualizer.cycle_style()
         app = getattr(self, "app", None)
         if app:
             if hasattr(app, "save_visualizer_preferences"):
                 app.save_visualizer_preferences()
             if hasattr(app, "notify_user"):
                 app.notify_user(f"Visualizer: {self.visualizer.get_style_name()}")
+            if hasattr(app, "_apply_visualizer_visibility"):
+                app._apply_visualizer_visibility()
+            elif new_style == "off":
+                self.display = False
 
     def _tick(self) -> None:
+        if self.visualizer.style == "off":
+            if self.display:
+                self.display = False
+            return
+        elif not self.display:
+            app = getattr(self, "app", None)
+            if getattr(app, "vis_enabled", True):
+                self.display = True
+
         app = getattr(self, "app", None)
         if not app or not hasattr(app, "player"):
             return
