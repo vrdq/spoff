@@ -3318,11 +3318,6 @@ class SpoffTUI(App):
         color: #555555;
     }
 
-    #status-pill {
-        width: auto;
-        text-style: bold;
-    }
-
     /* MAIN TWO-COLUMN SPLIT */
     #main-layout {
         height: 1fr;
@@ -3467,7 +3462,8 @@ class SpoffTUI(App):
     }
 
     #engine-selector-pill:hover {
-        border: solid #569f68;
+        border: solid #444444;
+        color: #ffffff;
     }
 
     #deck-stats-pill {
@@ -3524,7 +3520,7 @@ class SpoffTUI(App):
 
     #shuf-pill, #rep-pill {
         width: auto;
-        margin-right: 2;
+        margin-right: 1;
     }
 
     /* BOTTOM TRANSPORT DECK */
@@ -3763,12 +3759,6 @@ class SpoffTUI(App):
 
     #deck-track {
         width: 1fr;
-    }
-
-    #deck-source {
-        width: auto;
-        text-style: bold;
-        margin-right: 2;
     }
 
     #deck-line-2 {
@@ -4213,9 +4203,13 @@ class SpoffTUI(App):
         color: #555555;
     }
 
+    #spotify-pill:hover {
+        color: #ffffff;
+    }
+
     #settings-pill {
         width: auto;
-        margin-right: 2;
+        margin-right: 0;
         color: #555555;
     }
 
@@ -4767,10 +4761,10 @@ class SpoffTUI(App):
             pill = self.query_one("#engine-selector-pill", SearchEnginePill)
             s_box = self.query_one("#search-box", Input)
             if self.search_engine == "spotify":
-                pill.update("[#767676]YTMusic[/]  [bold #569f68 on #18271c] SPOTIFY [/]")
+                pill.update("[#888888]Spotify[/]")
                 s_box.placeholder = "Search Spotify (artists, tracks)..."
             else:
-                pill.update("[bold #ffffff on #2e2e2e] YTMUSIC [/]  [#767676]Spotify[/]")
+                pill.update("[#888888]YouTube Music[/]")
                 s_box.placeholder = "Search YouTube Music (artists, tracks)..."
         except Exception:
             pass
@@ -4993,7 +4987,6 @@ class SpoffTUI(App):
             yield Static("", id="update-pill")
             yield Static("[#555555]L: Spotify[/]", id="spotify-pill")
             yield Static("[#555555],: Settings[/]", id="settings-pill")
-            yield Static("[dim]STANDBY[/dim]", id="status-pill")
 
         with Horizontal(id="main-layout"):
             with Vertical(id="sidebar"):
@@ -5019,14 +5012,13 @@ class SpoffTUI(App):
                 yield Static("[dim]No track playing[/dim]", id="deck-track")
                 yield Static("", id="deck-stats-pill")
                 yield VisualizerWidget(self.visualizer, id="deck-visualizer")
-                yield Static("[dim]SHUF[/dim]", id="shuf-pill")
-                yield Static("[dim]REP[/dim]", id="rep-pill")
-                yield Static("[dim]IDLE[/dim]", id="deck-source")
+                yield Static("", id="shuf-pill")
+                yield Static("", id="rep-pill")
             with Horizontal(id="deck-line-2"):
                 yield Static("00:00", id="time-elapsed")
                 yield ScrubBar(total=100, show_eta=False, id="playback-bar")
                 yield Static("00:00", id="time-total")
-            yield Static("Enter: play  |  Space / F8: pause  |  l: like  |  s: shuf  |  r: rep  |  4: lyrics  |  : help  |  q: quit", id="deck-line-3")
+            yield Static("Enter: play  |  Space: pause  |  l: like  |  s: shuf  |  r: rep  |  : help  |  q: quit", id="deck-line-3")
 
     def on_mount(self) -> None:
         self._thread_id = threading.get_ident()
@@ -7744,14 +7736,14 @@ class SpoffTUI(App):
         is_paused = self.player.is_paused if curr else False
 
         # Update shuffle & repeat indicators
-        shuf_badge = "[bold #569f68]SHUF[/]" if self.shuffle_mode else "[dim]SHUF[/dim]"
+        shuf_badge = "[#ffffff]SHUF[/]" if self.shuffle_mode else ""
         self.query_one("#shuf-pill", Static).update(shuf_badge)
 
-        rep_badge = "[dim]REP[/dim]"
+        rep_badge = ""
         if self.repeat_mode == "all":
-            rep_badge = "[bold #569f68]REP[/]"
+            rep_badge = "[#ffffff]REP[/]"
         elif self.repeat_mode == "one":
-            rep_badge = "[bold #569f68]REP-1[/]"
+            rep_badge = "[#ffffff]REP-1[/]"
         self.query_one("#rep-pill", Static).update(rep_badge)
 
         # Update synced lyrics tracking
@@ -7770,15 +7762,6 @@ class SpoffTUI(App):
             self.mpris.update_status(curr is not None, is_paused)
 
         if curr:
-            if self.player.is_paused:
-                state_pill = "[bold #c4a768][PAUSED][/]"
-            else:
-                state_pill = "[bold #569f68][PLAYING][/]"
-            self.query_one("#status-pill", Static).update(state_pill)
-
-            is_cached = get_cached_track_path(curr.get("id", "")) is not None
-            src = "[bold #569f68]LOCAL DISK[/]" if is_cached else "[bold #c4a768]STREAMING[/]"
-            self.query_one("#deck-source", Static).update(src)
             safe_title = escape(str(curr.get("title", "") or "Unknown Track"))
             safe_artist = escape(str(curr.get("artist", "") or "")).strip()
             if safe_artist and safe_artist.lower() not in ("unknown", "unknown artist", ""):
@@ -7787,20 +7770,19 @@ class SpoffTUI(App):
                 track_display = f"[bold #ffffff]{safe_title}[/]"
             self.query_one("#deck-track", Static).update(track_display)
         else:
-            self.query_one("#status-pill", Static).update("[dim]STANDBY[/dim]")
-            self.query_one("#deck-source", Static).update("[dim]IDLE[/dim]")
             self.query_one("#deck-track", Static).update("[dim]No track playing[/dim]")
 
         queue_len = len(self.queue)
-        queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else "empty"
+        queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else ""
         vol_str = "Muted" if self.volume == 0 else f"{self.volume}%"
 
         if self.advanced_mode:
             if is_scrubbing:
                 stat_text = "[bold #c4a768]SEEKING[/]"
             else:
-                eq_pill = "[bold #569f68]EQ[/]" if (hasattr(self, "eq_engine") and not self.eq_engine.bypassed) else "[dim]EQ[/]"
-                stat_text = f"[#767676]Vol: {vol_str}  Q: {queue_pos}[/]  {eq_pill}"
+                eq_pill = "  [#ffffff]EQ[/]" if (hasattr(self, "eq_engine") and not self.eq_engine.bypassed) else ""
+                q_text = f"  Q: {queue_pos}" if queue_pos else ""
+                stat_text = f"[#767676]Vol: {vol_str}{q_text}[/]{eq_pill}"
             try:
                 stats_pill = self.query_one("#deck-stats-pill", Static)
                 stats_pill.update(stat_text)
@@ -7842,17 +7824,14 @@ class SpoffTUI(App):
                 like_hint = f"{like_k}: like  |  " if like_k else ""
                 shuf_k = format_key_display(self.keybindings.get("toggle_shuffle", "s"))
                 rep_k = format_key_display(self.keybindings.get("toggle_repeat", "r"))
-                lyr_k = format_key_display(self.keybindings.get("nav_lyrics", "4"))
                 vis_k = format_key_display(self.keybindings.get("toggle_visualizer", "v"))
                 eq_k = format_key_display(self.keybindings.get("open_equalizer", "e"))
                 eq_hint = f"{eq_k}: eq  |  " if eq_k else ""
-                dl_k = format_key_display(self.keybindings.get("download_offline", "b"))
-                dl_hint = f"{dl_k}: offline  |  " if dl_k else ""
-                sett_k = format_key_display(self.keybindings.get("open_settings", ","))
                 help_k = format_key_display(self.keybindings.get("show_help", ":"))
                 help_label = ": help" if help_k in (":", "colon") else f"{help_k}: help"
                 quit_k = format_key_display(self.keybindings.get("quit_app", "q"))
-                hints = f"Vol: {vol_str}  |  Queue: {queue_pos}  |  {share_hint}{like_hint}{shuf_k}: shuf  |  {rep_k}: rep  |  {lyr_k}: lyrics  |  {vis_k}: vis  |  {eq_hint}{dl_hint}{sett_k}: set  |  {help_label}  |  {quit_k}: quit"
+                q_hint = f"Queue: {queue_pos}  |  " if queue_pos else ""
+                hints = f"Vol: {vol_str}  |  {q_hint}{share_hint}{like_hint}{shuf_k}: shuf  |  {rep_k}: rep  |  {vis_k}: vis  |  {eq_hint}{help_label}  |  {quit_k}: quit"
             try:
                 deck_l3 = self.query_one("#deck-line-3", Static)
                 deck_l3.update(escape(hints))

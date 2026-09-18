@@ -10,7 +10,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from spoff import storage
 from spoff.app import DEFAULT_KEYBINDINGS, ACTION_INFO, SpoffTUI
-from spoff.auth import sync_spotify_library, remove_track_from_spotify_account, add_track_to_spotify_account
 from textual.widgets import DataTable
 
 
@@ -463,6 +462,82 @@ class TestDeckTrackFormatting(unittest.TestCase):
 
         updated_text = widgets["#deck-track"].update.call_args[0][0]
         self.assertEqual(updated_text, "[dim]No track playing[/dim]")
+
+    def test_hud_declutter_no_status_pill_or_deck_source(self):
+        from collections import defaultdict
+        # When playing
+        self.app.player.current_track = {"id": "1", "title": "Song", "artist": "Artist"}
+        widgets = defaultdict(Mock)
+        self.app.query_one = Mock(side_effect=lambda sel, *args, **kwargs: widgets[sel])
+        self.app.update_player_hud()
+        self.assertNotIn("#status-pill", widgets)
+        self.assertNotIn("#deck-source", widgets)
+
+        # When idle
+        self.app.player.current_track = None
+        widgets.clear()
+        self.app.update_player_hud()
+        self.assertNotIn("#status-pill", widgets)
+        self.assertNotIn("#deck-source", widgets)
+
+    def test_shuf_and_rep_pill_empty_when_inactive(self):
+        from collections import defaultdict
+        widgets = defaultdict(Mock)
+        self.app.query_one = Mock(side_effect=lambda sel, *args, **kwargs: widgets[sel])
+
+        # Both inactive
+        self.app.shuffle_mode = False
+        self.app.repeat_mode = "off"
+        self.app.update_player_hud()
+        self.assertEqual(widgets["#shuf-pill"].update.call_args[0][0], "")
+        self.assertEqual(widgets["#rep-pill"].update.call_args[0][0], "")
+
+        # Active states
+        self.app.shuffle_mode = True
+        self.app.repeat_mode = "all"
+        self.app.update_player_hud()
+        self.assertEqual(widgets["#shuf-pill"].update.call_args[0][0], "[#ffffff]SHUF[/]")
+        self.assertEqual(widgets["#rep-pill"].update.call_args[0][0], "[#ffffff]REP[/]")
+
+        self.app.repeat_mode = "one"
+        self.app.update_player_hud()
+        self.assertEqual(widgets["#rep-pill"].update.call_args[0][0], "[#ffffff]REP-1[/]")
+
+    def test_deck_line_3_omits_queue_empty_and_duplicate_hints(self):
+        from collections import defaultdict
+        widgets = defaultdict(Mock)
+        self.app.query_one = Mock(side_effect=lambda sel, *args, **kwargs: widgets[sel])
+        self.app.advanced_mode = False
+
+        # Empty queue
+        self.app.queue = []
+        self.app.current_index = -1
+        self.app.update_player_hud()
+        hints = widgets["#deck-line-3"].update.call_args[0][0]
+        self.assertNotIn("Queue: empty", hints)
+        self.assertNotIn(": set", hints)
+        self.assertNotIn(": lyrics", hints)
+        self.assertNotIn(": offline", hints)
+
+        # Active queue
+        self.app.queue = [{"id": "1"}, {"id": "2"}, {"id": "3"}]
+        self.app.current_index = 1
+        self.app.update_player_hud()
+        hints_q = widgets["#deck-line-3"].update.call_args[0][0]
+        self.assertIn("Queue: 2/3", hints_q)
+
+    def test_engine_pill_clean_display(self):
+        widgets = {"#engine-selector-pill": Mock(), "#search-box": Mock()}
+        self.app.query_one = Mock(side_effect=lambda sel, *args, **kwargs: widgets[sel])
+
+        self.app.search_engine = "spotify"
+        self.app.update_engine_pill()
+        widgets["#engine-selector-pill"].update.assert_called_with("[#888888]Spotify[/]")
+
+        self.app.search_engine = "ytmusic"
+        self.app.update_engine_pill()
+        widgets["#engine-selector-pill"].update.assert_called_with("[#888888]YouTube Music[/]")
+
     def test_liked_songs_reorder_queue_mirroring(self):
         self.app.active_tab = "liked"
         tracks = [{"id": "1", "title": "A"}, {"id": "2", "title": "B"}, {"id": "3", "title": "C"}]
