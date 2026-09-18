@@ -6290,15 +6290,9 @@ class SpoffTUI(App):
 
     def update_spotify_pill(self):
         try:
-            auth_data = load_spotify_auth()
             pill = self.query_one("#spotify-pill", Static)
-            if auth_data and get_valid_token():
-                user = auth_data.get("user", {})
-                name = user.get("display_name") or user.get("id") or "Connected"
-                pill.update(f"[bold #569f68]● {escape(str(name))}[/]")
-            else:
-                k = format_key_display(self.keybindings.get("open_spotify_auth", "L"))
-                pill.update("[#555555]Spotify[/]" if self.advanced_mode else f"[#555555]{k}: Spotify[/]")
+            k = format_key_display(self.keybindings.get("open_spotify_auth", "L"))
+            pill.update("[#555555]Spotify[/]" if self.advanced_mode else f"[#555555]{k}: Spotify[/]")
         except Exception:
             pass
 
