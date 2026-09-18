@@ -244,7 +244,7 @@ class TestPlaylistSelectorAndLikedTabAppLogic(unittest.TestCase):
 
         rendered = []
         with patch.object(self.app, "query_one", side_effect=mock_query), \
-             patch.object(self.app, "render_tracks", side_effect=lambda tr: rendered.append(tr)), \
+             patch.object(self.app, "render_tracks", side_effect=lambda tr, *a, **kw: rendered.append(tr)), \
              patch.object(self.app, "_update_nav_bar"):
             self.app.switch_view("liked")
 
@@ -463,6 +463,99 @@ class TestDeckTrackFormatting(unittest.TestCase):
 
         updated_text = widgets["#deck-track"].update.call_args[0][0]
         self.assertEqual(updated_text, "[dim]No track playing[/dim]")
+    def test_liked_songs_reorder_queue_mirroring(self):
+        self.app.active_tab = "liked"
+        tracks = [{"id": "1", "title": "A"}, {"id": "2", "title": "B"}, {"id": "3", "title": "C"}]
+        self.app.current_liked_tracks = list(tracks)
+        self.app.queue = list(tracks)
+        self.app.current_index = 1
+        self.app.focused = None
+
+        mock_tt = Mock()
+        mock_tt.cursor_row = 1
+        self.app.query_one = Mock(return_value=mock_tt)
+
+        with patch.object(self.app, "render_tracks"), \
+             patch("spoff.app.save_liked_songs"):
+            self.app.action_move_item_up()
+
+        self.assertEqual([t["id"] for t in self.app.current_liked_tracks], ["2", "1", "3"])
+        self.assertEqual([t["id"] for t in self.app.queue], ["2", "1", "3"])
+        self.assertEqual(self.app.current_index, 0)
+
+        mock_tt.cursor_row = 0
+        with patch.object(self.app, "render_tracks"), \
+             patch("spoff.app.save_liked_songs"):
+            self.app.action_move_item_down()
+
+        self.assertEqual([t["id"] for t in self.app.current_liked_tracks], ["1", "2", "3"])
+        self.assertEqual([t["id"] for t in self.app.queue], ["1", "2", "3"])
+        self.assertEqual(self.app.current_index, 1)
+
+    def test_liked_songs_unlike_queue_sync(self):
+        self.app.active_tab = "liked"
+        self.app._is_ready = True
+        tracks = [{"id": "1", "title": "A", "artist": "Art1"}, {"id": "2", "title": "B", "artist": "Art2"}]
+        self.app.current_liked_tracks = list(tracks)
+        self.app.queue = list(tracks)
+        self.app.current_index = 1
+
+        mock_tt = Mock(spec=DataTable)
+        mock_tt.id = "track-table"
+        mock_tt.cursor_row = 1
+
+        with patch.object(SpoffTUI, "focused", new_callable=PropertyMock, return_value=mock_tt), \
+             patch("spoff.app.is_track_liked", return_value=True), \
+             patch("spoff.app.remove_track_from_liked_songs"), \
+             patch("spoff.app.load_liked_songs", return_value=[{"id": "1", "title": "A", "artist": "Art1"}]), \
+             patch.object(self.app, "render_tracks") as mock_render, \
+             patch("spoff.app.is_client_side_track", return_value=True):
+            self.app.action_like_track()
+
+        self.assertEqual(len(self.app.queue), 1)
+        self.assertEqual(self.app.queue[0]["id"], "1")
+        self.assertEqual(self.app.current_index, 0)
+        # Verify select_row was clamped
+        mock_render.assert_called_with([{"id": "1", "title": "A", "artist": "Art1"}], select_row=0)
+
+    def test_on_track_finished_closing_guard(self):
+        mock_call = Mock()
+        self.app.call_from_thread = mock_call
+
+        self.app._closing = True
+        self.app.is_mounted = True
+        self.app.on_track_finished()
+        mock_call.assert_not_called()
+
+        self.app._closing = False
+        self.app.is_mounted = False
+        self.app.on_track_finished()
+        mock_call.assert_not_called()
+
+    def test_render_tracks_clamps_old_cursor(self):
+        mock_table = Mock(spec=DataTable)
+        mock_table.cursor_row = 10  # Previous cursor was at row 10
+        self.app.query_one = Mock(return_value=mock_table)
+        self.app.player.current_track = None
+
+        tracks = [{"id": f"t{i}", "title": f"Track {i}"} for i in range(5)]
+        self.app.render_tracks(tracks)
+
+        # Because len(tracks) is 5, max index is 4. Old cursor was 10.
+        # Should clamp to 4 instead of resetting to 0.
+        mock_table.move_cursor.assert_called_with(row=4)
+
+    def test_render_tracks_reset_cursor_on_tab_switch(self):
+        mock_table = Mock(spec=DataTable)
+        mock_table.cursor_row = 10
+        self.app.query_one = Mock(return_value=mock_table)
+        self.app.player.current_track = None
+
+        tracks = [{"id": f"t{i}", "title": f"Track {i}"} for i in range(5)]
+        self.app.render_tracks(tracks, reset_cursor=True)
+
+        # When reset_cursor is True, should reset to 0 (or playing_idx if playing)
+        mock_table.move_cursor.assert_called_with(row=0)
 
 
 if __name__ == "__main__":

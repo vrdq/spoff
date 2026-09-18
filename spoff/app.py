@@ -37,7 +37,7 @@ try:
         parse_ytmusic_url
     )
     from .storage import (
-        load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
+        load_saved_playlists, add_saved_playlist, remove_saved_playlist,
         rename_saved_playlist, clone_saved_playlist, move_saved_playlist, merge_track_artwork,
         create_local_playlist, add_track_to_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
@@ -82,7 +82,7 @@ except ImportError:
         parse_ytmusic_url
     )
     from storage import (
-        load_saved_playlists, save_saved_playlists, add_saved_playlist, remove_saved_playlist,
+        load_saved_playlists, add_saved_playlist, remove_saved_playlist,
         rename_saved_playlist, clone_saved_playlist, move_saved_playlist, merge_track_artwork,
         create_local_playlist, add_track_to_playlist,
         update_playlist_tracks, get_cached_track_path, load_offline_index,
@@ -5456,7 +5456,7 @@ class SpoffTUI(App):
         self._update_nav_bar()
 
         if view == "search":
-            self.render_tracks(self.search_results)
+            self.render_tracks(self.search_results, reset_cursor=True)
             if getattr(self, "instant_search", True):
                 try:
                     self.query_one("#search-box", Input).focus()
@@ -5483,7 +5483,7 @@ class SpoffTUI(App):
                 self.current_playlist_id = self.playlists[0].get("id")
                 self.current_playlist_tracks = list(self.playlists[0].get("tracks", []))
 
-            self.render_tracks(self.current_playlist_tracks)
+            self.render_tracks(self.current_playlist_tracks, reset_cursor=True)
             st = self.query_one("#side-table", DataTable)
             should_focus_sidebar = focus_sidebar if focus_sidebar is not None else True
             if should_focus_sidebar:
@@ -5510,7 +5510,7 @@ class SpoffTUI(App):
                 self.notify_user("")
         elif view == "liked":
             self.current_liked_tracks = load_liked_songs()
-            self.render_tracks(self.current_liked_tracks)
+            self.render_tracks(self.current_liked_tracks, reset_cursor=True)
             if not (self.focused and self.focused.id == "side-table"):
                 track_table.focus()
             if not self.current_liked_tracks:
@@ -5519,7 +5519,7 @@ class SpoffTUI(App):
                 self.notify_user("")
         elif view == "offline":
             offline_tracks = list(load_offline_index().values())
-            self.render_tracks(offline_tracks)
+            self.render_tracks(offline_tracks, reset_cursor=True)
             if not (self.focused and self.focused.id == "side-table"):
                 track_table.focus()
             if not offline_tracks:
@@ -5641,7 +5641,7 @@ class SpoffTUI(App):
             except Exception:
                 pass
 
-    def render_tracks(self, tracks: List[Dict[str, Any]], select_row: Optional[int] = None):
+    def render_tracks(self, tracks: List[Dict[str, Any]], select_row: Optional[int] = None, reset_cursor: bool = False):
         table = self.query_one("#track-table", DataTable)
         old_cursor = table.cursor_row
         table.clear()
@@ -5701,10 +5701,12 @@ class SpoffTUI(App):
         if tracks:
             if select_row is not None:
                 target = max(0, min(select_row, len(tracks) - 1))
+            elif reset_cursor:
+                target = playing_idx if playing_idx is not None else 0
+            elif old_cursor is not None and old_cursor >= 0:
+                target = min(old_cursor, len(tracks) - 1)
             elif playing_idx is not None:
                 target = playing_idx
-            elif old_cursor is not None and 0 <= old_cursor < len(tracks):
-                target = old_cursor
             else:
                 target = 0
             try:
@@ -5920,6 +5922,21 @@ class SpoffTUI(App):
                 track = self.current_liked_tracks.pop(idx)
                 self.current_liked_tracks.insert(new_idx, track)
                 save_liked_songs(self.current_liked_tracks)
+                is_queue_mirroring = (
+                    bool(self.queue)
+                    and len(self.queue) == len(self.current_liked_tracks)
+                    and 0 <= idx < len(self.queue)
+                    and 0 <= new_idx < len(self.queue)
+                    and (self.queue[idx] == track or (track.get("id") and self.queue[idx].get("id") == track.get("id")))
+                )
+                if is_queue_mirroring:
+                    if self.current_index == idx:
+                        self.current_index = new_idx
+                    elif self.current_index == new_idx:
+                        self.current_index = idx
+                    q_item = self.queue.pop(idx)
+                    self.queue.insert(new_idx, q_item)
+
                 self.render_tracks(self.current_liked_tracks, select_row=new_idx)
                 tt.focus()
                 return
@@ -6005,6 +6022,21 @@ class SpoffTUI(App):
                 track = self.current_liked_tracks.pop(idx)
                 self.current_liked_tracks.insert(new_idx, track)
                 save_liked_songs(self.current_liked_tracks)
+                is_queue_mirroring = (
+                    bool(self.queue)
+                    and len(self.queue) == len(self.current_liked_tracks)
+                    and 0 <= idx < len(self.queue)
+                    and 0 <= new_idx < len(self.queue)
+                    and (self.queue[idx] == track or (track.get("id") and self.queue[idx].get("id") == track.get("id")))
+                )
+                if is_queue_mirroring:
+                    if self.current_index == idx:
+                        self.current_index = new_idx
+                    elif self.current_index == new_idx:
+                        self.current_index = idx
+                    q_item = self.queue.pop(idx)
+                    self.queue.insert(new_idx, q_item)
+
                 self.render_tracks(self.current_liked_tracks, select_row=new_idx)
                 tt.focus()
                 return
@@ -6621,7 +6653,34 @@ class SpoffTUI(App):
             remove_track_from_liked_songs(t_id if t_id else t_title, artist=track.get("artist"))
             self.current_liked_tracks = load_liked_songs()
             if self.active_tab == "liked":
-                self.render_tracks(self.current_liked_tracks)
+                f = self.focused
+                new_row = None
+                if isinstance(f, DataTable) and f.id == "track-table" and f.cursor_row is not None:
+                    if self.current_liked_tracks:
+                        new_row = max(0, min(f.cursor_row, len(self.current_liked_tracks) - 1))
+                self.render_tracks(self.current_liked_tracks, select_row=new_row)
+                if self.queue:
+                    q_idx = None
+                    target_row = f.cursor_row if (isinstance(f, DataTable) and f.cursor_row is not None) else None
+                    if target_row is not None and 0 <= target_row < len(self.queue) and (self.queue[target_row] == track or (track.get("id") and self.queue[target_row].get("id") == track.get("id"))):
+                        q_idx = target_row
+                    else:
+                        for i, q_item in enumerate(self.queue):
+                            if q_item == track or (track.get("id") and q_item.get("id") == track.get("id")):
+                                q_idx = i
+                                break
+                    if q_idx is not None:
+                        was_current = (q_idx == self.current_index)
+                        self.queue.pop(q_idx)
+                        if not self.queue:
+                            self.current_index = -1
+                        elif was_current:
+                            self.current_index = q_idx - 1
+                        elif q_idx < self.current_index:
+                            self.current_index -= 1
+                        if hasattr(self, "_shuffle_history") and self._shuffle_history is not None:
+                            self._shuffle_history.clear()
+                        self.update_player_hud()
             self.notify_user(f"Removed '{t_title}' from Liked Songs.")
 
             if not is_client_side_track(track):
@@ -6636,7 +6695,9 @@ class SpoffTUI(App):
             add_track_to_liked_songs(track)
             self.current_liked_tracks = load_liked_songs()
             if self.active_tab == "liked":
-                self.render_tracks(self.current_liked_tracks)
+                f = self.focused
+                curr_row = f.cursor_row if (isinstance(f, DataTable) and f.id == "track-table" and f.cursor_row is not None) else None
+                self.render_tracks(self.current_liked_tracks, select_row=curr_row)
             self.notify_user(f"Added '{t_title}' to Liked Songs.")
 
             if not is_client_side_track(track):
@@ -7423,10 +7484,8 @@ class SpoffTUI(App):
                             update_playlist_tracks(pl_id, pl_tracks)
                         if self.current_playlist_id == pl_id:
                             self.current_playlist_tracks = pl_tracks
-                            self.render_tracks(pl_tracks)
-                            if pl_tracks and isinstance(f, DataTable):
-                                new_row = max(0, min(found_idx, len(pl_tracks) - 1))
-                                f.move_cursor(row=new_row)
+                            new_row = max(0, min(found_idx, len(pl_tracks) - 1)) if pl_tracks else None
+                            self.render_tracks(pl_tracks, select_row=new_row)
                         self.playlists = load_saved_playlists()
                         self.refresh_side_table()
 
@@ -7484,12 +7543,10 @@ class SpoffTUI(App):
                 def handle_remove_liked_confirm(confirmed: Optional[bool]) -> None:
                     if not confirmed:
                         return
-                    remove_track_from_liked_songs(t_id if t_id else t_title)
+                    remove_track_from_liked_songs(t_id if t_id else t_title, artist=t.get("artist"))
                     self.current_liked_tracks = load_liked_songs()
-                    self.render_tracks(self.current_liked_tracks)
-                    if self.current_liked_tracks and isinstance(f, DataTable):
-                        new_row = max(0, min(row_idx, len(self.current_liked_tracks) - 1))
-                        f.move_cursor(row=new_row)
+                    new_row = max(0, min(row_idx, len(self.current_liked_tracks) - 1)) if self.current_liked_tracks else None
+                    self.render_tracks(self.current_liked_tracks, select_row=new_row)
 
                     if not is_client_side_track(t):
                         def _sync_remove_liked_bg():
@@ -7540,10 +7597,8 @@ class SpoffTUI(App):
                     if t.get("id"):
                         delete_cached_track(t["id"])
                     remaining = list(load_offline_index().values())
-                    self.render_tracks(remaining)
-                    if remaining and isinstance(f, DataTable):
-                        new_row = max(0, min(row_idx, len(remaining) - 1))
-                        f.move_cursor(row=new_row)
+                    new_row = max(0, min(row_idx, len(remaining) - 1)) if remaining else None
+                    self.render_tracks(remaining, select_row=new_row)
                     if self.queue:
                         q_idx = None
                         if 0 <= row_idx < len(self.queue) and (self.queue[row_idx] == t or (t.get("id") and self.queue[row_idx].get("id") == t.get("id"))):
@@ -7601,6 +7656,8 @@ class SpoffTUI(App):
                 self.action_delete_playlist()
 
     def on_track_finished(self):
+        if getattr(self, "_closing", False) or not getattr(self, "is_mounted", False):
+            return
         if self.repeat_mode == "one" and self.current_index >= 0:
             self.call_from_thread(self.play_index, self.current_index)
         else:

@@ -1146,7 +1146,7 @@ def rename_spotify_playlist(
         token=token
     )
     if ok:
-        return True, f"Renamed playlist on Spotify"
+        return True, f"Renamed playlist on Spotify to '{new_name}'"
     return False, err
 
 
