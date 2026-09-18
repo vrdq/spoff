@@ -768,29 +768,29 @@ class RebindKeyModal(ModalScreen[Optional[str]]):
         self.selected_key = current_key
 
     def compose(self) -> ComposeResult:
-        cur_disp = format_key_display(self.current_key) if self.current_key else "[dim #888888]Unbound[/]"
-        def_disp = format_key_display(self.default_key) if self.default_key else "[dim #888888]None[/]"
+        cur_disp = format_key_display(self.current_key) if self.current_key else "[dim]Unbound[/dim]"
+        def_disp = format_key_display(self.default_key) if self.default_key else "[dim]None[/dim]"
         with Vertical(id="rebind-dialog"):
             with Horizontal(id="rebind-header"):
                 yield Static("REBIND SHORTCUT", id="rebind-title")
                 yield Static("[dim]Esc to unbind  |  Ctrl+C to cancel[/dim]", id="rebind-close-hint")
 
-            yield Static(f"Action: [bold #ffffff]{escape(str(self.action_title))}[/]  [#767676]({escape(str(self.action_category))})[/]", id="rebind-action-info")
-            yield Static(f"Current: [bold #569f68]{cur_disp}[/]   [#444444]•[/]   Default: [dim]{def_disp}[/dim]", id="rebind-curr-info")
+            yield Static(f"Action: [#ffffff]{escape(str(self.action_title))}[/]  [dim]({escape(str(self.action_category))})[/dim]", id="rebind-action-info")
+            yield Static(f"Current: [#ffffff]{cur_disp}[/]   [#444444]•[/]   Default: [dim]{def_disp}[/dim]", id="rebind-curr-info")
 
             with Vertical(id="rebind-capture-container"):
                 yield KeyCaptureBox(
-                    "[bold #569f68]● LISTENING FOR KEYPRESS...[/]\n[#767676]Press any key, function key, or combo (e.g. [/][bold #ffffff]y[/][#767676], [/][bold #ffffff]Space[/][#767676], [/][bold #ffffff]Ctrl+1[/][#767676])[/]",
+                    "[#ffffff]Listening for keypress...[/]\n[#767676]Press any key, function key, or combo[/]",
                     id="rebind-capture-box"
                 )
-                yield Static(f"[dim]Current:[/] [bold #569f68]{cur_disp}[/]", id="rebind-key-display")
-                yield Static("[#767676]Press Enter to keep, Esc to unbind, or press a new key to rebind[/]", id="rebind-conflict-warning")
+                yield Static(f"[dim]Current:[/] [#ffffff]{cur_disp}[/]", id="rebind-key-display")
+                yield Static("[#767676]Press Enter to save, Esc to unbind, or press a new key[/]", id="rebind-conflict-warning")
 
             with Horizontal(id="rebind-buttons"):
-                yield Button("Save [Enter]", variant="primary", id="rebind-btn-save")
-                yield Button("Unbind [Esc]", variant="warning", id="rebind-btn-unbind")
+                yield Button("Save [Enter]", id="rebind-btn-save")
+                yield Button("Unbind [Esc]", id="rebind-btn-unbind")
                 yield Button("Reset Default", id="rebind-btn-default")
-                yield Button("Cancel [Ctrl+C]", id="rebind-btn-cancel")
+                yield Button("Cancel", id="rebind-btn-cancel")
 
     def on_mount(self) -> None:
         try:
@@ -801,14 +801,14 @@ class RebindKeyModal(ModalScreen[Optional[str]]):
 
     def _update_preview(self, val: str) -> None:
         c_key = canonicalize_key(val) if val else ""
-        disp = format_key_display(c_key) if c_key else "[dim #888888]Unbound[/]"
+        disp = format_key_display(c_key) if c_key else "[dim]Unbound[/dim]"
 
         try:
             self.query_one("#rebind-capture-box", KeyCaptureBox).update(
-                "[bold #569f68]● KEY DETECTED[/]\n[#767676]Press [bold #ffffff]Enter[/] to save, [bold #ffffff]Esc[/] to unbind, or press another key to change[/]"
+                "[#ffffff]Key detected[/]\n[#767676]Press Enter to save, Esc to unbind, or press another key[/]"
             )
             self.query_one("#rebind-key-display", Static).update(
-                f"[dim]Captured:[/] [bold #569f68]{disp}[/]"
+                f"[dim]Captured:[/] [#ffffff]{disp}[/]"
             )
 
             conflicting_act = None
@@ -821,9 +821,9 @@ class RebindKeyModal(ModalScreen[Optional[str]]):
             warning_lbl = self.query_one("#rebind-conflict-warning", Static)
             if conflicting_act:
                 _, conf_title = ACTION_INFO.get(conflicting_act, ("General", conflicting_act))
-                warning_lbl.update(f"[bold #c4a768]⚠ Replaces existing shortcut for '{escape(str(conf_title))}'[/]")
+                warning_lbl.update(f"[#c4a768]Replaces existing shortcut for '{escape(str(conf_title))}'[/]")
             else:
-                warning_lbl.update("[#569f68]✓ Valid shortcut. Press Enter to confirm.[/]")
+                warning_lbl.update("[#888888]Valid shortcut. Press Enter to confirm.[/]")
         except Exception:
             pass
 
@@ -906,9 +906,10 @@ class SettingsModal(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-dialog"):
             with Horizontal(id="settings-header"):
-                yield Static("SETTINGS & KEYBINDS", id="settings-title")
+                yield Static("SETTINGS", id="settings-title")
                 yield Static("[dim]Esc / q to close[/dim]", id="settings-close-hint")
 
+            yield Static("PREFERENCES", id="settings-options-title")
             with Vertical(id="settings-options-container"):
                 yield AdvModeToggle(id="adv-mode-toggle", classes="setting-toggle-item")
                 yield TransparencyToggle(id="transparency-toggle", classes="setting-toggle-item")
@@ -920,10 +921,10 @@ class SettingsModal(ModalScreen[None]):
                 yield VisualizerColorToggle(id="vis-color-toggle", classes="setting-toggle-item")
                 yield EQSettingsNavToggle(id="eq-settings-nav-toggle", classes="setting-toggle-item")
 
-            yield Static("REBINDABLE ACTIONS", id="settings-table-title")
+            yield Static("KEYBINDINGS", id="settings-table-title")
             yield DataTable(id="settings-table", cursor_type="row", show_header=True)
             yield Static("", id="settings-status-line")
-            yield Static("[dim]Enter: rebind  |  u / Del: unbind  |  Backspace: reset default  |  R: reset all  |  j/k: navigate[/dim]", id="settings-footer")
+            yield Static("[dim]Enter / Space: toggle  |  Enter: rebind  |  u: unbind  |  Backspace: reset default[/dim]", id="settings-footer")
 
     def on_mount(self) -> None:
         self.update_toggle_ui()
@@ -939,11 +940,11 @@ class SettingsModal(ModalScreen[None]):
             cur_key = self.spoff_app.keybindings.get(act_id, "")
             is_default = (cur_key == DEFAULT_KEYBINDINGS.get(act_id))
             if not cur_key:
-                disp_k = "[dim #888888]Unbound[/]"
-                status_str = "[dim #c47676]Unbound[/]"
+                disp_k = "[dim]—[/dim]"
+                status_str = "[dim]unbound[/dim]"
             else:
                 disp_k = format_key_display(cur_key)
-                status_str = "[dim]Default[/dim]" if is_default else "[bold #569f68]Custom[/]"
+                status_str = "[dim]default[/dim]" if is_default else "[#ffffff]custom[/]"
             table.add_row(cat, title, disp_k, status_str, key=act_id)
 
         try:
@@ -954,112 +955,106 @@ class SettingsModal(ModalScreen[None]):
     def update_toggle_ui(self) -> None:
         try:
             adv_toggle = self.query_one("#adv-mode-toggle", AdvModeToggle)
-            if getattr(self.spoff_app, "advanced_mode", False):
-                adv_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]Advanced Mode[/]  [dim]— Keybind strings & HUD hints hidden[/dim]")
+            is_adv = getattr(self.spoff_app, "advanced_mode", False)
+            adv_state = "[#ffffff]On[/]" if is_adv else "[#666666]Off[/]"
+            adv_toggle.update(f" {'Advanced Mode':<26} {adv_state}")
+
+            if is_adv:
                 self.query_one("#settings-footer", Static).update("")
                 self.query_one("#settings-close-hint", Static).update("")
             else:
-                adv_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]Advanced Mode[/]  [dim]— Press Space/Enter to hide keybind indicators[/dim]")
-                self.query_one("#settings-footer", Static).update("[dim]Enter: rebind  |  u / Del: unbind  |  Backspace: reset default  |  R: reset all  |  j/k: navigate[/dim]")
+                self.query_one("#settings-footer", Static).update("[dim]Enter / Space: toggle  |  Enter: rebind  |  u: unbind  |  Backspace: reset default[/dim]")
                 self.query_one("#settings-close-hint", Static).update("[dim]Esc / q to close[/dim]")
 
             trans_toggle = self.query_one("#transparency-toggle", TransparencyToggle)
             if getattr(self.spoff_app, "transparency", True):
                 op_pct = int(round(getattr(self.spoff_app, "transparency_opacity", 0.85) * 100))
-                trans_toggle.update(f"[bold #569f68]● ENABLED ({op_pct}%)[/]   [#ffffff]UI Transparency[/]  [dim]— Terminal background & blur shines through[/dim]")
+                trans_state = f"[#ffffff]On ({op_pct}%)[/]"
             else:
-                trans_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]UI Transparency[/]  [dim]— Solid dark opaque background[/dim]")
+                trans_state = "[#666666]Off[/]"
+            trans_toggle.update(f" {'UI Transparency':<26} {trans_state}")
 
             instant_toggle = self.query_one("#instant-search-toggle", InstantSearchToggle)
-            if getattr(self.spoff_app, "instant_search", True):
-                instant_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]Instant Search[/]  [dim]— Search bar is immediately ready to type on Search tab[/dim]")
-            else:
-                instant_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]Instant Search[/]  [dim]— Track table focused; press / to activate search bar[/dim]")
+            inst_state = "[#ffffff]On[/]" if getattr(self.spoff_app, "instant_search", True) else "[#666666]Off[/]"
+            instant_toggle.update(f" {'Instant Search':<26} {inst_state}")
 
             autoup_toggle = self.query_one("#auto-update-toggle", AutoUpdateToggle)
-            if getattr(self.spoff_app, "auto_update", True):
-                autoup_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]Auto-Update[/]  [dim]— Automatically downloads & installs updates in background[/dim]")
-            else:
-                autoup_toggle.update("[#767676]○ DISABLED[/]  [#cccccc]Auto-Update[/]  [dim]— Manual notification only; press 'u' to update[/dim]")
+            autoup_state = "[#ffffff]On[/]" if getattr(self.spoff_app, "auto_update", True) else "[#666666]Off[/]"
+            autoup_toggle.update(f" {'Auto-Update':<26} {autoup_state}")
 
             eng_toggle = self.query_one("#engine-toggle", SearchEngineToggle)
-            if getattr(self.spoff_app, "search_engine", "ytmusic") == "spotify":
-                eng_toggle.update("[bold #569f68]● SPOTIFY[/]   [#ffffff]Search Engine[/]  [dim]— Official Spotify catalogue (syncs with Spotify)[/dim]")
-            else:
-                eng_toggle.update("[bold #ffffff]● YT MUSIC[/]  [#cccccc]Search Engine[/]  [dim]— YouTube Music streams (local playlists only)[/dim]")
+            eng_label = "Spotify" if getattr(self.spoff_app, "search_engine", "ytmusic") == "spotify" else "YouTube Music"
+            eng_toggle.update(f" {'Search Engine':<26} [#ffffff]{eng_label}[/]")
 
             vis_toggle = self.query_one("#vis-toggle", VisualizerToggle)
             vis_enabled = getattr(self.spoff_app, "vis_enabled", True) and (getattr(self.spoff_app.visualizer, "style", "bars") != "off")
-            if vis_enabled:
-                vis_toggle.update("[bold #569f68]● ENABLED[/]   [#ffffff]CAVA Visualizer[/]  [dim]— Live audio frequency spectrum bars on player deck (Shift+V)[/dim]")
-            else:
-                vis_toggle.update("[#767676]○ DISABLED (HIDDEN)[/]  [#cccccc]CAVA Visualizer[/]  [dim]— Visualizer removed, freeing player deck width (Shift+V)[/dim]")
+            vis_state = "[#ffffff]On[/]" if vis_enabled else "[#666666]Off[/]"
+            vis_toggle.update(f" {'CAVA Visualizer':<26} {vis_state}")
 
             vis_style_toggle = self.query_one("#vis-style-toggle", VisualizerStyleToggle)
             style_name = self.spoff_app.visualizer.get_style_name() if hasattr(self.spoff_app, "visualizer") else "Studio Bars"
-            vis_style_toggle.update(f"[bold #569f68]● {style_name.upper()}[/]   [#ffffff]Visualizer Style[/]  [dim]— Bars, Braille EQ, Mirrored, Wave, Matrix (v)[/dim]")
+            vis_style_toggle.update(f" {'Visualizer Style':<26} [#ffffff]{style_name}[/]")
 
             vis_color_toggle = self.query_one("#vis-color-toggle", VisualizerColorToggle)
             color_name = self.spoff_app.visualizer.get_color_name() if hasattr(self.spoff_app, "visualizer") else "Emerald"
-            vis_color_toggle.update(f"[bold #569f68]● {color_name.upper()}[/]   [#ffffff]Visualizer Theme[/]  [dim]— Spotify Emerald, Cyber Cyan, Amber, Mono (C)[/dim]")
+            vis_color_toggle.update(f" {'Visualizer Theme':<26} [#ffffff]{color_name}[/]")
 
             eq_nav_toggle = self.query_one("#eq-settings-nav-toggle", EQSettingsNavToggle)
             eq_eng = getattr(self.spoff_app, "eq_engine", None)
             p_name = eq_eng.preset_name if eq_eng else "AKG Reference"
-            prec = eq_eng.precision.upper() if eq_eng else "F64"
-            eq_nav_toggle.update(f"[bold #569f68]🎛 EQUALIZER & DSP[/]   [#ffffff]Studio Parametric EQ & DSP Engine[/]  [dim]— {p_name} ({prec} Audio DSP)[/dim]")
+            eq_nav_toggle.update(f" {'Equalizer & DSP':<26} [#ffffff]{p_name}[/]  [dim]→[/dim]")
         except Exception:
             pass
 
     def toggle_advanced_mode(self) -> None:
         new_state = self.spoff_app.toggle_advanced_mode()
         self.update_toggle_ui()
-        state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
-        self.query_one("#settings-status-line", Static).update(f"Advanced Mode {state_text}.")
+        state_text = "enabled" if new_state else "disabled"
+        self.query_one("#settings-status-line", Static).update(f"Advanced Mode: {state_text}")
 
     def toggle_transparency(self) -> None:
         new_state = self.spoff_app.toggle_transparency()
         self.update_toggle_ui()
-        state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
-        self.query_one("#settings-status-line", Static).update(f"UI Transparency {state_text}.")
+        state_text = "enabled" if new_state else "disabled"
+        self.query_one("#settings-status-line", Static).update(f"UI Transparency: {state_text}")
 
     def toggle_instant_search(self) -> None:
         new_state = self.spoff_app.toggle_instant_search()
         self.update_toggle_ui()
-        state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
-        self.query_one("#settings-status-line", Static).update(f"Instant Search {state_text}.")
+        state_text = "enabled" if new_state else "disabled"
+        self.query_one("#settings-status-line", Static).update(f"Instant Search: {state_text}")
 
     def toggle_auto_update(self) -> None:
         new_state = self.spoff_app.toggle_auto_update()
         self.update_toggle_ui()
-        state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled[/]"
-        self.query_one("#settings-status-line", Static).update(f"Auto-Update {state_text}.")
+        state_text = "enabled" if new_state else "disabled"
+        self.query_one("#settings-status-line", Static).update(f"Auto-Update: {state_text}")
 
     def toggle_search_engine(self) -> None:
         new_engine = self.spoff_app.toggle_search_engine()
         self.update_toggle_ui()
         label = "Spotify" if new_engine == "spotify" else "YouTube Music"
-        self.query_one("#settings-status-line", Static).update(f"Search engine set to {label}.")
+        self.query_one("#settings-status-line", Static).update(f"Search Engine: {label}")
 
     def toggle_visualizer(self) -> None:
         new_state = self.spoff_app.toggle_visualizer()
         self.update_toggle_ui()
-        state_text = "[bold #569f68]Enabled[/]" if new_state else "[dim]Disabled (Hidden)[/]"
-        self.query_one("#settings-status-line", Static).update(f"CAVA Visualizer {state_text}.")
+        state_text = "enabled" if new_state else "disabled"
+        self.query_one("#settings-status-line", Static).update(f"CAVA Visualizer: {state_text}")
 
     def cycle_visualizer_style(self) -> None:
         if hasattr(self.spoff_app, "cycle_visualizer_style"):
             self.spoff_app.cycle_visualizer_style()
         self.update_toggle_ui()
         style_name = self.spoff_app.visualizer.get_style_name() if hasattr(self.spoff_app, "visualizer") else ""
-        self.query_one("#settings-status-line", Static).update(f"Visualizer style set to [bold #ffffff]{style_name}[/].")
+        self.query_one("#settings-status-line", Static).update(f"Visualizer Style: {style_name}")
 
     def cycle_visualizer_color(self) -> None:
         if hasattr(self.spoff_app, "cycle_visualizer_color"):
             self.spoff_app.cycle_visualizer_color()
         self.update_toggle_ui()
         color_name = self.spoff_app.visualizer.get_color_name() if hasattr(self.spoff_app, "visualizer") else ""
-        self.query_one("#settings-status-line", Static).update(f"Visualizer theme set to [bold #ffffff]{color_name}[/].")
+        self.query_one("#settings-status-line", Static).update(f"Visualizer Theme: {color_name}")
 
     def start_rebinding(self, act_id: str) -> None:
         if isinstance(self.app.screen, RebindKeyModal):
@@ -1099,14 +1094,14 @@ class SettingsModal(ModalScreen[None]):
                     break
 
         if not new_key:
-            status_msg = f"Unbound [bold #ffffff]'{act_title}'[/]."
+            status_msg = f"Unbound '{act_title}'."
         else:
             disp_key = format_key_display(new_key)
-            status_msg = f"Bound [bold #ffffff]'{act_title}'[/] to [bold #569f68]{disp_key}[/]."
+            status_msg = f"Bound '{act_title}' to {disp_key}."
             if conflicting_act:
                 _, conf_title = ACTION_INFO.get(conflicting_act, ("General", conflicting_act))
                 self.spoff_app.set_custom_keybinding(conflicting_act, "")
-                status_msg += f" [dim](Unbound conflicting '{conf_title}')[/dim]"
+                status_msg += f" (Unbound conflicting '{conf_title}')"
                 self._refresh_row(conflicting_act)
 
         self.spoff_app.set_custom_keybinding(act_id, new_key)
@@ -1121,13 +1116,13 @@ class SettingsModal(ModalScreen[None]):
 
         if key_override:
             disp_key = key_override
-            disp_status = "[bold #569f68]Capturing[/]"
+            disp_status = "capturing"
         elif not cur_key:
-            disp_key = "[dim #888888]Unbound[/]"
-            disp_status = "[dim #c47676]Unbound[/]"
+            disp_key = "[dim]—[/dim]"
+            disp_status = "[dim]unbound[/dim]"
         else:
             disp_key = format_key_display(cur_key)
-            disp_status = "[dim]Default[/dim]" if is_default else "[bold #569f68]Custom[/]"
+            disp_status = "[dim]default[/dim]" if is_default else "[#ffffff]custom[/]"
 
         try:
             table.update_cell(act_id, "cat", cat)
@@ -1145,7 +1140,7 @@ class SettingsModal(ModalScreen[None]):
             self._refresh_row(act_id)
             _, title = ACTION_INFO.get(act_id, ("General", act_id))
             self.query_one("#settings-status-line", Static).update(
-                f"Unbound [bold #ffffff]'{title}'[/]."
+                f"Unbound '{title}'."
             )
 
     def action_reset_selected_key(self) -> None:
@@ -4343,35 +4338,9 @@ class SpoffTUI(App):
     }
 
     #rebind-buttons > Button:focus {
-        background: #333333;
-        border: tall #569f68;
+        background: #282828;
+        border: tall #444444;
         color: #ffffff;
-        text-style: bold;
-    }
-
-    #rebind-buttons > Button.-primary {
-        background: #18271c;
-        color: #569f68;
-        border: tall #36603e;
-    }
-
-    #rebind-buttons > Button.-primary:focus {
-        background: #569f68;
-        color: #131313;
-        border: tall #72b984;
-        text-style: bold;
-    }
-
-    #rebind-buttons > Button.-warning {
-        background: #2a2012;
-        color: #c4a768;
-        border: tall #604a25;
-    }
-
-    #rebind-buttons > Button.-warning:focus {
-        background: #c4a768;
-        color: #131313;
-        border: tall #deb574;
         text-style: bold;
     }
 
@@ -4381,7 +4350,7 @@ class SpoffTUI(App):
     }
 
     #settings-dialog {
-        width: 88;
+        width: 82;
         max-width: 96%;
         height: auto;
         max-height: 94%;
@@ -4409,38 +4378,49 @@ class SpoffTUI(App):
         color: #555555;
     }
 
+    #settings-options-title {
+        height: 1;
+        text-style: bold;
+        color: #666666;
+        margin-bottom: 0;
+    }
+
     #settings-options-container {
         height: auto;
         width: 100%;
+        border: solid #222222;
+        background: #111111;
+        padding: 0;
         margin-bottom: 1;
     }
 
     .setting-toggle-item {
-        height: 3;
+        height: 1;
         width: 100%;
-        background: #1a1a1a;
-        border: solid #282828;
+        background: transparent;
+        color: #888888;
         padding: 0 1;
-        margin-bottom: 1;
+        margin: 0;
         content-align: left middle;
     }
 
     .setting-toggle-item:focus {
-        border: solid #569f68;
-        background: #1c261e;
+        background: #242424;
+        color: #ffffff;
+        text-style: bold;
     }
 
     #settings-table-title {
         height: 1;
         text-style: bold;
-        color: #767676;
+        color: #666666;
         margin-bottom: 0;
     }
 
     #settings-table {
-        height: 10;
+        height: 9;
         border: solid #222222;
-        background: transparent;
+        background: #111111;
     }
 
     #settings-table > .datatable--cursor {
@@ -4450,7 +4430,7 @@ class SpoffTUI(App):
     }
 
     #settings-table:focus > .datatable--cursor {
-        background: #262626;
+        background: #242424;
         color: #ffffff;
         text-style: bold;
     }
@@ -4458,7 +4438,7 @@ class SpoffTUI(App):
     #settings-status-line {
         height: 1;
         margin-top: 1;
-        color: #569f68;
+        color: #888888;
     }
 
     #settings-footer {
