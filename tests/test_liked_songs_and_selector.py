@@ -337,6 +337,7 @@ class TestPlaylistSelectorAndLikedTabAppLogic(unittest.TestCase):
     def test_sync_table_cursor_to_index(self):
         tt = Mock(spec=DataTable)
         tt.row_count = 2
+        tt.cursor_row = 0
         tt.move_cursor = Mock()
 
         self.app.active_tab = "playlist"
@@ -350,6 +351,38 @@ class TestPlaylistSelectorAndLikedTabAppLogic(unittest.TestCase):
             self.app._sync_table_cursor_to_index(1)
 
         tt.move_cursor.assert_called_with(row=1)
+
+    def test_sync_table_cursor_does_not_jump_to_previously_playing_track(self):
+        tt = Mock(spec=DataTable)
+        tt.row_count = 2
+        tt.cursor_row = 1  # User just selected row 1
+        tt.move_cursor = Mock()
+
+        self.app.active_tab = "playlist"
+        self.app.current_playlist_tracks = [
+            {"id": "t1", "title": "Song 1", "artist": "Artist 1"},
+            {"id": "t2", "title": "Song 2", "artist": "Artist 2"}
+        ]
+        self.app.queue = list(self.app.current_playlist_tracks)
+        # Player is still on the PREVIOUS track (Song 1)
+        self.app.player.current_track = {"id": "t1", "title": "Song 1", "artist": "Artist 1"}
+
+        with patch.object(self.app, "query_one", return_value=tt):
+            self.app._sync_table_cursor_to_index(1)
+
+        # Cursor was already on row 1, so move_cursor should NOT be called (no jumping to row 0)
+        tt.move_cursor.assert_not_called()
+
+    def test_commit_playback_does_not_wipe_table(self):
+        self.app.player = Mock()
+        self.app.player.load_and_play.return_value = True
+        self.app.mpris = None
+        self.app._play_request_id = 1
+        with patch.object(self.app, "render_tracks") as mock_render, \
+             patch.object(self.app, "update_player_hud") as mock_hud:
+            self.app._commit_playback(1, "stream_url", {"title": "Song 2"})
+            mock_render.assert_not_called()
+            mock_hud.assert_called_once()
 
     def test_nav_bar_order_liked_is_last(self):
         nav_bar = Mock()

@@ -6132,27 +6132,36 @@ class SpoffTUI(App):
             if not view_tracks:
                 return
             tt = self.query_one("#track-table", DataTable)
-            curr = getattr(getattr(self, "player", None), "current_track", None)
-            if not curr and 0 <= idx < len(self.queue):
-                curr = self.queue[idx]
+            if tt.row_count == 0:
+                return
 
-            if curr:
-                curr_id = curr.get("id")
-                curr_title = curr.get("title")
-                curr_artist = curr.get("artist")
-                if 0 <= idx < len(view_tracks):
-                    v_tr = view_tracks[idx]
-                    if (curr_id and v_tr.get("id") == curr_id) or (curr_title and v_tr.get("title") == curr_title and v_tr.get("artist") == curr_artist):
-                        if 0 <= idx < tt.row_count:
+            if 0 <= idx < len(self.queue):
+                target = self.queue[idx]
+            elif 0 <= idx < len(view_tracks):
+                target = view_tracks[idx]
+            else:
+                return
+
+            t_id = target.get("id")
+            t_title = target.get("title")
+            t_artist = target.get("artist")
+
+            # Check if target matches view_tracks at idx directly
+            if 0 <= idx < len(view_tracks):
+                v_tr = view_tracks[idx]
+                if (t_id and v_tr.get("id") == t_id) or (t_title and v_tr.get("title") == t_title and v_tr.get("artist") == t_artist):
+                    if 0 <= idx < tt.row_count:
+                        if getattr(tt, "cursor_row", None) != idx:
                             tt.move_cursor(row=idx)
-                            return
-                for v_idx, v_tr in enumerate(view_tracks):
-                    if (curr_id and v_tr.get("id") == curr_id) or (curr_title and v_tr.get("title") == curr_title and v_tr.get("artist") == curr_artist):
-                        if 0 <= v_idx < tt.row_count:
+                    return
+
+            # Otherwise search view_tracks for target track
+            for v_idx, v_tr in enumerate(view_tracks):
+                if (t_id and v_tr.get("id") == t_id) or (t_title and v_tr.get("title") == t_title and v_tr.get("artist") == t_artist):
+                    if 0 <= v_idx < tt.row_count:
+                        if getattr(tt, "cursor_row", None) != v_idx:
                             tt.move_cursor(row=v_idx)
-                            return
-            elif 0 <= idx < tt.row_count:
-                tt.move_cursor(row=idx)
+                    return
         except Exception:
             pass
 
@@ -8048,12 +8057,7 @@ class SpoffTUI(App):
             except (ValueError, TypeError):
                 dur_s = self.player.get_duration()
             self.mpris.update_track(track, dur_s)
-        try:
-            view_tracks = self._get_current_view_tracks()
-            if view_tracks:
-                self.render_tracks(view_tracks, select_row=self.current_index)
-        except Exception:
-            pass
+        self.update_player_hud()
         return True
 
     def _playback_failed(self, req_id: int, track: Dict[str, Any]):
