@@ -4622,6 +4622,7 @@ class SpoffTUI(App):
         self.update_info: Optional[Dict[str, Any]] = None
         self.queue: List[Dict[str, Any]] = []
         self.current_index: int = -1
+        self._pending_track: Optional[Dict[str, Any]] = None
         self._bulk_download_in_progress: bool = False
         self.playlists: List[Dict[str, Any]] = []
         self.current_playlist_tracks: List[Dict[str, Any]] = []
@@ -6268,7 +6269,33 @@ class SpoffTUI(App):
         except Exception:
             pass
 
+    def _is_same_track(self, t1: Optional[Dict[str, Any]], t2: Optional[Dict[str, Any]]) -> bool:
+        if not t1 or not t2:
+            return False
+        if t1 is t2:
+            return True
+        id1 = str(t1.get("id") or "").strip()
+        id2 = str(t2.get("id") or "").strip()
+        if id1 and id2 and id1 == id2:
+            return True
+        title1 = str(t1.get("title") or "").strip().lower()
+        title2 = str(t2.get("title") or "").strip().lower()
+        artist1 = str(t1.get("artist") or "").strip().lower()
+        artist2 = str(t2.get("artist") or "").strip().lower()
+        if title1 and title2 and title1 == title2:
+            if not artist1 or not artist2 or artist1 == artist2:
+                return True
+        return False
+
     def _start_or_resume_playback(self):
+        f = self.focused
+        if isinstance(f, DataTable) and getattr(f, "id", None) == "track-table":
+            tracks = self._get_current_view_tracks()
+            row_idx = getattr(f, "cursor_row", None)
+            if row_idx is not None and 0 <= row_idx < len(tracks):
+                self.play_current_table_row(row_idx)
+                return
+
         if self.queue and 0 <= self.current_index < len(self.queue):
             self.play_index(self.current_index)
             return
@@ -6294,6 +6321,21 @@ class SpoffTUI(App):
             self.notify_user("No tracks available to play.")
 
     def action_toggle_play(self):
+        f = self.focused
+        if isinstance(f, DataTable) and getattr(f, "id", None) == "track-table":
+            row_idx = getattr(f, "cursor_row", None)
+            tracks = self._get_current_view_tracks()
+            if row_idx is not None and 0 <= row_idx < len(tracks):
+                selected_track = tracks[row_idx]
+                active_track = getattr(self, "_pending_track", None) or getattr(getattr(self, "player", None), "current_track", None)
+                if not self._is_same_track(selected_track, active_track):
+                    self.play_current_table_row(row_idx)
+                    return
+
+        if getattr(self, "_pending_track", None) is not None:
+            self.notify_user(f"Loading '{self._pending_track.get('title', 'track')}'...")
+            return
+
         if self.player.current_track is not None:
             self.player.toggle_pause()
             self.update_player_hud()
@@ -6457,6 +6499,7 @@ class SpoffTUI(App):
 
     def _mpris_stop(self):
         self._play_request_id = getattr(self, "_play_request_id", 0) + 1
+        self._pending_track = None
         self.player.stop()
         self.current_index = -1
         if self.mpris:
@@ -8140,6 +8183,9 @@ class SpoffTUI(App):
         self.current_index = index
         self._failed_indices.discard(index)
         track = self.queue[index]
+        self._pending_track = track
+        if self.player.current_track is not None:
+            self.player.pause()
         self._sync_table_cursor_to_index(index)
         self._play_request_id += 1
         req_id = self._play_request_id
@@ -8152,6 +8198,7 @@ class SpoffTUI(App):
             self.notify_user(f"Could not start playback: {track.get('title', 'Track')}")
             self._playback_failed(req_id, track)
             return False
+        self._pending_track = None
         self.notify_user("")
         if self.mpris:
             try:
@@ -8166,6 +8213,7 @@ class SpoffTUI(App):
     def _playback_failed(self, req_id: int, track: Dict[str, Any]):
         if getattr(self, "_closing", False) or req_id != getattr(self, "_play_request_id", None):
             return
+        self._pending_track = None
         invalidate_stream_cache(track.get("title", ""), track.get("artist", ""), track.get("url"))
         self._failed_indices.add(self.current_index)
         for offset in range(1, len(self.queue) + 1):

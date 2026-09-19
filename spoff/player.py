@@ -269,6 +269,16 @@ class MPVController:
             self._send_command(["set_property", "pause", False])
             return True
 
+    def pause(self):
+        with self._lock:
+            self.is_paused = True
+            self._send_command(["set_property", "pause", True])
+
+    def resume(self):
+        with self._lock:
+            self.is_paused = False
+            self._send_command(["set_property", "pause", False])
+
     def toggle_pause(self):
         self.is_paused = not self.is_paused
         self._send_command(["set_property", "pause", self.is_paused])
