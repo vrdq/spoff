@@ -665,6 +665,97 @@ class TestDeckTrackFormatting(unittest.TestCase):
         # When reset_cursor is True, should reset to 0 (or playing_idx if playing)
         mock_table.move_cursor.assert_called_with(row=0)
 
+    def test_refresh_side_table_preserves_cursor_when_clear_resets_cursor(self):
+        side_table = Mock(spec=DataTable)
+        side_table.cursor_row = 1  # User cursor hovering on pl_2 (index 1)
+        side_rows = []
+        side_table.add_row = lambda text, key=None: side_rows.append((text, key))
+        # Simulate Textual DataTable.clear() resetting cursor_row to None
+        def _mock_clear():
+            side_table.cursor_row = None
+        side_table.clear = Mock(side_effect=_mock_clear)
+        side_table.move_cursor = Mock()
+
+        self.app.playlists = [
+            {"id": "pl_1", "name": "Chill Beats"},
+            {"id": "pl_2", "name": "Vaporwave"},
+        ]
+
+        with patch.object(self.app, "query_one", return_value=side_table):
+            # Active playlist is pl_1 (index 0)
+            self.app.current_playlist_id = "pl_1"
+            self.app.refresh_side_table()
+
+        # Target cursor should be preserved as index 1, NOT reverted to index 0 (active playlist)
+        side_table.move_cursor.assert_called_with(row=1)
+
+    def test_refresh_side_table_explicit_target_row(self):
+        side_table = Mock(spec=DataTable)
+        side_table.cursor_row = 0
+        side_rows = []
+        side_table.add_row = lambda text, key=None: side_rows.append((text, key))
+        def _mock_clear():
+            side_table.cursor_row = None
+        side_table.clear = Mock(side_effect=_mock_clear)
+        side_table.move_cursor = Mock()
+
+        self.app.playlists = [
+            {"id": "pl_1", "name": "Chill Beats"},
+            {"id": "pl_2", "name": "Vaporwave"},
+        ]
+
+        with patch.object(self.app, "query_one", return_value=side_table):
+            self.app.current_playlist_id = "pl_1"
+            self.app.refresh_side_table(target_row=1)
+
+        side_table.move_cursor.assert_called_with(row=1)
+
+    def test_action_focus_tracks_same_playlist_preserves_track_table(self):
+        side_table = Mock(spec=DataTable)
+        side_table.id = "side-table"
+        side_table.cursor_row = 0  # Points to pl_1
+
+        track_table = Mock(spec=DataTable)
+        track_table.id = "track-table"
+        track_table.focus = Mock()
+
+        def mock_query(sel, *args):
+            if sel == "#side-table":
+                return side_table
+            if sel == "#track-table":
+                return track_table
+            return Mock()
+
+        self.app.playlists = [
+            {"id": "pl_1", "name": "Chill Beats"},
+            {"id": "pl_2", "name": "Vaporwave"},
+        ]
+
+        self.app.current_playlist_id = "pl_1"
+        self.app.current_playlist_tracks = [{"id": "t1", "title": "Track 1"}]
+        self.app.load_playlist_by_index = Mock()
+
+        with patch.object(self.app, "query_one", side_effect=mock_query), \
+             patch.object(type(self.app), "focused", new_callable=PropertyMock, return_value=side_table):
+            self.app.action_focus_tracks()
+
+        # Should NOT reload playlist (which would reset tracks and cursor)
+        self.app.load_playlist_by_index.assert_not_called()
+        track_table.focus.assert_called_once()
+
+    def test_render_tracks_select_row_overrides_old_cursor(self):
+        mock_table = Mock(spec=DataTable)
+        mock_table.cursor_row = 15  # Stale cursor from previous search/table
+        self.app.query_one = Mock(return_value=mock_table)
+        self.app.player.current_track = None
+
+        tracks = [{"id": f"t{i}", "title": f"Track {i}"} for i in range(25)]
+        self.app.render_tracks(tracks, select_row=0)
+
+        # select_row=0 should explicitly override old_cursor=15
+        mock_table.move_cursor.assert_called_with(row=0)
+
+
 
 class TestVisualizerRemovalAndToggle(unittest.TestCase):
     def setUp(self):

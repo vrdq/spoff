@@ -292,7 +292,6 @@ class AuditFixesTests(unittest.TestCase):
             os.close(fd)
 
     def test_transparency_rendering_and_toggling(self):
-        import asyncio
         from spoff.app import SpoffTUI
 
         app = SpoffTUI()
@@ -319,7 +318,6 @@ class AuditFixesTests(unittest.TestCase):
         self.assertTrue(hasattr(visualizer.CavaVisualizer, "__del__"))
 
     def test_active_playlist_and_playing_track_indicators(self):
-        from rich.text import Text
         from textual.widgets import DataTable
         from spoff.app import SpoffTUI
 

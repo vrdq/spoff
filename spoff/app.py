@@ -5798,8 +5798,13 @@ class SpoffTUI(App):
                 st = self.query_one("#side-table", DataTable)
                 idx = st.cursor_row
                 if idx is not None and 0 <= idx < len(self.playlists):
-                    self.load_playlist_by_index(idx, focus_tracks=True)
-                    return
+                    pl = self.playlists[idx]
+                    if self.current_playlist_id != pl.get("id") or not self.current_playlist_tracks:
+                        self.load_playlist_by_index(idx, focus_tracks=True)
+                        return
+                    else:
+                        self.query_one("#track-table", DataTable).focus()
+                        return
             if self.active_tab == "lyrics":
                 self.query_one("#lyrics-table", DataTable).focus()
             else:
@@ -5865,6 +5870,9 @@ class SpoffTUI(App):
             if f.id == "track-table" and f.row_count == 0 and self.active_tab == "playlist":
                 self.action_focus_sidebar()
                 return
+            if f.cursor_row is None and f.row_count > 0:
+                f.move_cursor(row=0)
+                return
             f.action_cursor_down()
         elif isinstance(f, Input):
             if f.id == "search-box":
@@ -5893,6 +5901,9 @@ class SpoffTUI(App):
                 if f.row_count == 0 or f.cursor_row == 0:
                     self.query_one("#sidebar-import-input", Input).focus()
                     return
+            if f.cursor_row is None and f.row_count > 0:
+                f.move_cursor(row=0)
+                return
             f.action_cursor_up()
         elif isinstance(f, ScrubBar):
             self.query_one("#track-table", DataTable).focus()
@@ -6522,16 +6533,13 @@ class SpoffTUI(App):
             candidates = [i for i in range(len(self.queue)) if i != self.current_index]
             next_idx = random.choice(candidates)
             self.play_index(next_idx)
-            self._sync_table_cursor_to_index(next_idx)
             return
 
         if self.current_index + 1 < len(self.queue):
             next_idx = self.current_index + 1 if self.current_index >= 0 else 0
             self.play_index(next_idx)
-            self._sync_table_cursor_to_index(next_idx)
         elif self.repeat_mode == "all":
             self.play_index(0)
-            self._sync_table_cursor_to_index(0)
         else:
             self._play_request_id += 1
             self.player.stop()
@@ -6560,20 +6568,17 @@ class SpoffTUI(App):
             prev_idx = self._shuffle_history.pop()
             if 0 <= prev_idx < len(self.queue):
                 self.play_index(prev_idx)
-                self._sync_table_cursor_to_index(prev_idx)
                 return
 
         if self.current_index > 0:
             prev_idx = self.current_index - 1
             self.play_index(prev_idx)
-            self._sync_table_cursor_to_index(prev_idx)
         elif self.current_index == 0:
             self.player.seek_absolute(0)
             self.notify_user("Restarted track.")
             self.update_player_hud()
         else:
             self.play_index(0)
-            self._sync_table_cursor_to_index(0)
 
     def action_quit_app(self):
         def _force_exit_fallback():
@@ -6592,11 +6597,12 @@ class SpoffTUI(App):
             self._shuffle_history.clear()
             self.play_index(row_idx)
 
-    def refresh_side_table(self):
+    def refresh_side_table(self, target_row: Optional[int] = None):
         try:
             st = self.query_one("#side-table", DataTable)
         except Exception:
             return
+        cur_cursor = getattr(st, "cursor_row", None)
         st.clear()
         selected_idx = 0
         for idx, p in enumerate(self.playlists):
@@ -6608,8 +6614,14 @@ class SpoffTUI(App):
             else:
                 styled_text = Text.from_markup(f"[#888888]{escape(raw_name)}[/]")
             st.add_row(styled_text, key=str(idx))
-        cur_cursor = getattr(st, "cursor_row", None)
-        target_cursor = cur_cursor if (isinstance(cur_cursor, int) and 0 <= cur_cursor < len(self.playlists)) else selected_idx
+
+        if target_row is not None and 0 <= target_row < len(self.playlists):
+            target_cursor = target_row
+        elif isinstance(cur_cursor, int) and 0 <= cur_cursor < len(self.playlists):
+            target_cursor = cur_cursor
+        else:
+            target_cursor = selected_idx
+
         if self.playlists:
             try:
                 st.move_cursor(row=target_cursor)
@@ -6634,7 +6646,7 @@ class SpoffTUI(App):
             pl = self.playlists[idx]
             self.current_playlist_id = pl.get("id")
             name = pl.get("name", "Playlist")
-            self.refresh_side_table()
+            self.refresh_side_table(target_row=idx)
 
             st = self.query_one("#side-table", DataTable)
             try:
@@ -7683,10 +7695,8 @@ class SpoffTUI(App):
             elif self.active_tab == "search":
                 if row_idx is not None and 0 <= row_idx < len(self.search_results):
                     t = self.search_results.pop(row_idx)
-                    self.render_tracks(self.search_results)
-                    if self.search_results and isinstance(f, DataTable):
-                        new_row = max(0, min(row_idx, len(self.search_results) - 1))
-                        f.move_cursor(row=new_row)
+                    new_row = max(0, min(row_idx, len(self.search_results) - 1)) if self.search_results else None
+                    self.render_tracks(self.search_results, select_row=new_row)
                     if self.queue:
                         q_idx = None
                         if 0 <= row_idx < len(self.queue) and (self.queue[row_idx] == t or (t.get("id") and self.queue[row_idx].get("id") == t.get("id"))):
@@ -7893,7 +7903,7 @@ class SpoffTUI(App):
                 return
             self.search_results = results
             if self.active_tab == "search":
-                self.render_tracks(results)
+                self.render_tracks(results, select_row=0 if results else None)
                 if results:
                     self.query_one("#track-table", DataTable).focus()
                 else:
