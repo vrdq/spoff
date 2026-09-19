@@ -901,7 +901,7 @@ def move_playlist_track(playlist_id: str, track: Dict[str, Any], delta: int) -> 
     return False
 
 @transactional
-def remove_track_from_playlist_by_index_or_track(playlist_id: str, track: Dict[str, Any], index: Optional[int] = None) -> bool:
+def remove_track_from_playlist_by_index_or_track(playlist_id: str, track: Dict[str, Any], index: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """Removes a track from a playlist atomically by index or identity."""
     existing = load_saved_playlists()
     for p in existing:
@@ -915,11 +915,11 @@ def remove_track_from_playlist_by_index_or_track(playlist_id: str, track: Dict[s
             if target_idx is None:
                 target_idx = liked_index(tracks, track)
             if target_idx is not None and 0 <= target_idx < len(tracks):
-                tracks.pop(target_idx)
+                removed = tracks.pop(target_idx)
                 p["tracks"] = tracks
                 save_saved_playlists(existing)
-                return True
-    return False
+                return removed
+    return None
 
 @transactional
 def remove_saved_playlist(playlist_id: str) -> bool:
@@ -1194,7 +1194,7 @@ def quarantine_cached_track(track_id: str, source: Optional[Any] = None) -> bool
         val_id = validate_track_id(track_id)
     except ValueError:
         return False
-    if source is None:
+    if not source:
         source = get_cached_track_path(val_id)
     if source:
         try:
@@ -1202,17 +1202,10 @@ def quarantine_cached_track(track_id: str, source: Optional[Any] = None) -> bool
             root = CACHE_DIR.resolve()
             source_resolved = source_path.resolve()
             if root in source_resolved.parents or source_resolved.parent == root:
-                if source_resolved.is_file():
-                    corrupt_name = f"{source_resolved.name}.corrupt-{uuid.uuid4().hex[:8]}"
-                    try:
-                        source_resolved.replace(source_resolved.with_name(corrupt_name))
-                    except Exception as e:
-                        logger.warning(f"Could not rename corrupt cache file {source_resolved}: {e}")
+                if source_resolved.is_file() or source_resolved.is_symlink():
+                    source_resolved.unlink(missing_ok=True)
         except Exception:
             pass
-    index = load_offline_index()
-    if val_id in index:
-        index.pop(val_id, None)
-        save_offline_index(index)
+    delete_cached_track(val_id)
     return True
 

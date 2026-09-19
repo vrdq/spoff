@@ -4669,6 +4669,7 @@ class SpoffTUI(App):
             "quit": lambda: self._dispatch_mpris(self.action_quit_app),
         }
         self.mpris = MPRISService(mpris_callbacks)
+        self.update_info: Optional[Dict[str, Any]] = None
         self._spotify_jobs = ThreadPoolExecutor(max_workers=1, thread_name_prefix="spoff-spotify")
         self._queue_origin: Optional[Dict[str, Any]] = None
         self.queue: List[Dict[str, Any]] = []
@@ -5102,14 +5103,6 @@ class SpoffTUI(App):
             pass
         try:
             _set_kitty_opacity("default")
-        except Exception:
-            pass
-        try:
-            if os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"):
-                subprocess.run(["hyprctl", "keyword", "decoration:active_opacity", "1.0"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.5)
-                subprocess.run(["hyprctl", "keyword", "decoration:inactive_opacity", "1.0"],
-                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=0.5)
         except Exception:
             pass
 
@@ -6788,6 +6781,12 @@ class SpoffTUI(App):
             view_tracks = self._get_current_view_tracks()
             if view_tracks:
                 self.queue = list(view_tracks)
+                act_tab = getattr(self, "active_tab", "search")
+                curr_pl = getattr(self, "current_playlist_id", None)
+                self._queue_origin = {
+                    "tab": act_tab,
+                    "playlist_id": curr_pl if act_tab == "playlist" else None,
+                }
                 self.current_index = -1
 
         if not self.queue:
@@ -7114,7 +7113,7 @@ class SpoffTUI(App):
                             ok, msg = add_track_to_spotify_account("liked", "Liked Songs", track)
                             if ok:
                                 self.call_from_thread(self.notify_user, f"'{t_title}' synced to Spotify Liked Songs.")
-                        threading.Thread(target=_sync_liked_bg, daemon=True).start()
+                        self._submit_spotify_job(_sync_liked_bg)
                 else:
                     self.notify_user(f"'{t_title}' is already in Liked Songs.")
 
@@ -7150,7 +7149,7 @@ class SpoffTUI(App):
                             logger.info(f"Spotify sync notice: {msg}")
                             if "permission" in msg.lower() or "re-link" in msg.lower():
                                 self.call_from_thread(self.notify_user, msg)
-                    threading.Thread(target=_sync_create_bg, daemon=True).start()
+                    self._submit_spotify_job(_sync_create_bg)
 
             elif mode == "select":
                 added = add_track_to_playlist(val, track)
@@ -7187,7 +7186,7 @@ class SpoffTUI(App):
                                 logger.info(f"Spotify sync notice: {msg}")
                                 if "permission" in msg.lower() or "re-link" in msg.lower():
                                     self.call_from_thread(self.notify_user, msg)
-                        threading.Thread(target=_sync_select_bg, daemon=True).start()
+                        self._submit_spotify_job(_sync_select_bg)
                 else:
                     self.notify_user(f"'{t_title}' is already in '{pl_name}'.")
                 self.refresh_side_table()
@@ -7733,7 +7732,7 @@ class SpoffTUI(App):
                     s_ok, s_msg = rename_spotify_playlist(pl_id, clean_name, remote_id=remote_id)
                     if s_ok:
                         self.call_from_thread(self.notify_user, f"Renamed on Spotify: '{clean_name}'")
-                threading.Thread(target=_sync_rename_bg, daemon=True).start()
+                self._submit_spotify_job(_sync_rename_bg)
 
                 self.notify_user(f"Renamed playlist to '{clean_name}'.")
             else:
@@ -7799,7 +7798,7 @@ class SpoffTUI(App):
                         tracks=cloned_pl.get("tracks", []),
                     )
                     self.call_from_thread(self.notify_user, s_msg)
-                threading.Thread(target=_sync_clone_bg, daemon=True).start()
+                self._submit_spotify_job(_sync_clone_bg)
             else:
                 self.notify_user("Failed to copy playlist.")
 
@@ -7809,10 +7808,9 @@ class SpoffTUI(App):
         )
 
     def action_delete_item(self):
-        if isinstance(self.focused, Input):
-            return
-
         f = self.focused
+        if isinstance(f, Input):
+            return
         if f and getattr(f, "id", None) == "side-table":
             self.action_delete_playlist()
             return
@@ -7883,7 +7881,8 @@ class SpoffTUI(App):
                                 self.current_index -= 1
                             if hasattr(self, "_shuffle_history") and self._shuffle_history is not None:
                                 self._shuffle_history.clear()
-                            self.update_player_hud()
+                            if hasattr(self, "update_player_hud"):
+                                self.update_player_hud()
 
                     self.notify_user(f"Removed '{t_title}' from playlist '{pl_name}'.")
 
@@ -7942,7 +7941,8 @@ class SpoffTUI(App):
                                 self.current_index -= 1
                             if hasattr(self, "_shuffle_history") and self._shuffle_history is not None:
                                 self._shuffle_history.clear()
-                            self.update_player_hud()
+                            if hasattr(self, "update_player_hud"):
+                                self.update_player_hud()
 
                     self.notify_user(f"Removed '{t_title}' from Liked Songs.")
 
@@ -8020,7 +8020,7 @@ class SpoffTUI(App):
             if self.active_tab == "playlist":
                 self.action_delete_playlist()
 
-    def _handle_track_end(self, request_id: int, reason: str = "eof", track: Optional[Dict[str, Any]] = None):
+    def _handle_track_end(self, request_id: int, reason: str = "eof", track: Optional[Dict[str, Any]] = None, source: Optional[str] = None):
         if getattr(self, "_closing", False) or not getattr(self, "is_mounted", False):
             return
         if request_id != getattr(self, "_play_request_id", None):
@@ -8029,7 +8029,7 @@ class SpoffTUI(App):
             t = track or getattr(getattr(self, "player", None), "current_track", None)
             if t:
                 try:
-                    quarantine_cached_track(t.get("id", ""), t.get("stream_url", "") or "")
+                    quarantine_cached_track(t.get("id", ""), source)
                 except Exception:
                     pass
                 self._playback_failed(request_id, t)
@@ -8040,7 +8040,7 @@ class SpoffTUI(App):
             self.action_next_track()
 
     def on_track_finished(self, reason: str = "eof"):
-        self._on_ui(self._handle_track_end, getattr(self, "_play_request_id", 0), reason, getattr(getattr(self, "player", None), "current_track", None))
+        self._on_ui(self._handle_track_end, getattr(self, "_play_request_id", 0), reason, getattr(getattr(self, "player", None), "current_track", None), None)
 
     def update_player_hud(self):
         if not getattr(self, "is_mounted", False):
@@ -8384,7 +8384,7 @@ class SpoffTUI(App):
             return False
         self._pending_track = None
         self.player.playback_finished_callback = (
-            lambda reason="eof": self._on_ui(self._handle_track_end, req_id, reason, track)
+            lambda reason="eof": self._on_ui(self._handle_track_end, req_id, reason, track, source)
         )
         self.notify_user("")
         if self.mpris:

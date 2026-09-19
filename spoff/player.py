@@ -298,6 +298,9 @@ class MPVController:
         self._volume = max(0, min(100, volume))
         self._send_command(["set_property", "volume", self._volume])
 
+    def get_volume(self) -> int:
+        return int(self.volume)
+
     def get_progress(self) -> tuple[float, float]:
         if not self.current_track:
             return 0.0, 0.0

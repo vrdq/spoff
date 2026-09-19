@@ -27,6 +27,9 @@ def invalidate_stream_cache(track_title: str, artist: str, direct_url: Optional[
     cache_key = f"{track_title.lower()}::{artist.lower()}"
     if direct_url:
         cache_key = f"{direct_url}::{cache_key}"
+    _stream_cache.pop(cache_key, None)
+
+
 _download_slots = threading.BoundedSemaphore(4)
 
 def get_base_ydl_opts(extra_opts=None):
@@ -207,6 +210,7 @@ def download_track_to_cache(
         return None
 
     acquired_slot = False
+    busy_error = None
     with _download_lock:
         existing_future = _active_download_futures.get(val_id)
         if existing_future is not None or val_id in _active_downloads:
@@ -218,15 +222,18 @@ def download_track_to_cache(
             is_new = False
         else:
             if not _download_slots.acquire(blocking=False):
-                err = RuntimeError("Four downloads are already active")
-                if on_error:
-                    on_error(err)
-                return None
-            future = Future()
-            _active_download_futures[val_id] = future
-            _active_downloads.add(val_id)
-            is_new = True
-            acquired_slot = True
+                busy_error = RuntimeError("Four downloads are already active")
+            else:
+                future = Future()
+                _active_download_futures[val_id] = future
+                _active_downloads.add(val_id)
+                is_new = True
+                acquired_slot = True
+
+    if busy_error is not None:
+        if on_error:
+            on_error(busy_error)
+        return None
 
     def _deliver(fut: Future):
         try:
