@@ -47,6 +47,7 @@ try:
         get_saved_transparency, save_transparency, get_saved_transparency_opacity, save_transparency_opacity,
         get_saved_instant_search, save_instant_search,
         get_saved_auto_update, save_auto_update,
+        get_saved_notifications_enabled, save_notifications_enabled,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
@@ -93,6 +94,7 @@ except ImportError:
         get_saved_transparency, save_transparency, get_saved_transparency_opacity, save_transparency_opacity,
         get_saved_instant_search, save_instant_search,
         get_saved_auto_update, save_auto_update,
+        get_saved_notifications_enabled, save_notifications_enabled,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
@@ -428,6 +430,7 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "open_equalizer": "e",
     "toggle_eq_bypass": "E",
     "open_eq_settings": "alt+e",
+    "toggle_notifications": "",
 }
 
 ACTION_INFO: Dict[str, Tuple[str, str]] = {
@@ -478,6 +481,7 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "toggle_focus": ("Navigation", "Cycle Sidebar / Main"),
     "move_item_up": ("Playlists", "Reorder Song Up (K)"),
     "move_item_down": ("Playlists", "Reorder Song Down (J)"),
+    "toggle_notifications": ("General", "Toggle Notifications (On/Off)"),
 }
 
 def canonicalize_key(k: str) -> str:
@@ -687,6 +691,13 @@ class AdvModeToggle(Static):
     def on_click(self) -> None:
         if isinstance(self.screen, SettingsModal):
             self.screen.toggle_advanced_mode()
+
+class NotificationsToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_notifications()
 
 class TransparencyToggle(Static):
     can_focus = True
@@ -912,6 +923,7 @@ class SettingsModal(ModalScreen[None]):
             yield Static("PREFERENCES", id="settings-options-title")
             with Vertical(id="settings-options-container"):
                 yield AdvModeToggle(id="adv-mode-toggle", classes="setting-toggle-item")
+                yield NotificationsToggle(id="notifications-toggle", classes="setting-toggle-item")
                 yield TransparencyToggle(id="transparency-toggle", classes="setting-toggle-item")
                 yield InstantSearchToggle(id="instant-search-toggle", classes="setting-toggle-item")
                 yield AutoUpdateToggle(id="auto-update-toggle", classes="setting-toggle-item")
@@ -974,6 +986,11 @@ class SettingsModal(ModalScreen[None]):
                 trans_state = "[#666666]Off[/]"
             trans_toggle.update(f" {'UI Transparency':<26} {trans_state}")
 
+            notif_toggle = self.query_one("#notifications-toggle", NotificationsToggle)
+            is_notif = getattr(self.spoff_app, "notifications_enabled", True)
+            notif_state = "[#ffffff]On[/]" if is_notif else "[#666666]Off[/]"
+            notif_toggle.update(f" {'Notifications':<26} {notif_state}")
+
             instant_toggle = self.query_one("#instant-search-toggle", InstantSearchToggle)
             inst_state = "[#ffffff]On[/]" if getattr(self.spoff_app, "instant_search", True) else "[#666666]Off[/]"
             instant_toggle.update(f" {'Instant Search':<26} {inst_state}")
@@ -1011,6 +1028,12 @@ class SettingsModal(ModalScreen[None]):
         self.update_toggle_ui()
         state_text = "enabled" if new_state else "disabled"
         self.query_one("#settings-status-line", Static).update(f"Advanced Mode: {state_text}")
+
+    def toggle_notifications(self) -> None:
+        new_state = self.spoff_app.toggle_notifications()
+        self.update_toggle_ui()
+        state_text = "enabled" if new_state else "disabled"
+        self.query_one("#settings-status-line", Static).update(f"Notifications: {state_text}")
 
     def toggle_transparency(self) -> None:
         new_state = self.spoff_app.toggle_transparency()
@@ -1184,6 +1207,8 @@ class SettingsModal(ModalScreen[None]):
         focused_id = self.focused.id if self.focused else None
         if focused_id == "adv-mode-toggle":
             self.toggle_advanced_mode()
+        elif focused_id == "notifications-toggle":
+            self.toggle_notifications()
         elif focused_id == "transparency-toggle":
             self.toggle_transparency()
         elif focused_id == "instant-search-toggle":
@@ -1219,7 +1244,7 @@ class SettingsModal(ModalScreen[None]):
 
     def on_key(self, event: events.Key) -> None:
         table = self.query_one("#settings-table", DataTable)
-        toggle_ids = ["adv-mode-toggle", "transparency-toggle", "instant-search-toggle", "auto-update-toggle", "engine-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "eq-settings-nav-toggle"]
+        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "instant-search-toggle", "auto-update-toggle", "engine-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "eq-settings-nav-toggle"]
         focused_id = self.focused.id if self.focused else None
 
         if focused_id in toggle_ids:
@@ -1241,6 +1266,8 @@ class SettingsModal(ModalScreen[None]):
             elif event.key in ("enter", "space") or event.character in (" ",):
                 if focused_id == "adv-mode-toggle":
                     self.toggle_advanced_mode()
+                elif focused_id == "notifications-toggle":
+                    self.toggle_notifications()
                 elif focused_id == "transparency-toggle":
                     self.toggle_transparency()
                 elif focused_id == "instant-search-toggle":
@@ -4646,6 +4673,7 @@ class SpoffTUI(App):
         self.ansi_color = True
         self.instant_search: bool = get_saved_instant_search()
         self.auto_update: bool = get_saved_auto_update()
+        self.notifications_enabled: bool = get_saved_notifications_enabled()
         self.player.playback_finished_callback = self.on_track_finished
         if self.transparency:
             self.add_class("transparent-mode")
@@ -4714,6 +4742,11 @@ class SpoffTUI(App):
         self.auto_update = not self.auto_update
         save_auto_update(self.auto_update)
         return self.auto_update
+
+    def toggle_notifications(self) -> bool:
+        self.notifications_enabled = not self.notifications_enabled
+        save_notifications_enabled(self.notifications_enabled)
+        return self.notifications_enabled
 
     def apply_transparency(self) -> None:
         self.ansi_color = True
@@ -5183,6 +5216,8 @@ class SpoffTUI(App):
         self._is_ready = True
 
     def notify_user(self, text: str):
+        if text and not getattr(self, "notifications_enabled", True):
+            return
         def _update():
             try:
                 bar = self.query_one("#notification-line", Static)

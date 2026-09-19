@@ -364,6 +364,26 @@ def save_auto_update(enabled: bool):
         logger.error(f"Error saving auto update setting: {e}")
         raise
 
+def get_saved_notifications_enabled() -> bool:
+    """Retrieves whether in-app notifications are enabled, defaulting to True."""
+    try:
+        cfg = load_config()
+        return bool(cfg.get("notifications_enabled", True))
+    except Exception as e:
+        logger.error(f"Error reading notifications_enabled setting: {e}")
+        return True
+
+@transactional
+def save_notifications_enabled(enabled: bool):
+    """Persists notifications enabled setting to config."""
+    try:
+        cfg = load_config()
+        cfg["notifications_enabled"] = bool(enabled)
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving notifications_enabled setting: {e}")
+        raise
+
 def get_saved_visualizer_enabled() -> bool:
     """Retrieves whether the CAVA visualizer is enabled, defaulting to True."""
     try:
