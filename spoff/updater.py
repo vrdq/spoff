@@ -180,13 +180,25 @@ def perform_update() -> Tuple[bool, str]:
     UPDATE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
     lock_fd = None
     try:
-        lock_fd = os.open(UPDATE_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
         try:
+            lock_fd = os.open(UPDATE_LOCK_FILE, os.O_CREAT | os.O_RDWR, 0o600)
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except (BlockingIOError, OSError):
+            if lock_fd is not None:
+                try:
+                    os.close(lock_fd)
+                except Exception:
+                    pass
+                lock_fd = None
             return False, "Another update is already running."
     except Exception as e:
         logger.debug(f"Could not open update lock file: {e}")
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except Exception:
+                pass
+            lock_fd = None
 
     try:
         # 1. Git repository update flow: verify git top-level is the project root containing pyproject.toml

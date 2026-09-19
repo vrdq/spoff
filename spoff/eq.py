@@ -210,7 +210,7 @@ class EQPreset:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EQPreset":
+    def from_dict(cls, data: Dict[str, Any], sample_rate: float = 48000.0) -> "EQPreset":
         bands = []
         for bd in data.get("bands", []):
             bands.append(EQBand(
@@ -228,7 +228,7 @@ class EQPreset:
             preamp_db=float(data.get("preamp_db", 0.0)),
             bands=bands
         )
-        return validate_preset(preset)
+        return validate_preset(preset, sample_rate=sample_rate)
 
 
 def checked_number(value: Any, name: str, low: float, high: float) -> float:
@@ -588,12 +588,18 @@ class ParametricEQEngine:
 
     def set_auto_headroom(self, enabled: bool) -> None:
         self.auto_headroom = bool(enabled)
+        if self.auto_headroom:
+            self.preamp_db = self.auto_preamp_headroom()
 
     def set_headroom_margin(self, margin_db: float) -> None:
         self.headroom_margin = max(0.0, min(6.0, float(margin_db)))
+        if self.auto_headroom:
+            self.preamp_db = self.auto_preamp_headroom()
 
     def set_intersample_guard(self, enabled: bool) -> None:
         self.intersample_guard = bool(enabled)
+        if self.auto_headroom:
+            self.preamp_db = self.auto_preamp_headroom()
 
     def set_anti_denormal(self, enabled: bool) -> None:
         self.anti_denormal = bool(enabled)
@@ -624,6 +630,8 @@ class ParametricEQEngine:
         self.preamp_db = preset.preamp_db
         self.bands = [EQBand(**asdict(b)) for b in preset.bands]
         self._update_filter_coefficients()
+        if self.auto_headroom:
+            self.preamp_db = self.auto_preamp_headroom()
 
     def set_preamp(self, preamp_db: float) -> None:
         """Sets the preamp gain in dB (-24.0 to +12.0)."""
@@ -652,6 +660,8 @@ class ParametricEQEngine:
                 if enabled is not None:
                     b.enabled = enabled
                 self._update_filter_coefficients()
+                if self.auto_headroom:
+                    self.preamp_db = self.auto_preamp_headroom()
                 break
 
     def toggle_bypass(self) -> bool:
@@ -758,9 +768,7 @@ class ParametricEQEngine:
         if self.bypassed:
             return ""
 
-        filters: List[str] = []
-        if int(self.sample_rate) != 48000:
-            filters.append(f"aresample={int(self.sample_rate)}")
+        filters: List[str] = [f"aresample={int(self.sample_rate)}"]
 
         # 1. Preamp Stage: Attenuation before filters prevents clipping inside and after biquads
         vol_prec = "double" if self.precision == "f64" else "float"
@@ -821,9 +829,9 @@ class ParametricEQEngine:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any], sample_rate: float = 48000.0) -> "ParametricEQEngine":
-        preset = EQPreset.from_dict(data)
-        bypassed = bool(data.get("bypassed", False))
         sr = float(data.get("sample_rate", sample_rate))
+        preset = EQPreset.from_dict(data, sample_rate=sr)
+        bypassed = bool(data.get("bypassed", False))
         precision = str(data.get("precision", "f64"))
         auto_headroom = bool(data.get("auto_headroom", True))
         headroom_margin = float(data.get("headroom_margin", 0.5))

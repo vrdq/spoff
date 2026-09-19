@@ -14,13 +14,8 @@ logger = logging.getLogger("visualizer")
 
 
 def _preexec_deathsig():
-    try:
-        import ctypes
-        libc = ctypes.CDLL(None)
-        # PR_SET_PDEATHSIG = 1, SIGKILL = 9
-        libc.prctl(1, signal.SIGKILL, 0, 0, 0)
-    except Exception:
-        pass
+    pass
+
 
 BAR_GLYPHS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
 DOT_GLYPHS = [" ", "·", "∶", "⁝", "⁞", "█"]
@@ -140,8 +135,7 @@ bit_format = 8bit
                 ["cava", "-p", self.conf_path],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                preexec_fn=_preexec_deathsig
+                stdin=subprocess.DEVNULL
             )
             self._thread = threading.Thread(target=self._reader_loop, daemon=True)
             self._thread.start()
@@ -445,17 +439,26 @@ class VisualizerWidget(Static):
         self.set_interval(1.0 / self.fps, self._tick)
 
     def on_click(self, event) -> None:
-        new_style = self.visualizer.cycle_style()
         app = getattr(self, "app", None)
-        if app:
-            if hasattr(app, "save_visualizer_preferences"):
-                app.save_visualizer_preferences()
+        if app and hasattr(app, "cycle_visualizer_style"):
+            new_style = app.cycle_visualizer_style()
             if hasattr(app, "notify_user"):
                 app.notify_user(f"Visualizer: {self.visualizer.get_style_name()}")
-            if hasattr(app, "_apply_visualizer_visibility"):
-                app._apply_visualizer_visibility()
-            elif new_style == "off":
-                self.display = False
+        else:
+            new_style = self.visualizer.cycle_style()
+            if app:
+                if hasattr(app, "vis_enabled"):
+                    app.vis_enabled = (new_style != "off")
+                    if hasattr(app, "save_visualizer_enabled"):
+                        app.save_visualizer_enabled(app.vis_enabled)
+                if hasattr(app, "save_visualizer_preferences"):
+                    app.save_visualizer_preferences()
+                if hasattr(app, "notify_user"):
+                    app.notify_user(f"Visualizer: {self.visualizer.get_style_name()}")
+                if hasattr(app, "_apply_visualizer_visibility"):
+                    app._apply_visualizer_visibility()
+                elif new_style == "off":
+                    self.display = False
 
     def _tick(self) -> None:
         if self.visualizer.style == "off":

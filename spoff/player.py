@@ -14,13 +14,7 @@ logger = logging.getLogger("player")
 
 
 def _preexec_deathsig():
-    try:
-        import ctypes
-        libc = ctypes.CDLL(None)
-        # PR_SET_PDEATHSIG = 1, SIGKILL = 9
-        libc.prctl(1, signal.SIGKILL, 0, 0, 0)
-    except Exception:
-        pass
+    pass
 
 
 def get_direct_hardware_audio_device() -> Optional[str]:
@@ -78,11 +72,16 @@ class MPVController:
         with self._lock:
             if self.process and self.process.poll() is None:
                 if self._listener_thread is None or not self._listener_thread.is_alive():
+                    if self._listener_stop_event is not None:
+                        self._listener_stop_event.set()
                     stop_ev = threading.Event()
                     self._listener_stop_event = stop_ev
-                    self._listener_thread = threading.Thread(target=self._ipc_listener, args=(stop_ev,), daemon=True)
+                    self._listener_thread = threading.Thread(target=self._ipc_listener, args=(stop_ev, self.process), daemon=True)
                     self._listener_thread.start()
                 return
+
+            if self._listener_stop_event is not None:
+                self._listener_stop_event.set()
 
             if os.path.exists(self.socket_path):
                 try:
@@ -117,8 +116,7 @@ class MPVController:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                env=env,
-                preexec_fn=_preexec_deathsig
+                env=env
             )
 
             # Wait for socket to appear
@@ -129,7 +127,7 @@ class MPVController:
 
             stop_ev = threading.Event()
             self._listener_stop_event = stop_ev
-            self._listener_thread = threading.Thread(target=self._ipc_listener, args=(stop_ev,), daemon=True)
+            self._listener_thread = threading.Thread(target=self._ipc_listener, args=(stop_ev, self.process), daemon=True)
             self._listener_thread.start()
 
             if self.eq_engine:
@@ -166,17 +164,17 @@ class MPVController:
                 return True
             return False
 
-    def _ipc_listener(self, stop_event: threading.Event):
+    def _ipc_listener(self, stop_event: threading.Event, proc: Optional[subprocess.Popen] = None):
         """Listens for MPV IPC events and property updates in the background."""
         sock_path = self.socket_path
         while not stop_event.is_set():
             if not os.path.exists(sock_path):
                 time.sleep(0.05)
                 continue
-            proc = self.process
-            if proc and proc.poll() is not None:
-                time.sleep(0.2)
-                continue
+            if proc is not None and (proc is not self.process or proc.poll() is not None):
+                return
+            if self.process and self.process.poll() is not None:
+                return
             try:
                 with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
                     s.connect(sock_path)
@@ -214,8 +212,12 @@ class MPVController:
                                     reason = event.get("reason")
                                     if reason == "error":
                                         logger.warning("MPV reported playback end due to stream error")
-                                    if reason in ("eof", "error") and self.playback_finished_callback:
-                                        self.playback_finished_callback()
+                                    if reason in ("eof", "error") and self.playback_finished_callback and not stop_event.is_set():
+                                        cb = self.playback_finished_callback
+                                        try:
+                                            cb(reason or "eof")
+                                        except TypeError:
+                                            cb()
                             except Exception:
                                 pass
             except Exception:

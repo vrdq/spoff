@@ -55,6 +55,10 @@ def live_search_tracks(query: str, limit: int = 25) -> List[Dict[str, Any]]:
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
+        "socket_timeout": 10,
+        "retries": 2,
+        "fragment_retries": 2,
+        "extractor_retries": 1,
     }
     
     tracks: List[Dict[str, Any]] = []

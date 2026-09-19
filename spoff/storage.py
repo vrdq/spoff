@@ -7,6 +7,7 @@ import tempfile
 import fcntl
 import threading
 import re
+import math
 from pathlib import Path
 from contextlib import contextmanager
 from functools import wraps
@@ -101,10 +102,25 @@ def transactional(fn):
             return fn(*args, **kwargs)
     return wrapped
 
-def _safe_json_default(obj: Any) -> Any:
-    if type(obj).__name__.endswith("Mock"):
+def normalize_track(value: Any) -> Optional[Dict[str, Any]]:
+    """Normalizes and validates a track dictionary to conform to the Spoff schema."""
+    if not isinstance(value, dict):
         return None
-    return str(obj)
+    result = dict(value)
+    raw_id = result.get("id")
+    if raw_id is not None:
+        result["id"] = str(raw_id)
+    result["title"] = str(result.get("title") or "Unknown Track")
+    result["artist"] = str(result.get("artist") or "Unknown Artist")
+    try:
+        dur_val = result.get("duration_ms")
+        duration = float(dur_val if dur_val is not None else 0)
+        if not math.isfinite(duration) or duration < 0:
+            duration = 0
+    except (TypeError, ValueError, OverflowError):
+        duration = 0
+    result["duration_ms"] = int(duration)
+    return result
 
 def _atomic_json_dump(filepath: Path, data: Any, mode: int = 0o644) -> None:
     """Safely writes JSON data via an fsynced unique temporary file replaced atomically."""
@@ -125,7 +141,7 @@ def _atomic_json_dump(filepath: Path, data: Any, mode: int = 0o644) -> None:
                 os.chmod(tmp_path, mode)
             except OSError:
                 pass
-            json.dump(data, f, indent=2, ensure_ascii=False, allow_nan=False, default=_safe_json_default)
+            json.dump(data, f, indent=2, ensure_ascii=False, allow_nan=False)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, filepath)
@@ -197,16 +213,37 @@ def cache_path(track_id: str, suffix: str) -> Path:
     return candidate
 
 def load_config() -> Dict[str, Any]:
+    cfg_file = _get_config_file()
+    if not cfg_file.exists():
+        return {}
+    if cfg_file.stat().st_size == 0:
+        corrupted = cfg_file.with_suffix(".json.corrupted")
+        try:
+            shutil.copy2(cfg_file, corrupted)
+        except Exception:
+            pass
+        raise ValueError("Config file is empty/corrupt")
     try:
-        cfg_file = _get_config_file()
-        if cfg_file.exists() and cfg_file.stat().st_size > 0:
-            with open(cfg_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, dict):
-                    return data
-    except Exception as e:
+        with open(cfg_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+            else:
+                corrupted = cfg_file.with_suffix(".json.corrupted")
+                try:
+                    shutil.copy2(cfg_file, corrupted)
+                except Exception:
+                    pass
+                raise ValueError("Config file is not a dictionary")
+    except (OSError, ValueError) as e:
         logger.error(f"Error reading config: {e}")
-    return {}
+        try:
+            corrupted = cfg_file.with_suffix(".json.corrupted")
+            if not corrupted.exists():
+                shutil.copy2(cfg_file, corrupted)
+        except Exception:
+            pass
+        raise
 
 def save_config(config: Dict[str, Any]) -> None:
     _atomic_json_dump(_get_config_file(), config)
@@ -514,8 +551,6 @@ def save_last_played(state: Dict[str, Any]) -> None:
                 val = state[k]
                 if isinstance(val, (str, int, float, bool)):
                     clean_state[k] = val
-                elif val is not None and not type(val).__name__.endswith("Mock"):
-                    clean_state[k] = str(val)
         cfg["last_played"] = clean_state
         save_config(cfg)
     except Exception as e:
@@ -580,128 +615,198 @@ def save_eq_settings(eq_data: Dict[str, Any]) -> None:
 
 def load_liked_songs() -> List[Dict[str, Any]]:
     """Loads all tracks from dedicated liked_songs.json storage."""
+    liked_f = _get_liked_songs_file()
+    if not liked_f.exists():
+        return []
+    if liked_f.stat().st_size == 0:
+        corrupted = liked_f.with_suffix(".json.corrupted")
+        try:
+            shutil.copy2(liked_f, corrupted)
+        except Exception:
+            pass
+        raise ValueError("Liked songs file is empty/corrupt")
     try:
-        liked_f = _get_liked_songs_file()
-        if liked_f.exists() and liked_f.stat().st_size > 0:
-            with open(liked_f, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return [t for t in data if isinstance(t, dict)]
-    except Exception as e:
+        with open(liked_f, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
         logger.error(f"Error reading liked songs: {e}")
-    return []
+        try:
+            corrupted = liked_f.with_suffix(".json.corrupted")
+            shutil.copy2(liked_f, corrupted)
+            logger.warning(f"Corrupted liked songs backed up to {corrupted}")
+        except Exception:
+            pass
+        raise
+    if not isinstance(data, list) or not all(isinstance(t, dict) for t in data):
+        try:
+            corrupted = liked_f.with_suffix(".json.corrupted")
+            shutil.copy2(liked_f, corrupted)
+        except Exception:
+            pass
+        raise ValueError("Invalid Liked Songs document; preserving the file")
+    normalized = []
+    for t in data:
+        norm = normalize_track(t)
+        if norm is not None:
+            normalized.append(norm)
+    return normalized
 
 def save_liked_songs(tracks: List[Dict[str, Any]]) -> None:
     """Atomically persists liked tracks to liked_songs.json."""
-    clean_tracks = [t for t in tracks if isinstance(t, dict)]
+    clean_tracks = [normalize_track(t) for t in tracks if isinstance(t, dict) and normalize_track(t) is not None]
     _atomic_json_dump(_get_liked_songs_file(), clean_tracks)
+
+def liked_index(tracks: List[Dict[str, Any]], target: Dict[str, Any]) -> Optional[int]:
+    """Finds index of target in tracks by exact ID first, then title and artist."""
+    if not isinstance(target, dict):
+        return None
+    track_id = target.get("id")
+    if track_id:
+        for i, item in enumerate(tracks):
+            if item.get("id") == track_id:
+                return i
+    title = str(target.get("title") or "").strip().casefold()
+    artist = str(target.get("artist") or "").strip().casefold()
+    if title and artist:
+        for i, item in enumerate(tracks):
+            if (str(item.get("title") or "").strip().casefold() == title
+                    and str(item.get("artist") or "").strip().casefold() == artist):
+                return i
+    return None
 
 @transactional
 def add_track_to_liked_songs(track: Dict[str, Any]) -> bool:
     """Adds a track to Liked Songs if not already present. Returns True if added."""
-    if not isinstance(track, dict):
+    norm = normalize_track(track)
+    if not norm:
         return False
-    t_id = track.get("id")
-    t_title = str(track.get("title") or "").strip().lower()
-    t_artist = str(track.get("artist") or "").strip().lower()
-
     existing = load_liked_songs()
-    for t in existing:
-        if t_id and t.get("id") and t.get("id") == t_id:
-            return False
-        if t_title and str(t.get("title") or "").strip().lower() == t_title:
-            if t_artist and str(t.get("artist") or "").strip().lower() == t_artist:
-                return False
-    existing.insert(0, dict(track))
+    if liked_index(existing, norm) is not None:
+        return False
+    existing.insert(0, norm)
     save_liked_songs(existing)
-    logger.info(f"Added track to Liked Songs: {track.get('title')}")
+    logger.info(f"Added track to Liked Songs: {norm.get('title')}")
     return True
 
 def is_track_liked(track: Dict[str, Any]) -> bool:
     """Checks whether a track is present in Liked Songs."""
     if not isinstance(track, dict):
         return False
-    t_id = track.get("id")
-    t_title = str(track.get("title") or "").strip().lower()
-    t_artist = str(track.get("artist") or "").strip().lower()
+    try:
+        existing = load_liked_songs()
+    except Exception:
+        return False
+    return liked_index(existing, track) is not None
 
-    existing = load_liked_songs()
-    for t in existing:
-        if t_id and t.get("id") and t.get("id") == t_id:
+@transactional
+def remove_liked_track(track: Dict[str, Any]) -> bool:
+    """Removes a track from Liked Songs using consistent ID/metadata matching. Returns True if removed."""
+    if not isinstance(track, dict):
+        return False
+    tracks = load_liked_songs()
+    index = liked_index(tracks, track)
+    if index is None:
+        return False
+    tracks.pop(index)
+    save_liked_songs(tracks)
+    return True
+
+@transactional
+def remove_track_from_liked_songs(track_id_or_title: str, artist: Optional[str] = None) -> bool:
+    """Legacy helper. Removes a track from Liked Songs. Returns True if removed."""
+    if not track_id_or_title:
+        return False
+    tracks = load_liked_songs()
+    target_id = str(track_id_or_title).strip()
+    # First pass: exact ID match
+    for i, t in enumerate(tracks):
+        if t.get("id") == target_id:
+            tracks.pop(i)
+            save_liked_songs(tracks)
             return True
-        if t_title and str(t.get("title") or "").strip().lower() == t_title:
-            if not t_artist or not t.get("artist") or str(t.get("artist") or "").strip().lower() == t_artist:
+    # Second pass: if no track matched by ID, treat as title
+    target_title = target_id.casefold()
+    target_artist = str(artist).strip().casefold() if artist else None
+    for i, t in enumerate(tracks):
+        t_title = str(t.get("title") or "").strip().casefold()
+        if t_title == target_title:
+            if target_artist is None or str(t.get("artist") or "").strip().casefold() == target_artist:
+                tracks.pop(i)
+                save_liked_songs(tracks)
                 return True
     return False
 
 @transactional
-def remove_track_from_liked_songs(track_id_or_title: str, artist: Optional[str] = None) -> bool:
-    """Removes a track from Liked Songs by ID or title (and optional artist). Returns True if removed."""
-    if not track_id_or_title:
+def move_liked_track(track: Dict[str, Any], delta: int) -> bool:
+    """Moves a track up (delta=-1) or down (delta=1) in Liked Songs atomically."""
+    tracks = load_liked_songs()
+    index = liked_index(tracks, track)
+    if index is None or not (0 <= index + delta < len(tracks)):
         return False
-    clean_target = str(track_id_or_title).strip()
-    target_lower = clean_target.lower()
-    artist_lower = str(artist).strip().lower() if artist else None
-    existing = load_liked_songs()
-    filtered = []
-    removed = False
-    for t in existing:
-        if not removed:
-            id_match = bool(clean_target and t.get("id") and t.get("id") == clean_target)
-            title_match = bool(target_lower and str(t.get("title") or "").strip().lower() == target_lower)
-            if artist_lower and title_match:
-                t_artist = str(t.get("artist") or "").strip().lower()
-                if t_artist and t_artist != artist_lower:
-                    title_match = False
-            if id_match or title_match:
-                removed = True
-                continue
-        filtered.append(t)
-    if removed:
-        save_liked_songs(filtered)
-        logger.info(f"Removed track from Liked Songs: {clean_target}")
-        return True
-    return False
+    tracks.insert(index + delta, tracks.pop(index))
+    save_liked_songs(tracks)
+    return True
 
+@transactional
 def load_saved_playlists() -> List[Dict[str, Any]]:
-    try:
-        pl_file = _get_playlists_file()
-        if pl_file.exists() and pl_file.stat().st_size > 0:
-            with open(pl_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    valid_playlists = []
-                    migrated_liked = None
-                    had_liked = False
-                    for p in data:
-                        if isinstance(p, dict):
-                            if p.get("id") == "spotify_liked_songs":
-                                had_liked = True
-                                migrated_liked = p.get("tracks", [])
-                                continue
-                            if "id" not in p:
-                                p["id"] = f"pl_{uuid.uuid4().hex[:8]}"
-                            if "tracks" not in p or not isinstance(p["tracks"], list):
-                                p["tracks"] = []
-                            else:
-                                p["tracks"] = [t for t in p["tracks"] if isinstance(t, dict)]
-                            valid_playlists.append(p)
-                    if had_liked:
-                        if migrated_liked and not load_liked_songs():
-                            save_liked_songs(migrated_liked)
-                        save_saved_playlists(valid_playlists)
-                    return valid_playlists
-    except Exception as e:
-        logger.error(f"Error reading playlists: {e}")
+    pl_file = _get_playlists_file()
+    if not pl_file.exists():
+        return []
+    if pl_file.stat().st_size == 0:
+        corrupted = pl_file.with_suffix(".json.corrupted")
         try:
-            pl_file = _get_playlists_file()
-            if pl_file.exists() and pl_file.stat().st_size > 0:
-                corrupted = pl_file.with_suffix(".json.corrupted")
-                shutil.copy2(pl_file, corrupted)
-                logger.warning(f"Corrupted playlists backed up to {corrupted}")
+            shutil.copy2(pl_file, corrupted)
         except Exception:
             pass
-    return []
+        raise ValueError("Playlists file is empty/corrupt")
+    try:
+        with open(pl_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        logger.error(f"Error reading playlists: {e}")
+        try:
+            corrupted = pl_file.with_suffix(".json.corrupted")
+            shutil.copy2(pl_file, corrupted)
+            logger.warning(f"Corrupted playlists backed up to {corrupted}")
+        except Exception:
+            pass
+        raise
+    if not isinstance(data, list):
+        try:
+            corrupted = pl_file.with_suffix(".json.corrupted")
+            shutil.copy2(pl_file, corrupted)
+        except Exception:
+            pass
+        raise ValueError("Playlists document is not a list")
+
+    valid_playlists = []
+    migrated_liked = []
+    had_liked = False
+    for p in data:
+        if isinstance(p, dict):
+            if p.get("id") == "spotify_liked_songs":
+                had_liked = True
+                legacy = p.get("tracks", [])
+                if isinstance(legacy, list):
+                    migrated_liked.extend([t for t in legacy if isinstance(t, dict)])
+                continue
+            if "id" not in p:
+                p["id"] = f"pl_{uuid.uuid4().hex[:8]}"
+            if "tracks" not in p or not isinstance(p["tracks"], list):
+                p["tracks"] = []
+            else:
+                p["tracks"] = [normalize_track(t) for t in p["tracks"] if isinstance(t, dict) and normalize_track(t) is not None]
+            valid_playlists.append(p)
+
+    if had_liked:
+        merged = load_liked_songs()
+        for track in migrated_liked:
+            norm = normalize_track(track)
+            if norm and liked_index(merged, norm) is None:
+                merged.append(norm)
+        save_liked_songs(merged)
+        save_saved_playlists(valid_playlists)
+    return valid_playlists
 
 def save_saved_playlists(playlists: List[Dict[str, Any]]) -> None:
     _atomic_json_dump(_get_playlists_file(), playlists)
@@ -778,6 +883,43 @@ def update_playlist_tracks(playlist_id: str, tracks: List[Dict[str, Any]]):
             p["tracks"] = [t for t in tracks if isinstance(t, dict)]
             save_saved_playlists(existing)
             return
+
+@transactional
+def move_playlist_track(playlist_id: str, track: Dict[str, Any], delta: int) -> bool:
+    """Moves a track up (delta=-1) or down (delta=1) in a playlist atomically."""
+    existing = load_saved_playlists()
+    for p in existing:
+        if p.get("id") == playlist_id:
+            tracks = p.get("tracks", [])
+            idx = liked_index(tracks, track)
+            if idx is None or not (0 <= idx + delta < len(tracks)):
+                return False
+            tracks.insert(idx + delta, tracks.pop(idx))
+            p["tracks"] = tracks
+            save_saved_playlists(existing)
+            return True
+    return False
+
+@transactional
+def remove_track_from_playlist_by_index_or_track(playlist_id: str, track: Dict[str, Any], index: Optional[int] = None) -> bool:
+    """Removes a track from a playlist atomically by index or identity."""
+    existing = load_saved_playlists()
+    for p in existing:
+        if p.get("id") == playlist_id:
+            tracks = p.get("tracks", [])
+            target_idx = None
+            if index is not None and 0 <= index < len(tracks):
+                cand = tracks[index]
+                if cand.get("id") == track.get("id") or liked_index([cand], track) is not None:
+                    target_idx = index
+            if target_idx is None:
+                target_idx = liked_index(tracks, track)
+            if target_idx is not None and 0 <= target_idx < len(tracks):
+                tracks.pop(target_idx)
+                p["tracks"] = tracks
+                save_saved_playlists(existing)
+                return True
+    return False
 
 @transactional
 def remove_saved_playlist(playlist_id: str) -> bool:
@@ -1042,3 +1184,35 @@ def delete_cached_track(track_id: str) -> bool:
         except Exception as e:
             logger.error(f"Failed to delete cache file {candidate}: {e}")
     return removed
+
+@transactional
+def quarantine_cached_track(track_id: str, source: Optional[Any] = None) -> bool:
+    """Quarantines corrupt audio file and removes it from offline registry."""
+    if not track_id:
+        return False
+    try:
+        val_id = validate_track_id(track_id)
+    except ValueError:
+        return False
+    if source is None:
+        source = get_cached_track_path(val_id)
+    if source:
+        try:
+            source_path = Path(source)
+            root = CACHE_DIR.resolve()
+            source_resolved = source_path.resolve()
+            if root in source_resolved.parents or source_resolved.parent == root:
+                if source_resolved.is_file():
+                    corrupt_name = f"{source_resolved.name}.corrupt-{uuid.uuid4().hex[:8]}"
+                    try:
+                        source_resolved.replace(source_resolved.with_name(corrupt_name))
+                    except Exception as e:
+                        logger.warning(f"Could not rename corrupt cache file {source_resolved}: {e}")
+        except Exception:
+            pass
+    index = load_offline_index()
+    if val_id in index:
+        index.pop(val_id, None)
+        save_offline_index(index)
+    return True
+

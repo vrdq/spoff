@@ -27,7 +27,7 @@ def invalidate_stream_cache(track_title: str, artist: str, direct_url: Optional[
     cache_key = f"{track_title.lower()}::{artist.lower()}"
     if direct_url:
         cache_key = f"{direct_url}::{cache_key}"
-    _stream_cache.pop(cache_key, None)
+_download_slots = threading.BoundedSemaphore(4)
 
 def get_base_ydl_opts(extra_opts=None):
     opts = {
@@ -37,6 +37,10 @@ def get_base_ydl_opts(extra_opts=None):
         "noplaylist": True,
         "default_search": "ytsearch1:",
         "extract_flat": False,
+        "socket_timeout": 10,
+        "retries": 2,
+        "fragment_retries": 2,
+        "extractor_retries": 1,
     }
     if extra_opts:
         opts.update(extra_opts)
@@ -202,6 +206,7 @@ def download_track_to_cache(
             on_complete(cached_path)
         return None
 
+    acquired_slot = False
     with _download_lock:
         existing_future = _active_download_futures.get(val_id)
         if existing_future is not None or val_id in _active_downloads:
@@ -212,10 +217,16 @@ def download_track_to_cache(
             future = existing_future
             is_new = False
         else:
+            if not _download_slots.acquire(blocking=False):
+                err = RuntimeError("Four downloads are already active")
+                if on_error:
+                    on_error(err)
+                return None
             future = Future()
             _active_download_futures[val_id] = future
             _active_downloads.add(val_id)
             is_new = True
+            acquired_slot = True
 
     def _deliver(fut: Future):
         try:
@@ -257,6 +268,8 @@ def download_track_to_cache(
             with _download_lock:
                 _active_download_futures.pop(val_id, None)
                 _active_downloads.discard(val_id)
+            if acquired_slot:
+                _download_slots.release()
 
     if blocking:
         _worker()
@@ -270,6 +283,8 @@ def download_track_to_cache(
         with _download_lock:
             _active_download_futures.pop(val_id, None)
             _active_downloads.discard(val_id)
+        if acquired_slot:
+            _download_slots.release()
         if not future.done():
             future.set_exception(e)
         raise

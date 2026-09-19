@@ -190,7 +190,7 @@ def fetch_spotify_track(track_id_or_url: str) -> Optional[Dict[str, Any]]:
         "uri": entity.get("uri") or f"spotify:track:{t_id}",
         "url": f"https://open.spotify.com/track/{t_id}",
         "art_url": cover_url or artist_pic,
-        "artist_art_url": artist_pic or cover_url,
+        "artist_art_url": artist_pic,
         "album_art_url": cover_url,
         "source": "spotify"
     }

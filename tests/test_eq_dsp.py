@@ -203,8 +203,8 @@ class TestParametricEQDSP(unittest.TestCase):
         engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
         af_str = engine.to_ffmpeg_af()
 
-        # 1. Preamp must be first filter in chain with double floating point precision
-        self.assertTrue(af_str.startswith("volume=volume=-5.00dB:precision=double"))
+        # 1. Resample and Preamp must be first filters in chain
+        self.assertTrue(af_str.startswith("aresample=48000,volume=volume=-5.00dB:precision=double"))
 
         # 2. Contains all 10 biquad stages with double precision (r=f64)
         self.assertIn("lowshelf=f=65.0:t=q:w=0.70:g=4.50:r=f64", af_str)
@@ -212,9 +212,9 @@ class TestParametricEQDSP(unittest.TestCase):
         self.assertIn("equalizer=f=10000.0:t=q:w=2.20:g=-7.50:r=f64", af_str)
         self.assertIn("highshelf=f=13500.0:t=q:w=0.70:g=3.00:r=f64", af_str)
 
-        # Count filter stages: 1 volume + 10 biquads = 11 filters
+        # Count filter stages: 1 aresample + 1 volume + 10 biquads = 12 filters
         stages = af_str.split(",")
-        self.assertEqual(len(stages), 11)
+        self.assertEqual(len(stages), 12)
 
     def test_serialization_and_equalizer_apo_export(self):
         """Tests round-trip serialization and EqualizerAPO format export."""

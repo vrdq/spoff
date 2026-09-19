@@ -31,9 +31,12 @@ class TestPlaybackSelection(unittest.TestCase):
         self.assertTrue(app._is_same_track(t1, t1))
         # Same ID
         self.assertTrue(app._is_same_track(t1, t2))
-        # Same Title and Artist (case insensitive)
-        self.assertTrue(app._is_same_track(t1, t3))
-        self.assertTrue(app._is_same_track(t1, t4))
+        # Different IDs for distinct recordings must not match even if title/artist are the same (Finding N02)
+        self.assertFalse(app._is_same_track(t1, t3))
+        self.assertFalse(app._is_same_track(t1, t4))
+        # Fallback to Title and Artist when ID is missing
+        t_no_id = {"title": "track one", "artist": "artist a"}
+        self.assertTrue(app._is_same_track(t1, t_no_id))
         # Different Title
         self.assertFalse(app._is_same_track(t1, t5))
         # None values

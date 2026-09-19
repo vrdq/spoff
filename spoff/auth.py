@@ -618,6 +618,8 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
     initial_local = load_saved_playlists()
     initial_ids = {p.get("id") for p in initial_local if p.get("id")}
     initial_sp_ids = {p.get("spotify_id") for p in initial_local if p.get("spotify_id")}
+    initial_liked = load_liked_songs()
+    initial_by_id = {p["id"]: p for p in initial_local if p.get("id")}
 
     liked = fetch_liked_songs(token, max_tracks=None)
 
@@ -643,6 +645,7 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
 
     synced_count = 0
     with storage_transaction():
+        deleted_ids = get_deleted_spotify_playlist_ids()
         current_playlists = load_saved_playlists()
         current_ids = {p.get("id") for p in current_playlists if p.get("id")}
         current_sp_ids = {p.get("spotify_id") for p in current_playlists if p.get("spotify_id")}
@@ -650,9 +653,12 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
         # Sync Liked Songs if successfully fetched
         if liked is not None:
             current_liked = load_liked_songs()
-            merged_liked = merge_spotify_and_client_tracks(liked, current_liked)
-            save_liked_songs(merged_liked)
-            synced_count += 1
+            if current_liked == initial_liked:
+                merged_liked = merge_spotify_and_client_tracks(liked, current_liked)
+                save_liked_songs(merged_liked)
+                synced_count += 1
+            else:
+                logger.info("Local liked songs modified during sync fetch; preserving local edits.")
 
         # Ensure spotify_liked_songs is not in current_playlists
         current_playlists = [p for p in current_playlists if p.get("id") != "spotify_liked_songs"]
@@ -669,6 +675,13 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
                     or (p.get("spotify_id") and p.get("spotify_id") == p_id)
                 )
                 if matches:
+                    original = initial_by_id.get(p.get("id"))
+                    if original is not None and (
+                        original.get("name") != p.get("name")
+                        or original.get("tracks", []) != p.get("tracks", [])
+                    ):
+                        found = True
+                        break
                     p["name"] = p_name
                     existing_tracks = p.get("tracks", [])
                     p["tracks"] = merge_spotify_and_client_tracks(tracks, existing_tracks)
@@ -1079,23 +1092,11 @@ def delete_spotify_playlist(
     if not target_spotify_pl_id:
         local_playlists = load_saved_playlists()
         for pl in local_playlists:
-            if pl.get("id") == playlist_id or (playlist_name and pl.get("name") == playlist_name):
+            if pl.get("id") == playlist_id:
                 extracted = extract_spotify_playlist_id(pl)
                 if extracted:
                     target_spotify_pl_id = extracted
                     break
-
-    # If still not found, check user's Spotify playlists for matching name
-    if not target_spotify_pl_id and playlist_name:
-        try:
-            user_pls = fetch_user_playlists(token)
-            clean_pname = playlist_name.strip().lower()
-            for upl in user_pls:
-                if upl.get("name", "").strip().lower() == clean_pname:
-                    target_spotify_pl_id = upl.get("id")
-                    break
-        except Exception as e:
-            logger.warning(f"Error querying Spotify playlists by name for deletion: {e}")
 
     if not target_spotify_pl_id:
         return False, "Playlist not found on Spotify"
