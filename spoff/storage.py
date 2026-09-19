@@ -433,6 +433,32 @@ def save_visualizer_color(color: str):
         logger.error(f"Error saving visualizer color: {e}")
         raise
 
+def get_saved_last_played() -> Dict[str, Any]:
+    """Retrieves saved last played state from config."""
+    try:
+        cfg = load_config()
+        val = cfg.get("last_played")
+        if isinstance(val, dict):
+            return val
+    except Exception as e:
+        logger.error(f"Error reading last played state: {e}")
+    return {}
+
+@transactional
+def save_last_played(state: Dict[str, Any]) -> None:
+    """Persists last played state to config."""
+    try:
+        cfg = load_config()
+        clean_state: Dict[str, Any] = {}
+        for k in ("playlist_id", "tab", "track_id", "track_title", "track_artist", "track_index"):
+            if k in state:
+                clean_state[k] = state[k]
+        cfg["last_played"] = clean_state
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving last played state: {e}")
+        raise
+
 def get_custom_keybindings() -> Dict[str, str]:
     """Retrieves custom keybindings mapping action_name -> key_string."""
     try:

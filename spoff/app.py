@@ -52,7 +52,7 @@ try:
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
         load_eq_settings, save_eq_settings, remove_deleted_spotify_playlist_id,
         load_liked_songs, save_liked_songs, add_track_to_liked_songs, remove_track_from_liked_songs,
-        is_track_liked
+        is_track_liked, get_saved_last_played, save_last_played
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache
     from .search import live_search_tracks
@@ -98,7 +98,7 @@ except ImportError:
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
         load_eq_settings, save_eq_settings, remove_deleted_spotify_playlist_id,
         load_liked_songs, save_liked_songs, add_track_to_liked_songs, remove_track_from_liked_songs,
-        is_track_liked
+        is_track_liked, get_saved_last_played, save_last_played
     )
     from streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache
     from search import live_search_tracks
@@ -4952,9 +4952,38 @@ class SpoffTUI(App):
     def action_open_settings(self) -> None:
         self.push_screen(SettingsModal())
 
+    def _save_playback_state(self, track: Optional[Dict[str, Any]] = None):
+        try:
+            t = track or getattr(getattr(self, "player", None), "current_track", None)
+            c_idx = getattr(self, "current_index", -1)
+            if t is None and self.active_tab == "playlist" and self.current_playlist_tracks:
+                try:
+                    tt = self.query_one("#track-table", DataTable)
+                    c_row = getattr(tt, "cursor_row", None)
+                    if c_row is not None and 0 <= c_row < len(self.current_playlist_tracks):
+                        t = self.current_playlist_tracks[c_row]
+                        c_idx = c_row
+                except Exception:
+                    pass
+            if t:
+                save_last_played({
+                    "playlist_id": getattr(self, "current_playlist_id", None),
+                    "tab": getattr(self, "active_tab", "playlist"),
+                    "track_id": t.get("id"),
+                    "track_title": t.get("title"),
+                    "track_artist": t.get("artist"),
+                    "track_index": c_idx,
+                })
+        except Exception as e:
+            logger.debug(f"Could not persist last played state: {e}")
+
     def _cleanup_on_exit(self):
         self._closing = True
         self._play_request_id += 1
+        try:
+            self._save_playback_state()
+        except Exception:
+            pass
         try:
             vol_to_save = self.volume if self.volume > 0 else (getattr(self, "_prev_volume", 80) or 80)
             save_volume(vol_to_save)
@@ -5066,10 +5095,73 @@ class SpoffTUI(App):
         self.set_interval(0.5, self.update_player_hud)
         logger.info("Spoff engine active.")
 
+        last_state = get_saved_last_played()
+        saved_tab = last_state.get("tab")
+        saved_pid = last_state.get("playlist_id")
+        saved_tid = last_state.get("track_id")
+        saved_title = last_state.get("track_title")
+        saved_artist = last_state.get("track_artist")
+        saved_t_idx = last_state.get("track_index")
+
         if self.playlists:
-            st.move_cursor(row=0)
-            self.load_playlist_by_index(0, focus_tracks=True)
+            target_pl_idx = 0
+            if saved_pid:
+                for p_idx, p in enumerate(self.playlists):
+                    if p.get("id") == saved_pid:
+                        target_pl_idx = p_idx
+                        break
+
+            pl = self.playlists[target_pl_idx]
+            pl_tracks = list(pl.get("tracks", []))
+            target_track_row = 0
+            if pl_tracks:
+                found_row = None
+                if saved_tid:
+                    for r_idx, t in enumerate(pl_tracks):
+                        if t.get("id") == saved_tid:
+                            found_row = r_idx
+                            break
+                if found_row is None and saved_title:
+                    for r_idx, t in enumerate(pl_tracks):
+                        if t.get("title") == saved_title and (not saved_artist or t.get("artist") == saved_artist):
+                            found_row = r_idx
+                            break
+                if found_row is None and isinstance(saved_t_idx, int) and 0 <= saved_t_idx < len(pl_tracks):
+                    found_row = saved_t_idx
+                if found_row is not None:
+                    target_track_row = found_row
+
+            st.move_cursor(row=target_pl_idx)
+            self.load_playlist_by_index(target_pl_idx, focus_tracks=True, select_row=target_track_row)
             tt.focus()
+        elif saved_tab == "liked":
+            liked = load_liked_songs()
+            if liked:
+                target_track_row = 0
+                if saved_tid:
+                    for r_idx, t in enumerate(liked):
+                        if t.get("id") == saved_tid:
+                            target_track_row = r_idx
+                            break
+                self.switch_view("liked", select_row=target_track_row)
+                tt.focus()
+            else:
+                self.switch_view("search")
+                tt.focus()
+        elif saved_tab == "offline":
+            offline_tracks = list(load_offline_index().values())
+            if offline_tracks:
+                target_track_row = 0
+                if saved_tid:
+                    for r_idx, t in enumerate(offline_tracks):
+                        if t.get("id") == saved_tid:
+                            target_track_row = r_idx
+                            break
+                self.switch_view("offline", select_row=target_track_row)
+                tt.focus()
+            else:
+                self.switch_view("search")
+                tt.focus()
         else:
             self.switch_view("search")
             tt.focus()
@@ -5497,7 +5589,7 @@ class SpoffTUI(App):
             self.mpris.update_loop_status(self.repeat_mode)
         self.update_player_hud()
 
-    def switch_view(self, view: str, focus_sidebar: Optional[bool] = None):
+    def switch_view(self, view: str, focus_sidebar: Optional[bool] = None, select_row: Optional[int] = None):
         self.active_tab = view
         search_row = self.query_one("#search-header-row", Horizontal)
         track_table = self.query_one("#track-table", DataTable)
@@ -5538,7 +5630,7 @@ class SpoffTUI(App):
                 self.current_playlist_id = self.playlists[0].get("id")
                 self.current_playlist_tracks = list(self.playlists[0].get("tracks", []))
 
-            self.render_tracks(self.current_playlist_tracks, reset_cursor=True)
+            self.render_tracks(self.current_playlist_tracks, select_row=select_row, reset_cursor=(select_row is None))
             st = self.query_one("#side-table", DataTable)
             should_focus_sidebar = focus_sidebar if focus_sidebar is not None else True
             if should_focus_sidebar:
@@ -5565,7 +5657,7 @@ class SpoffTUI(App):
                 self.notify_user("")
         elif view == "liked":
             self.current_liked_tracks = load_liked_songs()
-            self.render_tracks(self.current_liked_tracks, reset_cursor=True)
+            self.render_tracks(self.current_liked_tracks, select_row=select_row, reset_cursor=(select_row is None))
             if not (self.focused and self.focused.id == "side-table"):
                 track_table.focus()
             if not self.current_liked_tracks:
@@ -5574,7 +5666,7 @@ class SpoffTUI(App):
                 self.notify_user("")
         elif view == "offline":
             offline_tracks = list(load_offline_index().values())
-            self.render_tracks(offline_tracks, reset_cursor=True)
+            self.render_tracks(offline_tracks, select_row=select_row, reset_cursor=(select_row is None))
             if not (self.focused and self.focused.id == "side-table"):
                 track_table.focus()
             if not offline_tracks:
@@ -6641,7 +6733,7 @@ class SpoffTUI(App):
         except Exception:
             pass
 
-    def load_playlist_by_index(self, idx: int, focus_tracks: bool = False):
+    def load_playlist_by_index(self, idx: int, focus_tracks: bool = False, select_row: Optional[int] = None):
         if 0 <= idx < len(self.playlists):
             pl = self.playlists[idx]
             self.current_playlist_id = pl.get("id")
@@ -6658,9 +6750,9 @@ class SpoffTUI(App):
                 self.current_playlist_tracks = list(pl["tracks"])
                 if not self.queue or self.current_index == -1:
                     self.queue = list(self.current_playlist_tracks)
-                    self.current_index = -1
+                    self.current_index = select_row if (select_row is not None and 0 <= select_row < len(self.queue)) else -1
                 self.notify_user(f"Loaded playlist '{name}' ({len(self.current_playlist_tracks)} tracks).")
-                self.switch_view("playlist", focus_sidebar=not focus_tracks)
+                self.switch_view("playlist", focus_sidebar=not focus_tracks, select_row=select_row)
                 if focus_tracks:
                     self.query_one("#track-table", DataTable).focus()
                 else:
@@ -6674,7 +6766,7 @@ class SpoffTUI(App):
                 self.current_playlist_tracks = []
                 self.render_tracks([])
                 self.notify_user(f"Opened empty playlist '{name}'." if self.advanced_mode else f"Opened empty playlist '{name}'. Press 'a' on any song to add it.")
-                self.switch_view("playlist", focus_sidebar=not focus_tracks)
+                self.switch_view("playlist", focus_sidebar=not focus_tracks, select_row=select_row)
                 if focus_tracks:
                     self.query_one("#track-table", DataTable).focus()
                 else:
@@ -8068,6 +8160,7 @@ class SpoffTUI(App):
                 dur_s = self.player.get_duration()
             self.mpris.update_track(track, dur_s)
         self.update_player_hud()
+        threading.Thread(target=lambda: self._save_playback_state(track), daemon=True).start()
         return True
 
     def _playback_failed(self, req_id: int, track: Dict[str, Any]):

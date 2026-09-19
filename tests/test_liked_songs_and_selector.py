@@ -829,6 +829,196 @@ class TestVisualizerRemovalAndToggle(unittest.TestCase):
             self.assertEqual(app_disabled.visualizer.style, "off")
 
 
+class TestLastPlayedRestoration(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.old_data_dir = storage.DATA_DIR
+        self.old_config_file = storage.CONFIG_FILE
+        self.old_playlists_file = storage.PLAYLISTS_FILE
+        storage.DATA_DIR = Path(self.temp_dir.name)
+        storage.CONFIG_FILE = storage.DATA_DIR / "config.json"
+        storage.PLAYLISTS_FILE = storage.DATA_DIR / "playlists.json"
+        storage.DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        storage.DATA_DIR = self.old_data_dir
+        storage.CONFIG_FILE = self.old_config_file
+        storage.PLAYLISTS_FILE = self.old_playlists_file
+        self.temp_dir.cleanup()
+
+    def test_storage_save_and_get_last_played(self):
+        self.assertEqual(storage.get_saved_last_played(), {})
+        state = {
+            "playlist_id": "pl_test",
+            "tab": "playlist",
+            "track_id": "trk_123",
+            "track_title": "Cool Song",
+            "track_artist": "Cool Artist",
+            "track_index": 3,
+        }
+        storage.save_last_played(state)
+        loaded = storage.get_saved_last_played()
+        self.assertEqual(loaded.get("playlist_id"), "pl_test")
+        self.assertEqual(loaded.get("track_id"), "trk_123")
+        self.assertEqual(loaded.get("track_index"), 3)
+
+    def test_on_mount_restores_last_played_track_in_playlist(self):
+        playlists = [
+            {
+                "id": "pl_1",
+                "name": "First Playlist",
+                "tracks": [{"id": "t1", "title": "Song 1"}, {"id": "t2", "title": "Song 2"}, {"id": "t3", "title": "Song 3"}],
+            },
+            {
+                "id": "pl_2",
+                "name": "Second Playlist",
+                "tracks": [{"id": "t4", "title": "Song 4"}, {"id": "t5", "title": "Song 5"}],
+            },
+        ]
+        storage.save_saved_playlists(playlists)
+        storage.save_last_played({
+            "playlist_id": "pl_1",
+            "tab": "playlist",
+            "track_id": "t2",
+            "track_title": "Song 2",
+            "track_index": 1,
+        })
+
+        with patch("spoff.app.MPVController"), \
+             patch("spoff.app.MPRISService"), \
+             patch("spoff.app.ParametricEQEngine"), \
+             patch.object(SpoffTUI, "check_github_updates_bg"), \
+             patch.object(SpoffTUI, "backfill_playlists_art_bg"), \
+             patch.object(SpoffTUI, "apply_transparency"):
+            app = SpoffTUI()
+            app.playlists = playlists
+
+            side_table = Mock(spec=DataTable)
+            side_table.move_cursor = Mock()
+            side_table.cursor_row = None
+            side_table.add_column = Mock()
+            side_table.add_row = Mock()
+
+            track_table = Mock(spec=DataTable)
+            track_table.move_cursor = Mock()
+            track_table.focus = Mock()
+            track_table.add_columns = Mock()
+            track_table.add_row = Mock()
+
+            lyrics_table = Mock(spec=DataTable)
+            lyrics_table.add_column = Mock()
+
+            def mock_query(sel, *args, **kwargs):
+                if sel == "#side-table":
+                    return side_table
+                if sel == "#track-table":
+                    return track_table
+                if sel == "#lyrics-table":
+                    return lyrics_table
+                if sel == "#sidebar":
+                    return Mock()
+                return Mock()
+
+            app.query_one = Mock(side_effect=mock_query)
+            app.set_interval = Mock()
+            app.set_timer = Mock()
+
+            app.load_playlist_by_index = Mock()
+
+            app.on_mount()
+
+            # Verify load_playlist_by_index was called for playlist 0 with select_row=1
+            app.load_playlist_by_index.assert_called_with(0, focus_tracks=True, select_row=1)
+            side_table.move_cursor.assert_called_with(row=0)
+            track_table.focus.assert_called()
+
+    def test_on_mount_restores_last_played_second_playlist(self):
+        playlists = [
+            {
+                "id": "pl_1",
+                "name": "First Playlist",
+                "tracks": [{"id": "t1", "title": "Song 1"}],
+            },
+            {
+                "id": "pl_2",
+                "name": "Second Playlist",
+                "tracks": [{"id": "t4", "title": "Song 4"}, {"id": "t5", "title": "Song 5"}],
+            },
+        ]
+        storage.save_saved_playlists(playlists)
+        storage.save_last_played({
+            "playlist_id": "pl_2",
+            "tab": "playlist",
+            "track_id": "t5",
+            "track_title": "Song 5",
+            "track_index": 1,
+        })
+
+        with patch("spoff.app.MPVController"), \
+             patch("spoff.app.MPRISService"), \
+             patch("spoff.app.ParametricEQEngine"), \
+             patch.object(SpoffTUI, "check_github_updates_bg"), \
+             patch.object(SpoffTUI, "backfill_playlists_art_bg"), \
+             patch.object(SpoffTUI, "apply_transparency"):
+            app = SpoffTUI()
+            app.playlists = playlists
+
+            side_table = Mock(spec=DataTable)
+            side_table.move_cursor = Mock()
+            side_table.add_column = Mock()
+            side_table.add_row = Mock()
+
+            track_table = Mock(spec=DataTable)
+            track_table.move_cursor = Mock()
+            track_table.focus = Mock()
+            track_table.add_columns = Mock()
+            track_table.add_row = Mock()
+
+            lyrics_table = Mock(spec=DataTable)
+            lyrics_table.add_column = Mock()
+
+            def mock_query(sel, *args, **kwargs):
+                if sel == "#side-table":
+                    return side_table
+                if sel == "#track-table":
+                    return track_table
+                if sel == "#lyrics-table":
+                    return lyrics_table
+                if sel == "#sidebar":
+                    return Mock()
+                return Mock()
+
+            app.query_one = Mock(side_effect=mock_query)
+            app.set_interval = Mock()
+            app.set_timer = Mock()
+
+            app.load_playlist_by_index = Mock()
+
+            app.on_mount()
+
+            # Verify load_playlist_by_index was called for playlist 1 with select_row=1
+            app.load_playlist_by_index.assert_called_with(1, focus_tracks=True, select_row=1)
+            side_table.move_cursor.assert_called_with(row=1)
+
+    def test_save_playback_state_records_correct_track(self):
+        with patch("spoff.app.MPVController"), \
+             patch("spoff.app.MPRISService"), \
+             patch("spoff.app.ParametricEQEngine"):
+            app = SpoffTUI()
+            app.current_playlist_id = "pl_123"
+            app.active_tab = "playlist"
+            app.current_index = 4
+            app.player.current_track = {"id": "trk_4", "title": "Track 4", "artist": "Singer"}
+
+            app._save_playback_state()
+
+            saved = storage.get_saved_last_played()
+            self.assertEqual(saved.get("playlist_id"), "pl_123")
+            self.assertEqual(saved.get("track_id"), "trk_4")
+            self.assertEqual(saved.get("track_title"), "Track 4")
+            self.assertEqual(saved.get("track_index"), 4)
+
+
 if __name__ == "__main__":
     unittest.main()
 
