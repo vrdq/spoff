@@ -88,17 +88,18 @@ def parse_ytmusic_url(url_or_id: str) -> Optional[Tuple[str, str]]:
 
     qs = urllib.parse.parse_qs(parsed.query)
     list_id = qs.get("list", [None])[0]
+    v_id = qs.get("v", [None])[0]
 
-    if list_id:
+    if list_id and not (v_id and list_id.startswith(("RD", "UL", "WL", "LL"))):
         if list_id.startswith("OLAK5uy_"):
             return ("album", list_id)
-        return ("playlist", list_id)
+        if not list_id.startswith(("RD", "UL", "WL", "LL")):
+            return ("playlist", list_id)
 
     m_browse = re.search(r'browse/(MPREb_[a-zA-Z0-9_-]+)', parsed.path)
     if m_browse:
         return ("album", m_browse.group(1))
 
-    v_id = qs.get("v", [None])[0]
     if v_id:
         return ("track", v_id)
 

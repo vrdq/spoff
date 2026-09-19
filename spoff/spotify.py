@@ -55,7 +55,7 @@ def fetch_spotify_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
     tracks: List[Dict[str, Any]] = []
     for item in entity.get("trackList", []):
         tracks.append({
-            "id": item.get("uri", "").replace("spotify:track:", ""),
+            "id": str(item.get("uri") or "").replace("spotify:track:", ""),
             "title": item.get("title") or "Unknown Title",
             "artist": item.get("subtitle") or "Unknown Artist",
             "duration_ms": item.get("duration") or 0,
@@ -107,7 +107,7 @@ def fetch_spotify_album(album_id_or_url: str) -> Optional[Dict[str, Any]]:
     tracks: List[Dict[str, Any]] = []
     for item in entity.get("trackList", []):
         tracks.append({
-            "id": item.get("uri", "").replace("spotify:track:", ""),
+            "id": str(item.get("uri") or "").replace("spotify:track:", ""),
             "title": item.get("title") or "Unknown Title",
             "artist": item.get("subtitle") or "Unknown Artist",
             "duration_ms": item.get("duration") or 0,
@@ -165,7 +165,7 @@ def fetch_spotify_track(track_id_or_url: str) -> Optional[Dict[str, Any]]:
     if artists and isinstance(artists, list) and len(artists) > 0:
         artist_name = ", ".join(a.get("name", "") for a in artists if isinstance(a, dict) and a.get("name")) or "Unknown Artist"
         first_artist = artists[0]
-        if isinstance(first_artist, dict) and "uri" in first_artist:
+        if isinstance(first_artist, dict) and isinstance(first_artist.get("uri"), str) and ":" in first_artist["uri"]:
             art_id = first_artist["uri"].split(":")[-1]
             try:
                 art_req = urllib.request.Request(f"https://open.spotify.com/embed/artist/{art_id}", headers={"User-Agent": USER_AGENT})

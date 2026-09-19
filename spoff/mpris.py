@@ -1,5 +1,6 @@
 import os
 import re
+import math
 import logging
 import threading
 from typing import Dict, Any, Optional, Callable
@@ -422,9 +423,9 @@ class MPRISService:
         self._emit_changed({"PlaybackStatus": status})
 
     def update_position(self, pos_sec: float) -> None:
-        if not self.dbus_obj:
+        if not self.dbus_obj or pos_sec is None or not math.isfinite(pos_sec):
             return
-        self.dbus_obj.Position = int(pos_sec * 1_000_000)
+        self.dbus_obj.Position = max(0, int(pos_sec * 1_000_000))
 
     def update_volume(self, vol_int: int) -> None:
         if not HAS_DBUS or not self.dbus_obj or GLib is None:

@@ -30,6 +30,13 @@ logger = logging.getLogger("art")
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 ART_CACHE_FILE = DATA_DIR / "cache" / "art_cache.json"
 
+def _get_art_cache_file() -> Path:
+    try:
+        from . import storage
+        return storage.DATA_DIR / "cache" / "art_cache.json"
+    except Exception:
+        return ART_CACHE_FILE
+
 _art_cache_lock = threading.Lock()
 _memory_art_cache: Dict[str, Dict[str, Optional[str]]] = {}
 _cache_loaded = False
@@ -40,8 +47,9 @@ def _load_disk_cache() -> None:
     if _cache_loaded:
         return
     try:
-        if ART_CACHE_FILE.exists():
-            with open(ART_CACHE_FILE, "r", encoding="utf-8") as f:
+        cache_f = _get_art_cache_file()
+        if cache_f.exists():
+            with open(cache_f, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
                     for key, value in data.items():
@@ -61,9 +69,10 @@ def _save_disk_cache() -> None:
     try:
         with storage_transaction():
             disk = {}
-            if ART_CACHE_FILE.exists():
+            cache_f = _get_art_cache_file()
+            if cache_f.exists():
                 try:
-                    with ART_CACHE_FILE.open(encoding="utf-8") as stream:
+                    with cache_f.open(encoding="utf-8") as stream:
                         loaded = json.load(stream)
                     if isinstance(loaded, dict):
                         disk = {k: v for k, v in loaded.items()
@@ -71,7 +80,7 @@ def _save_disk_cache() -> None:
                 except (OSError, ValueError):
                     logger.exception("Could not read artwork cache before merge")
             disk.update(_memory_art_cache)
-            _atomic_json_dump(ART_CACHE_FILE, disk)
+            _atomic_json_dump(cache_f, disk)
     except (OSError, ValueError):
         logger.exception("Could not save artwork cache")
 
@@ -124,7 +133,7 @@ def get_cached_artwork(track: Dict[str, Any]) -> Dict[str, Optional[str]]:
     return {}
 
 
-def _save_to_cache(track: Dict[str, Any], art_data: Dict[str, Optional[str]]) -> None:
+def _save_to_cache(track: Dict[str, Any], art_data: Dict[str, Any]) -> None:
     with _art_cache_lock:
         _load_disk_cache()
         raw_id = str(track.get("id") or "").strip()
@@ -173,7 +182,7 @@ def fetch_spotify_embed_art(spotify_id: str, timeout: float = 3.5) -> Tuple[Opti
             artists = entity.get("artists", [])
             if artists and isinstance(artists, list) and len(artists) > 0:
                 first_artist = artists[0]
-                if isinstance(first_artist, dict) and "uri" in first_artist:
+                if isinstance(first_artist, dict) and isinstance(first_artist.get("uri"), str) and ":" in first_artist["uri"]:
                     artist_id = first_artist["uri"].split(":")[-1]
     except Exception as e:
         logger.debug(f"Spotify track embed fetch failed for {spotify_id}: {e}")

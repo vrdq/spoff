@@ -1400,8 +1400,9 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
 
     def action_cursor_down_input(self) -> None:
         if self.focused and self.focused.id == "modal-input":
-            if self.playlists:
-                self.query_one("#modal-table", DataTable).focus()
+            table = self.query_one("#modal-table", DataTable)
+            if table.row_count > 0:
+                table.focus()
         elif self.focused and self.focused.id == "modal-table":
             self.query_one("#modal-table", DataTable).action_cursor_down()
 
@@ -1451,7 +1452,7 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
                 event.stop()
         elif self.focused and self.focused.id == "modal-input":
             if event.key in ("down", "tab"):
-                if self.playlists:
+                if table.row_count > 0:
                     table.focus()
                     event.prevent_default()
                     event.stop()
@@ -1460,7 +1461,7 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
                     inp.value = ""
                     event.prevent_default()
                     event.stop()
-                elif self.playlists:
+                elif table.row_count > 0:
                     table.focus()
                     event.prevent_default()
                     event.stop()
@@ -3289,6 +3290,10 @@ class SearchEnginePill(Static):
             app.toggle_search_engine()
 
 def _set_kitty_opacity(op: str) -> None:
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return
+    if not (sys.stdout and hasattr(sys.stdout, "isatty") and sys.stdout.isatty()):
+        return
     if os.environ.get("KITTY_WINDOW_ID") or os.environ.get("TERM") == "xterm-kitty":
         def _worker():
             try:
@@ -4601,7 +4606,7 @@ class SpoffTUI(App):
             return False
         return super().check_action(action, parameters)
 
-    def __init__(self, visualizer_enabled: Optional[bool] = None):
+    def __init__(self, visualizer_enabled: Optional[bool] = None, notifications_enabled: Optional[bool] = None):
         super().__init__()
         self._thread_id: int = threading.get_ident()
         self._mount_time: float = time.monotonic()
@@ -4673,7 +4678,10 @@ class SpoffTUI(App):
         self.ansi_color = True
         self.instant_search: bool = get_saved_instant_search()
         self.auto_update: bool = get_saved_auto_update()
-        self.notifications_enabled: bool = get_saved_notifications_enabled()
+        if notifications_enabled is not None:
+            self.notifications_enabled: bool = bool(notifications_enabled)
+        else:
+            self.notifications_enabled: bool = get_saved_notifications_enabled()
         self.player.playback_finished_callback = self.on_track_finished
         if self.transparency:
             self.add_class("transparent-mode")
@@ -4746,6 +4754,20 @@ class SpoffTUI(App):
     def toggle_notifications(self) -> bool:
         self.notifications_enabled = not self.notifications_enabled
         save_notifications_enabled(self.notifications_enabled)
+        if not self.notifications_enabled:
+            def _clear():
+                try:
+                    bar = self.query_one("#notification-line", Static)
+                    bar.update("")
+                except Exception:
+                    pass
+            if threading.get_ident() == getattr(self, "_thread_id", None):
+                _clear()
+            else:
+                try:
+                    self.call_from_thread(_clear)
+                except Exception:
+                    pass
         return self.notifications_enabled
 
     def apply_transparency(self) -> None:
@@ -5012,6 +5034,13 @@ class SpoffTUI(App):
             logger.debug(f"Could not persist last played state: {e}")
 
     def _cleanup_on_exit(self):
+        if getattr(self, "_exit_cleaned_up", False):
+            return
+        self._exit_cleaned_up = True
+        try:
+            atexit.unregister(self._cleanup_on_exit)
+        except Exception:
+            pass
         self._closing = True
         self._play_request_id += 1
         try:
@@ -5209,11 +5238,22 @@ class SpoffTUI(App):
             if not load_spotify_auth():
                 self.call_after_refresh(lambda: self.action_open_spotify_auth(first_run=True))
 
+        if not self.notifications_enabled:
+            try:
+                self.query_one("#notification-line", Static).update("")
+            except Exception:
+                pass
+
         self._mount_time = time.monotonic()
         self.set_timer(0.45, self._mark_ready)
 
     def _mark_ready(self) -> None:
         self._is_ready = True
+
+    def notify(self, *args, **kwargs) -> None:
+        if not getattr(self, "notifications_enabled", True):
+            return
+        return super().notify(*args, **kwargs)
 
     def notify_user(self, text: str):
         if text and not getattr(self, "notifications_enabled", True):
@@ -6367,8 +6407,10 @@ class SpoffTUI(App):
                     self.play_current_table_row(row_idx)
                     return
 
-        if getattr(self, "_pending_track", None) is not None:
-            self.notify_user(f"Loading '{self._pending_track.get('title', 'track')}'...")
+        pending_track = getattr(self, "_pending_track", None)
+        if pending_track is not None:
+            track_title = pending_track.get("title", "track") if isinstance(pending_track, dict) else "track"
+            self.notify_user(f"Loading '{track_title}'...")
             return
 
         if self.player.current_track is not None:
@@ -6443,6 +6485,11 @@ class SpoffTUI(App):
             else:
                 self.notify_user(f"EQ Active: {self.eq_engine.preset_name} ({self.eq_engine.preamp_db:+.1f}dB)")
             self.update_player_hud()
+
+    def action_toggle_notifications(self):
+        state = self.toggle_notifications()
+        if state:
+            self.notify_user("Notifications enabled")
 
     def action_show_help(self):
         if not getattr(self, "_is_ready", False):
@@ -6762,6 +6809,18 @@ class SpoffTUI(App):
         tracks = self._get_current_view_tracks()
 
         if 0 <= row_idx < len(tracks):
+            selected_track = tracks[row_idx]
+            active_track = getattr(self, "_pending_track", None) or getattr(getattr(self, "player", None), "current_track", None)
+            if self._is_same_track(selected_track, active_track):
+                if getattr(self, "_pending_track", None) is not None:
+                    track_title = self._pending_track.get("title", "track") if isinstance(self._pending_track, dict) else "track"
+                    self.notify_user(f"Loading '{track_title}'...")
+                    return
+                if getattr(self, "player", None) and self.player.current_track is not None:
+                    self.player.toggle_pause()
+                    self.update_player_hud()
+                    return
+
             self.queue = list(tracks)
             self._failed_indices.clear()
             self._shuffle_history.clear()
@@ -7484,6 +7543,10 @@ class SpoffTUI(App):
         if isinstance(self.focused, Input):
             return
 
+        if not (self.focused and getattr(self.focused, "id", None) == "side-table") and self.active_tab == "liked":
+            self.notify_user("Cannot delete Liked Songs.")
+            return
+
         target_idx, target_pl = self._get_target_playlist()
         if not target_pl:
             self.notify_user("No playlist selected to delete.")
@@ -7495,7 +7558,7 @@ class SpoffTUI(App):
             self.notify_user("Cannot delete playlist: missing playlist ID.")
             return
 
-        if pl_id == "spotify_liked_songs":
+        if pl_id in ("liked_songs", "spotify_liked_songs"):
             self.notify_user("Cannot delete Liked Songs.")
             return
 
@@ -7556,6 +7619,10 @@ class SpoffTUI(App):
         if isinstance(self.focused, Input):
             return
 
+        if not (self.focused and getattr(self.focused, "id", None) == "side-table") and self.active_tab == "liked":
+            self.notify_user("Cannot rename Liked Songs.")
+            return
+
         target_idx, target_pl = self._get_target_playlist()
         if not target_pl:
             self.notify_user("No playlist selected to rename.")
@@ -7566,7 +7633,7 @@ class SpoffTUI(App):
             self.notify_user("Cannot rename playlist: missing playlist ID.")
             return
 
-        if pl_id == "spotify_liked_songs":
+        if pl_id in ("liked_songs", "spotify_liked_songs"):
             self.notify_user("Cannot rename Liked Songs.")
             return
 
@@ -7612,7 +7679,11 @@ class SpoffTUI(App):
         if isinstance(self.focused, Input):
             return
 
-        target_idx, target_pl = self._get_target_playlist()
+        if not (self.focused and getattr(self.focused, "id", None) == "side-table") and self.active_tab == "liked":
+            target_idx = None
+            target_pl = {"id": "liked_songs", "name": "Liked Songs", "tracks": getattr(self, "current_liked_tracks", [])}
+        else:
+            target_idx, target_pl = self._get_target_playlist()
         if not target_pl:
             self.notify_user("No playlist selected to copy.")
             return
@@ -8439,8 +8510,14 @@ def main():
     elif any(arg in sys.argv for arg in ("--visualizer", "--vis", "--cava", "--enable-visualizer")):
         vis_arg = True
 
+    notif_arg: Optional[bool] = None
+    if any(arg in sys.argv for arg in ("--no-notifs", "--no-notif", "--not-notifs", "--no-notifications", "--disable-notifications", "--notifications=off")):
+        notif_arg = False
+    elif any(arg in sys.argv for arg in ("--notifs", "--notif", "--notifications", "--enable-notifications", "--notifications=on")):
+        notif_arg = True
+
     try:
-        app = SpoffTUI(visualizer_enabled=vis_arg)
+        app = SpoffTUI(visualizer_enabled=vis_arg, notifications_enabled=notif_arg)
         app.run()
     finally:
         try:

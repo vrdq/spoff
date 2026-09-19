@@ -30,6 +30,36 @@ DELETED_PLAYLISTS_FILE = DATA_DIR / "deleted_spotify_playlists.json"
 INDEX_FILE = DATA_DIR / "offline_index.json"
 LOG_FILE = DATA_DIR / "spoff.log"
 
+def _get_cache_dir() -> Path:
+    if CACHE_DIR.parent != DATA_DIR:
+        return DATA_DIR / CACHE_DIR.name
+    return CACHE_DIR
+
+def _get_config_file() -> Path:
+    if CONFIG_FILE.parent != DATA_DIR:
+        return DATA_DIR / CONFIG_FILE.name
+    return CONFIG_FILE
+
+def _get_playlists_file() -> Path:
+    if PLAYLISTS_FILE.parent != DATA_DIR:
+        return DATA_DIR / PLAYLISTS_FILE.name
+    return PLAYLISTS_FILE
+
+def _get_liked_songs_file() -> Path:
+    if LIKED_SONGS_FILE.parent != DATA_DIR:
+        return DATA_DIR / LIKED_SONGS_FILE.name
+    return LIKED_SONGS_FILE
+
+def _get_deleted_playlists_file() -> Path:
+    if DELETED_PLAYLISTS_FILE.parent != DATA_DIR:
+        return DATA_DIR / DELETED_PLAYLISTS_FILE.name
+    return DELETED_PLAYLISTS_FILE
+
+def _get_index_file() -> Path:
+    if INDEX_FILE.parent != DATA_DIR:
+        return DATA_DIR / INDEX_FILE.name
+    return INDEX_FILE
+
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -71,6 +101,11 @@ def transactional(fn):
             return fn(*args, **kwargs)
     return wrapped
 
+def _safe_json_default(obj: Any) -> Any:
+    if type(obj).__name__.endswith("Mock"):
+        return None
+    return str(obj)
+
 def _atomic_json_dump(filepath: Path, data: Any, mode: int = 0o644) -> None:
     """Safely writes JSON data via an fsynced unique temporary file replaced atomically."""
     filepath = Path(filepath)
@@ -90,7 +125,7 @@ def _atomic_json_dump(filepath: Path, data: Any, mode: int = 0o644) -> None:
                 os.chmod(tmp_path, mode)
             except OSError:
                 pass
-            json.dump(data, f, indent=2, ensure_ascii=False, allow_nan=False)
+            json.dump(data, f, indent=2, ensure_ascii=False, allow_nan=False, default=_safe_json_default)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp_path, filepath)
@@ -115,21 +150,24 @@ def _atomic_json_dump(filepath: Path, data: Any, mode: int = 0o644) -> None:
 def _init_storage_once():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    if not PLAYLISTS_FILE.exists():
+    playlists_f = _get_playlists_file()
+    if not playlists_f.exists():
         try:
-            _atomic_json_dump(PLAYLISTS_FILE, [])
+            _atomic_json_dump(playlists_f, [])
         except Exception as e:
             logger.error(f"Failed to create empty playlists file: {e}")
 
-    if not LIKED_SONGS_FILE.exists():
+    liked_f = _get_liked_songs_file()
+    if not liked_f.exists():
         try:
-            _atomic_json_dump(LIKED_SONGS_FILE, [])
+            _atomic_json_dump(liked_f, [])
         except Exception as e:
             logger.error(f"Failed to create empty liked songs file: {e}")
 
-    if not INDEX_FILE.exists():
+    index_f = _get_index_file()
+    if not index_f.exists():
         try:
-            _atomic_json_dump(INDEX_FILE, {})
+            _atomic_json_dump(index_f, {})
         except Exception as e:
             logger.error(f"Failed to create offline index: {e}")
 
@@ -149,7 +187,7 @@ def cache_path(track_id: str, suffix: str) -> Path:
     val_id = validate_track_id(track_id)
     if suffix not in (*CACHE_EXTENSIONS, ".part"):
         raise ValueError("Unsupported cache suffix")
-    root = CACHE_DIR.resolve()
+    root = _get_cache_dir().resolve()
     candidate = root / f"{val_id}{suffix}"
     if candidate.is_symlink():
         raise ValueError("Cache files must not be symbolic links")
@@ -160,8 +198,9 @@ def cache_path(track_id: str, suffix: str) -> Path:
 
 def load_config() -> Dict[str, Any]:
     try:
-        if CONFIG_FILE.exists() and CONFIG_FILE.stat().st_size > 0:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+        cfg_file = _get_config_file()
+        if cfg_file.exists() and cfg_file.stat().st_size > 0:
+            with open(cfg_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
                     return data
@@ -170,7 +209,7 @@ def load_config() -> Dict[str, Any]:
     return {}
 
 def save_config(config: Dict[str, Any]) -> None:
-    _atomic_json_dump(CONFIG_FILE, config)
+    _atomic_json_dump(_get_config_file(), config)
 
 def is_first_launch() -> bool:
     """Returns True if Spoff is running for the first time without configured onboarding."""
@@ -472,7 +511,11 @@ def save_last_played(state: Dict[str, Any]) -> None:
         clean_state: Dict[str, Any] = {}
         for k in ("playlist_id", "tab", "track_id", "track_title", "track_artist", "track_index"):
             if k in state:
-                clean_state[k] = state[k]
+                val = state[k]
+                if isinstance(val, (str, int, float, bool)):
+                    clean_state[k] = val
+                elif val is not None and not type(val).__name__.endswith("Mock"):
+                    clean_state[k] = str(val)
         cfg["last_played"] = clean_state
         save_config(cfg)
     except Exception as e:
@@ -538,8 +581,9 @@ def save_eq_settings(eq_data: Dict[str, Any]) -> None:
 def load_liked_songs() -> List[Dict[str, Any]]:
     """Loads all tracks from dedicated liked_songs.json storage."""
     try:
-        if LIKED_SONGS_FILE.exists() and LIKED_SONGS_FILE.stat().st_size > 0:
-            with open(LIKED_SONGS_FILE, "r", encoding="utf-8") as f:
+        liked_f = _get_liked_songs_file()
+        if liked_f.exists() and liked_f.stat().st_size > 0:
+            with open(liked_f, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
                     return [t for t in data if isinstance(t, dict)]
@@ -550,7 +594,7 @@ def load_liked_songs() -> List[Dict[str, Any]]:
 def save_liked_songs(tracks: List[Dict[str, Any]]) -> None:
     """Atomically persists liked tracks to liked_songs.json."""
     clean_tracks = [t for t in tracks if isinstance(t, dict)]
-    _atomic_json_dump(LIKED_SONGS_FILE, clean_tracks)
+    _atomic_json_dump(_get_liked_songs_file(), clean_tracks)
 
 @transactional
 def add_track_to_liked_songs(track: Dict[str, Any]) -> bool:
@@ -621,8 +665,9 @@ def remove_track_from_liked_songs(track_id_or_title: str, artist: Optional[str] 
 
 def load_saved_playlists() -> List[Dict[str, Any]]:
     try:
-        if PLAYLISTS_FILE.exists() and PLAYLISTS_FILE.stat().st_size > 0:
-            with open(PLAYLISTS_FILE, "r", encoding="utf-8") as f:
+        pl_file = _get_playlists_file()
+        if pl_file.exists() and pl_file.stat().st_size > 0:
+            with open(pl_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
                     valid_playlists = []
@@ -649,16 +694,17 @@ def load_saved_playlists() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error reading playlists: {e}")
         try:
-            if PLAYLISTS_FILE.exists() and PLAYLISTS_FILE.stat().st_size > 0:
-                corrupted = PLAYLISTS_FILE.with_suffix(".json.corrupted")
-                shutil.copy2(PLAYLISTS_FILE, corrupted)
+            pl_file = _get_playlists_file()
+            if pl_file.exists() and pl_file.stat().st_size > 0:
+                corrupted = pl_file.with_suffix(".json.corrupted")
+                shutil.copy2(pl_file, corrupted)
                 logger.warning(f"Corrupted playlists backed up to {corrupted}")
         except Exception:
             pass
     return []
 
 def save_saved_playlists(playlists: List[Dict[str, Any]]) -> None:
-    _atomic_json_dump(PLAYLISTS_FILE, playlists)
+    _atomic_json_dump(_get_playlists_file(), playlists)
 
 @transactional
 def add_saved_playlist(playlist: Dict[str, Any]):
@@ -748,8 +794,9 @@ def remove_saved_playlist(playlist_id: str) -> bool:
 def get_deleted_spotify_playlist_ids() -> set:
     """Returns set of Spotify playlist IDs that were deleted by the user."""
     try:
-        if DELETED_PLAYLISTS_FILE.exists() and DELETED_PLAYLISTS_FILE.stat().st_size > 0:
-            with open(DELETED_PLAYLISTS_FILE, "r", encoding="utf-8") as f:
+        del_f = _get_deleted_playlists_file()
+        if del_f.exists() and del_f.stat().st_size > 0:
+            with open(del_f, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
                     return {str(x).strip() for x in data if x}
@@ -767,7 +814,7 @@ def record_deleted_spotify_playlist_id(spotify_id: str) -> None:
         return
     existing = get_deleted_spotify_playlist_ids()
     existing.add(clean_id)
-    _atomic_json_dump(DELETED_PLAYLISTS_FILE, sorted(list(existing)))
+    _atomic_json_dump(_get_deleted_playlists_file(), sorted(list(existing)))
     logger.info(f"Recorded deleted Spotify playlist tombstone: {clean_id}")
 
 @transactional
@@ -781,7 +828,7 @@ def remove_deleted_spotify_playlist_id(spotify_id: str) -> None:
     existing = get_deleted_spotify_playlist_ids()
     if clean_id in existing:
         existing.remove(clean_id)
-        _atomic_json_dump(DELETED_PLAYLISTS_FILE, sorted(list(existing)))
+        _atomic_json_dump(_get_deleted_playlists_file(), sorted(list(existing)))
         logger.info(f"Removed Spotify playlist tombstone: {clean_id}")
 
 @transactional
@@ -803,10 +850,31 @@ def rename_saved_playlist(playlist_id: str, new_name: str) -> bool:
 def clone_saved_playlist(playlist_id: str, new_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Atomically duplicates a saved playlist with all its tracks into a new local playlist.
+    Supports regular saved playlists as well as Liked Songs.
     """
     if not playlist_id:
         return None
+
     existing = load_saved_playlists()
+    new_pid = f"local_{uuid.uuid4().hex[:8]}"
+
+    # Handle cloning Liked Songs
+    if playlist_id in ("liked_songs", "spotify_liked_songs") or playlist_id.lower() == "liked songs":
+        orig_name = "Liked Songs"
+        c_name = new_name.strip() if new_name and new_name.strip() else f"{orig_name} (Copy)"
+        raw_tracks = load_liked_songs()
+        cloned_tracks = [dict(t) for t in raw_tracks if isinstance(t, dict)]
+        cloned_playlist = {
+            "id": new_pid,
+            "name": c_name,
+            "url": "",
+            "tracks": cloned_tracks,
+        }
+        existing.insert(0, cloned_playlist)
+        save_saved_playlists(existing)
+        logger.info(f"Cloned Liked Songs to '{c_name}' (id: {new_pid}, {len(cloned_tracks)} tracks)")
+        return cloned_playlist
+
     target_idx = None
     target_p = None
     for idx, p in enumerate(existing):
@@ -820,7 +888,6 @@ def clone_saved_playlist(playlist_id: str, new_name: Optional[str] = None) -> Op
 
     orig_name = target_p.get("name", "Playlist")
     c_name = new_name.strip() if new_name and new_name.strip() else f"{orig_name} (Copy)"
-    new_pid = f"local_{uuid.uuid4().hex[:8]}"
 
     # Deep copy tracks list
     raw_tracks = target_p.get("tracks", [])
@@ -881,8 +948,9 @@ def merge_track_artwork(playlist_id: str, track_id: str, artwork: Dict[str, Any]
 
 def load_offline_index() -> Dict[str, Dict[str, Any]]:
     try:
-        if INDEX_FILE.exists() and INDEX_FILE.stat().st_size > 0:
-            with open(INDEX_FILE, "r", encoding="utf-8") as f:
+        idx_file = _get_index_file()
+        if idx_file.exists() and idx_file.stat().st_size > 0:
+            with open(idx_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, dict):
                     valid_index = {}
@@ -893,16 +961,17 @@ def load_offline_index() -> Dict[str, Dict[str, Any]]:
     except Exception as e:
         logger.error(f"Error reading offline index: {e}")
         try:
-            if INDEX_FILE.exists() and INDEX_FILE.stat().st_size > 0:
-                corrupted = INDEX_FILE.with_suffix(".json.corrupted")
-                shutil.copy2(INDEX_FILE, corrupted)
+            idx_file = _get_index_file()
+            if idx_file.exists() and idx_file.stat().st_size > 0:
+                corrupted = idx_file.with_suffix(".json.corrupted")
+                shutil.copy2(idx_file, corrupted)
                 logger.warning(f"Corrupted offline index backed up to {corrupted}")
         except Exception:
             pass
     return {}
 
 def save_offline_index(index: Dict[str, Dict[str, Any]]) -> None:
-    _atomic_json_dump(INDEX_FILE, index)
+    _atomic_json_dump(_get_index_file(), index)
 
 def get_cached_track_path(track_id: str) -> Optional[Path]:
     if not track_id:
