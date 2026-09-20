@@ -9,6 +9,7 @@ import threading
 import re
 import math
 from pathlib import Path
+from urllib.parse import urlsplit
 from contextlib import contextmanager
 from functools import wraps
 from typing import List, Dict, Optional, Any, Callable
@@ -1187,25 +1188,47 @@ def delete_cached_track(track_id: str) -> bool:
 
 @transactional
 def quarantine_cached_track(track_id: str, source: Optional[Any] = None) -> bool:
-    """Quarantines corrupt audio file and removes it from offline registry."""
+    """Quarantines corrupt audio file and removes it from offline registry if source is in cache."""
     if not track_id:
+        return False
+    if source is not None and urlsplit(str(source)).scheme:
         return False
     try:
         val_id = validate_track_id(track_id)
     except ValueError:
         return False
+
+    if source is None:
+        idx = load_offline_index()
+        if val_id in idx:
+            entry = idx[val_id]
+            source = entry.get("filepath") or entry.get("file")
+        if not source:
+            source = get_cached_track_path(val_id)
+
     if not source:
-        source = get_cached_track_path(val_id)
-    if source:
-        try:
-            source_path = Path(source)
-            root = CACHE_DIR.resolve()
-            source_resolved = source_path.resolve()
-            if root in source_resolved.parents or source_resolved.parent == root:
-                if source_resolved.is_file() or source_resolved.is_symlink():
-                    source_resolved.unlink(missing_ok=True)
-        except Exception:
-            pass
-    delete_cached_track(val_id)
-    return True
+        return False
+
+    try:
+        source_path = Path(source).resolve()
+        root = CACHE_DIR.resolve()
+        source_path.relative_to(root)
+    except (OSError, ValueError, RuntimeError):
+        return False
+
+    removed = False
+    try:
+        if source_path.is_file() or source_path.is_symlink():
+            source_path.unlink(missing_ok=True)
+            removed = True
+    except Exception as e:
+        logger.warning(f"Could not delete corrupt cache file {source_path}: {e}")
+
+    index = load_offline_index()
+    if val_id in index:
+        del index[val_id]
+        save_offline_index(index)
+        removed = True
+
+    return removed
 

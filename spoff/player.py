@@ -59,7 +59,11 @@ class MPVController:
         self.process: Optional[subprocess.Popen] = None
         self.current_track: Optional[Dict[str, Any]] = None
         self.is_paused: bool = False
-        self.playback_finished_callback: Optional[Callable[[], None]] = None
+        self._playback_finished_callback: Optional[Callable] = None
+        self._pending_callback: Optional[Callable] = None
+        self._pending_request_id: Optional[Any] = None
+        self._entry_callbacks: Dict[int, Callable] = {}
+        self._active_entry_id: Optional[int] = None
         self._lock = threading.RLock()
         self._listener_stop_event: Optional[threading.Event] = None
         self._listener_thread: Optional[threading.Thread] = None
@@ -67,6 +71,21 @@ class MPVController:
         self._duration = 0.0
         self._volume = max(0, min(100, int(initial_volume)))
         self.eq_engine: Optional[Any] = eq_engine
+
+    @property
+    def playback_finished_callback(self) -> Optional[Callable]:
+        return self._playback_finished_callback
+
+    @playback_finished_callback.setter
+    def playback_finished_callback(self, cb: Optional[Callable]):
+        self._playback_finished_callback = cb
+        self._pending_callback = cb
+
+    def register_pending_callback(self, cb: Callable, request_id: Optional[Any] = None):
+        with self._lock:
+            self._playback_finished_callback = cb
+            self._pending_callback = cb
+            self._pending_request_id = request_id
 
     def start_mpv(self):
         with self._lock:
@@ -208,12 +227,30 @@ class MPVController:
                                         self._duration = float(val)
                                     elif name == "pause" and val is not None:
                                         self.is_paused = bool(val)
+                                elif ev_type == "start-file":
+                                    entry_id = event.get("playlist_entry_id")
+                                    if entry_id is not None:
+                                        self._active_entry_id = entry_id
+                                        with self._lock:
+                                            if self._pending_callback:
+                                                self._entry_callbacks[entry_id] = self._pending_callback
+                                                self._pending_callback = None
                                 elif ev_type == "end-file":
                                     reason = event.get("reason")
+                                    entry_id = event.get("playlist_entry_id")
                                     if reason == "error":
                                         logger.warning("MPV reported playback end due to stream error")
-                                    if reason in ("eof", "error") and self.playback_finished_callback and not stop_event.is_set():
-                                        cb = self.playback_finished_callback
+
+                                    cb = None
+                                    with self._lock:
+                                        if entry_id is not None:
+                                            cb = self._entry_callbacks.pop(entry_id, None)
+                                            if entry_id == self._active_entry_id:
+                                                self._active_entry_id = None
+                                        elif self._playback_finished_callback:
+                                            cb = self._playback_finished_callback
+
+                                    if cb and reason in ("eof", "error") and not stop_event.is_set():
                                         try:
                                             cb(reason or "eof")
                                         except TypeError:
@@ -299,7 +336,7 @@ class MPVController:
         self._send_command(["set_property", "volume", self._volume])
 
     def get_volume(self) -> int:
-        return int(self.volume)
+        return int(self._volume)
 
     def get_progress(self) -> tuple[float, float]:
         if not self.current_track:

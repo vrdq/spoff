@@ -4672,6 +4672,7 @@ class SpoffTUI(App):
         self.update_info: Optional[Dict[str, Any]] = None
         self._spotify_jobs = ThreadPoolExecutor(max_workers=1, thread_name_prefix="spoff-spotify")
         self._queue_origin: Optional[Dict[str, Any]] = None
+        self._committed_playback: Optional[Dict[str, Any]] = None
         self.queue: List[Dict[str, Any]] = []
         self.current_index: int = -1
         self._pending_track: Optional[Dict[str, Any]] = None
@@ -5030,6 +5031,11 @@ class SpoffTUI(App):
 
     def _save_playback_state(self, track: Optional[Dict[str, Any]] = None):
         try:
+            committed = getattr(self, "_committed_playback", None)
+            if committed is not None and track is None:
+                save_last_played(committed)
+                return
+
             t = track or getattr(getattr(self, "player", None), "current_track", None)
             c_idx = getattr(self, "current_index", -1)
             if t:
@@ -5040,6 +5046,13 @@ class SpoffTUI(App):
                 else:
                     tab = getattr(self, "active_tab", "playlist")
                     pid = getattr(self, "current_playlist_id", None) if tab == "playlist" else None
+
+                # If track was not explicitly passed and we have a diverging queue origin,
+                # do not mix pending browsing origin with current_track from previous playlist!
+                if track is None and origin is not None:
+                    tab = getattr(self, "active_tab", "search")
+                    pid = ""
+
                 save_last_played({
                     "playlist_id": pid,
                     "tab": tab,
@@ -8028,10 +8041,20 @@ class SpoffTUI(App):
         if reason == "error":
             t = track or getattr(getattr(self, "player", None), "current_track", None)
             if t:
+                was_cached = False
                 try:
-                    quarantine_cached_track(t.get("id", ""), source)
+                    was_cached = quarantine_cached_track(t.get("id", ""), source)
                 except Exception:
                     pass
+                if was_cached:
+                    retry_key = f"cache_retry_{t.get('id', '')}_{request_id}"
+                    if not getattr(self, "_cache_retried", None):
+                        self._cache_retried = set()
+                    if retry_key not in self._cache_retried:
+                        self._cache_retried.add(retry_key)
+                        if hasattr(self, "play_index"):
+                            self.play_index(getattr(self, "current_index", 0))
+                        return
                 self._playback_failed(request_id, t)
             return
         if self.repeat_mode == "one" and self.current_index >= 0:
@@ -8378,14 +8401,18 @@ class SpoffTUI(App):
     def _commit_playback(self, req_id: int, source: str, track: Dict[str, Any]) -> bool:
         if getattr(self, "_closing", False) or req_id != getattr(self, "_play_request_id", None):
             return False
+        cb = lambda reason="eof": self._on_ui(self._handle_track_end, req_id, reason, track, source)
+        if hasattr(self.player, "register_pending_callback"):
+            self.player.register_pending_callback(cb, req_id)
+        else:
+            self.player.playback_finished_callback = cb
+
         if not self.player.load_and_play(source, track):
             self.notify_user(f"Could not start playback: {track.get('title', 'Track')}")
             self._playback_failed(req_id, track)
             return False
         self._pending_track = None
-        self.player.playback_finished_callback = (
-            lambda reason="eof": self._on_ui(self._handle_track_end, req_id, reason, track, source)
-        )
+        self.player.playback_finished_callback = cb
         self.notify_user("")
         if self.mpris:
             try:
@@ -8394,6 +8421,23 @@ class SpoffTUI(App):
                 dur_s = self.player.get_duration()
             self.mpris.update_track(track, dur_s)
         self.update_player_hud()
+
+        origin = getattr(self, "_queue_origin", None)
+        if origin and origin.get("tab"):
+            tab = origin["tab"]
+            pid = origin.get("playlist_id") if tab == "playlist" else None
+        else:
+            tab = getattr(self, "active_tab", "playlist")
+            pid = getattr(self, "current_playlist_id", None) if tab == "playlist" else None
+
+        self._committed_playback = {
+            "playlist_id": pid,
+            "tab": tab,
+            "track_id": track.get("id"),
+            "track_title": track.get("title"),
+            "track_artist": track.get("artist"),
+            "track_index": getattr(self, "current_index", -1),
+        }
         self._save_playback_state(track)
         return True
 

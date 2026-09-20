@@ -1,5 +1,6 @@
 import os
 import tempfile
+import threading
 import types
 import unittest
 from pathlib import Path
@@ -176,6 +177,92 @@ class TestAuditRemainingFixed(unittest.TestCase):
         self.assertEqual(f._queue_origin["tab"], "playlist")
         self.assertEqual(f._queue_origin["playlist_id"], "playlist_xyz")
         self.assertEqual(len(f.queue), 1)
+
+    def test_f1_remote_error_does_not_delete_cached_download(self):
+        val_id = "test_downloaded_f1"
+        cache_file = storage.CACHE_DIR / f"{val_id}.m4a"
+        cache_file.write_bytes(b"downloaded audio data" * 1000)
+        track = dict(id=val_id, title="Song", artist="Artist")
+        storage.register_cached_track(val_id, track, cache_file)
+
+        self.assertTrue(cache_file.exists())
+        self.assertIn(val_id, storage.load_offline_index())
+
+        f = types.SimpleNamespace(
+            is_mounted=True,
+            _closing=False,
+            _play_request_id=1,
+            _playback_failed=Mock(),
+            player=Mock(),
+        )
+        app.SpoffTUI._handle_track_end(f, 1, "error", track, "https://example.com/stream.m3u8")
+
+        # Remote playback error must NOT delete healthy offline cache or remove it from index
+        self.assertTrue(cache_file.exists())
+        self.assertIn(val_id, storage.load_offline_index())
+
+    def test_f2_old_backend_eof_ignored_by_new_track(self):
+        controller = player.MPVController()
+        stop = threading.Event()
+        called_reasons = []
+
+        cb = lambda reason="eof": called_reasons.append(reason)
+        controller.register_pending_callback(cb, request_id=2)
+
+        # Simulate socket sending an old EOF event from playlist_entry_id 99
+        import json
+        import socket
+        sock = Mock()
+        sock.__enter__ = Mock(return_value=sock)
+        sock.__exit__ = Mock(return_value=False)
+        events = [
+            json.dumps({"event": "end-file", "reason": "eof", "playlist_entry_id": 99}) + "\n",
+            json.dumps({"event": "start-file", "playlist_entry_id": 100}) + "\n",
+            json.dumps({"event": "end-file", "reason": "eof", "playlist_entry_id": 100}) + "\n",
+        ]
+        def recv(size):
+            if events:
+                return events.pop(0).encode()
+            stop.set()
+            return b""
+        sock.recv.side_effect = recv
+
+        with patch.object(player.os.path, "exists", return_value=True), patch.object(player.socket, "socket", return_value=sock):
+            controller._ipc_listener(stop)
+
+        # Only entry 100's EOF should have triggered the callback (once), entry 99 was ignored
+        self.assertEqual(called_reasons, ["eof"])
+
+    def test_f3_quitting_during_pending_switch_saves_committed_state(self):
+        track_a = dict(id="track_A", title="Song A", artist="Artist A")
+        committed_rec = {
+            "playlist_id": "pl_A",
+            "tab": "playlist",
+            "track_id": "track_A",
+            "track_title": "Song A",
+            "track_artist": "Artist A",
+            "track_index": 0,
+        }
+        f = types.SimpleNamespace(
+            _committed_playback=committed_rec,
+            _queue_origin=dict(tab="playlist", playlist_id="pl_B"),
+            current_index=2,
+            player=types.SimpleNamespace(current_track=track_a),
+        )
+
+        app.SpoffTUI._save_playback_state(f)
+        state = storage.get_saved_last_played()
+
+        # Must persist committed state (pl_A), not pending mixed state (pl_B with track_A)
+        self.assertEqual(state.get("playlist_id"), "pl_A")
+        self.assertEqual(state.get("track_id"), "track_A")
+        self.assertEqual(state.get("track_index"), 0)
+
+    def test_f4_get_volume_returns_integer_without_attribute_error(self):
+        controller = player.MPVController(initial_volume=63)
+        vol = controller.get_volume()
+        self.assertIsInstance(vol, int)
+        self.assertEqual(vol, 63)
 
 
 if __name__ == "__main__":
