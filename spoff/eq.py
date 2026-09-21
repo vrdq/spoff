@@ -602,6 +602,7 @@ class ParametricEQEngine:
             self.preamp_db = self.auto_preamp_headroom()
 
     def set_anti_denormal(self, enabled: bool) -> None:
+        """Toggle internal anti-denormal engine protection flag."""
         self.anti_denormal = bool(enabled)
 
     def set_curve_style(self, style: str) -> None:

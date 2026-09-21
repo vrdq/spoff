@@ -14,7 +14,13 @@ logger = logging.getLogger("player")
 
 
 def _preexec_deathsig():
-    pass
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None)
+        # PR_SET_PDEATHSIG = 1
+        libc.prctl(1, signal.SIGTERM, 0, 0, 0)
+    except Exception:
+        pass
 
 
 def get_direct_hardware_audio_device() -> Optional[str]:
@@ -135,7 +141,8 @@ class MPVController:
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                env=env
+                env=env,
+                preexec_fn=_preexec_deathsig
             )
 
             # Wait for socket to appear

@@ -2,7 +2,7 @@ import sys
 import os
 import re
 import signal
-import subprocess
+import subprocess 
 import shutil
 import base64
 import urllib.parse
@@ -2809,11 +2809,11 @@ class EQSettingsModal(ModalScreen[None]):
             ad_toggle = self.query_one("#eq-opt-anti-denormal", EQAntiDenormalToggle)
             if self.engine.anti_denormal:
                 ad_toggle.update(
-                    "[bold #569f68]● ENABLED[/]   [#ffffff]Subnormal Flush Protection[/]  [dim]— DAZ/FTZ guards against CPU stalls on silence/tails[/dim]"
+                    "[bold #569f68]● ENABLED[/]   [#ffffff]Subnormal Flush Protection[/]  [dim]— Internal engine state (prevents CPU denormal stalls)[/dim]"
                 )
             else:
                 ad_toggle.update(
-                    "[#767676]○ DISABLED[/]  [#cccccc]Subnormal Flush Protection[/]  [dim]— IEEE 754 gradual underflow without flush[/dim]"
+                    "[#767676]○ DISABLED[/]  [#cccccc]Subnormal Flush Protection[/]  [dim]— Standard IEEE 754 gradual underflow[/dim]"
                 )
 
             # 4. Auto Headroom
@@ -2928,7 +2928,7 @@ class EQSettingsModal(ModalScreen[None]):
         nxt = not self.engine.anti_denormal
         self.engine.set_anti_denormal(nxt)
         self._sync_and_save()
-        lbl = "Enabled (DAZ/FTZ active)" if nxt else "Disabled"
+        lbl = "Enabled" if nxt else "Disabled"
         self.query_one("#eq-settings-status-line", Static).update(
             f"Subnormal flush protection {lbl}."
         )
@@ -5207,6 +5207,28 @@ class SpoffTUI(App):
         self.set_interval(0.5, self.update_player_hud)
         logger.info("Spoff engine active.")
 
+        SpoffTUI._restore_last_view_state(self)
+
+        if is_first_launch():
+            mark_first_launch_done()
+            if not load_spotify_auth():
+                self.call_after_refresh(lambda: self.action_open_spotify_auth(first_run=True))
+
+        if not self.notifications_enabled:
+            try:
+                self.query_one("#notification-line", Static).update("")
+            except Exception:
+                pass
+
+        self._mount_time = time.monotonic()
+        self.set_timer(0.45, self._mark_ready)
+
+    def _mark_ready(self) -> None:
+        self._is_ready = True
+
+    def _restore_last_view_state(self) -> None:
+        st = self.query_one("#side-table", DataTable)
+        tt = self.query_one("#track-table", DataTable)
         last_state = get_saved_last_played()
         saved_tab = last_state.get("tab")
         saved_pid = last_state.get("playlist_id")
@@ -5243,37 +5265,49 @@ class SpoffTUI(App):
             else:
                 self.switch_view("search")
                 tt.focus()
+        elif saved_tab == "search":
+            self.switch_view("search")
+            tt.focus()
         elif self.playlists:
-            target_pl_idx = 0
+            matched_pl_idx = None
             if saved_pid:
                 for p_idx, p in enumerate(self.playlists):
                     if p.get("id") == saved_pid:
-                        target_pl_idx = p_idx
+                        matched_pl_idx = p_idx
                         break
 
-            pl = self.playlists[target_pl_idx]
-            pl_tracks = list(pl.get("tracks", []))
-            target_track_row = 0
-            if pl_tracks:
-                found_row = None
-                if saved_tid:
-                    for r_idx, t in enumerate(pl_tracks):
-                        if t.get("id") == saved_tid:
-                            found_row = r_idx
-                            break
-                if found_row is None and saved_title:
-                    for r_idx, t in enumerate(pl_tracks):
-                        if t.get("title") == saved_title and (not saved_artist or t.get("artist") == saved_artist):
-                            found_row = r_idx
-                            break
-                if found_row is None and isinstance(saved_t_idx, int) and 0 <= saved_t_idx < len(pl_tracks):
-                    found_row = saved_t_idx
-                if found_row is not None:
-                    target_track_row = found_row
+            if matched_pl_idx is not None:
+                target_pl_idx = matched_pl_idx
+                pl = self.playlists[target_pl_idx]
+                pl_tracks = list(pl.get("tracks", []))
+                target_track_row = 0
+                if pl_tracks:
+                    found_row = None
+                    if saved_tid:
+                        for r_idx, t in enumerate(pl_tracks):
+                            if t.get("id") == saved_tid:
+                                found_row = r_idx
+                                break
+                    if found_row is None and saved_title:
+                        for r_idx, t in enumerate(pl_tracks):
+                            if t.get("title") == saved_title and (not saved_artist or t.get("artist") == saved_artist):
+                                found_row = r_idx
+                                break
+                    if found_row is None and isinstance(saved_t_idx, int) and 0 <= saved_t_idx < len(pl_tracks):
+                        found_row = saved_t_idx
+                    if found_row is not None:
+                        target_track_row = found_row
 
-            st.move_cursor(row=target_pl_idx)
-            self.load_playlist_by_index(target_pl_idx, focus_tracks=True, select_row=target_track_row)
-            tt.focus()
+                st.move_cursor(row=target_pl_idx)
+                self.load_playlist_by_index(target_pl_idx, focus_tracks=True, select_row=target_track_row)
+                tt.focus()
+            else:
+                if saved_tab == "playlist" and self.playlists:
+                    self.load_playlist_by_index(0, focus_tracks=False)
+                    st.move_cursor(row=0)
+                else:
+                    self.switch_view("search")
+                tt.focus()
         else:
             self.switch_view("search")
             tt.focus()
@@ -5281,23 +5315,6 @@ class SpoffTUI(App):
                 self.query_one("#sidebar-hint", Static).update("[dim]Enter name or link above to create[/dim]")
             except Exception:
                 pass
-
-        if is_first_launch():
-            mark_first_launch_done()
-            if not load_spotify_auth():
-                self.call_after_refresh(lambda: self.action_open_spotify_auth(first_run=True))
-
-        if not self.notifications_enabled:
-            try:
-                self.query_one("#notification-line", Static).update("")
-            except Exception:
-                pass
-
-        self._mount_time = time.monotonic()
-        self.set_timer(0.45, self._mark_ready)
-
-    def _mark_ready(self) -> None:
-        self._is_ready = True
 
     def notify(self, *args, **kwargs) -> None:
         if not getattr(self, "notifications_enabled", True):
@@ -6583,11 +6600,6 @@ class SpoffTUI(App):
             self.notify_user("Please log in to Spotify first.")
             return
 
-        token = get_valid_token()
-        if not token:
-            self.notify_user("Spotify session expired. Please log in again.")
-            return
-
         self.notify_user("Syncing Spotify playlists and Liked Songs...")
 
         def _sync_worker():
@@ -6595,13 +6607,20 @@ class SpoffTUI(App):
                 self._on_ui(self.notify_user, msg)
 
             try:
+                token = get_valid_token()
+                if not token:
+                    self._on_ui(self.notify_user, "Spotify session expired. Please log in again.")
+                    return
+
                 synced_count = sync_spotify_library(token, progress_callback=_progress)
-                self.playlists = load_saved_playlists()
+                loaded_playlists = load_saved_playlists()
+                loaded_liked = load_liked_songs()
 
                 def _refresh_ui():
+                    self.playlists = loaded_playlists
                     self.refresh_side_table()
                     self.update_spotify_pill()
-                    self.current_liked_tracks = load_liked_songs()
+                    self.current_liked_tracks = loaded_liked
                     if self.active_tab == "liked":
                         self.render_tracks(self.current_liked_tracks)
                     if synced_count > 0:
@@ -8505,15 +8524,17 @@ class SpoffTUI(App):
             except Exception:
                 logger.exception("Failed to resolve track artwork")
                 art_dict = {}
-            if art_dict and (art_dict.get("art_url") or art_dict.get("artist_art_url")):
-                if not track.get("art_url") and art_dict.get("art_url"):
-                    track["art_url"] = art_dict["art_url"]
-                if not track.get("artist_art_url") and art_dict.get("artist_art_url"):
-                    track["artist_art_url"] = art_dict["artist_art_url"]
-                if not track.get("album_art_url") and art_dict.get("album_art_url"):
-                    track["album_art_url"] = art_dict["album_art_url"]
+            if art_dict and (art_dict.get("art_url") or art_dict.get("artist_art_url") or art_dict.get("album_art_url")):
                 def _publish_art():
-                    if req_id == getattr(self, "_play_request_id", None) and self.mpris:
+                    if req_id != getattr(self, "_play_request_id", None):
+                        return
+                    if not track.get("art_url") and art_dict.get("art_url"):
+                        track["art_url"] = art_dict["art_url"]
+                    if not track.get("artist_art_url") and art_dict.get("artist_art_url"):
+                        track["artist_art_url"] = art_dict["artist_art_url"]
+                    if not track.get("album_art_url") and art_dict.get("album_art_url"):
+                        track["album_art_url"] = art_dict["album_art_url"]
+                    if self.mpris:
                         try:
                             dur_s = float(track.get("duration_ms") or 0) / 1000.0
                         except (ValueError, TypeError):

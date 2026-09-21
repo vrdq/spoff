@@ -780,26 +780,39 @@ def load_saved_playlists() -> List[Dict[str, Any]]:
             pass
         raise ValueError("Playlists document is not a list")
 
+    if any(not isinstance(p, dict) for p in data):
+        try:
+            corrupted = pl_file.with_suffix(".json.corrupted")
+            if not corrupted.exists():
+                shutil.copy2(pl_file, corrupted)
+        except Exception:
+            pass
+
     valid_playlists = []
     migrated_liked = []
     had_liked = False
+    abort_migration = False
     for p in data:
-        if isinstance(p, dict):
-            if p.get("id") == "spotify_liked_songs":
-                had_liked = True
-                legacy = p.get("tracks", [])
-                if isinstance(legacy, list):
-                    migrated_liked.extend([t for t in legacy if isinstance(t, dict)])
+        if not isinstance(p, dict):
+            continue
+        if p.get("id") == "spotify_liked_songs":
+            had_liked = True
+            legacy = p.get("tracks", [])
+            if not isinstance(legacy, list) or not all(isinstance(t, dict) for t in legacy):
+                abort_migration = True
+                valid_playlists.append(p)
                 continue
-            if "id" not in p:
-                p["id"] = f"pl_{uuid.uuid4().hex[:8]}"
-            if "tracks" not in p or not isinstance(p["tracks"], list):
-                p["tracks"] = []
-            else:
-                p["tracks"] = [normalize_track(t) for t in p["tracks"] if isinstance(t, dict) and normalize_track(t) is not None]
-            valid_playlists.append(p)
+            migrated_liked.extend([t for t in legacy if isinstance(t, dict)])
+            continue
+        if "id" not in p:
+            p["id"] = f"pl_{uuid.uuid4().hex[:8]}"
+        if "tracks" not in p or not isinstance(p["tracks"], list):
+            p["tracks"] = []
+        else:
+            p["tracks"] = [normalize_track(t) for t in p["tracks"] if isinstance(t, dict) and normalize_track(t) is not None]
+        valid_playlists.append(p)
 
-    if had_liked:
+    if had_liked and not abort_migration:
         merged = load_liked_songs()
         for track in migrated_liked:
             norm = normalize_track(track)
@@ -1095,12 +1108,19 @@ def load_offline_index() -> Dict[str, Dict[str, Any]]:
         if idx_file.exists() and idx_file.stat().st_size > 0:
             with open(idx_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                if isinstance(data, dict):
-                    valid_index = {}
-                    for k, v in data.items():
-                        if isinstance(k, str) and isinstance(v, dict):
-                            valid_index[k] = v
-                    return valid_index
+                if not isinstance(data, dict):
+                    try:
+                        corrupted = idx_file.with_suffix(".json.corrupted")
+                        shutil.copy2(idx_file, corrupted)
+                        logger.warning(f"Non-dict offline index backed up to {corrupted}")
+                    except Exception:
+                        pass
+                    return {}
+                valid_index = {}
+                for k, v in data.items():
+                    if isinstance(k, str) and isinstance(v, dict):
+                        valid_index[k] = v
+                return valid_index
     except Exception as e:
         logger.error(f"Error reading offline index: {e}")
         try:
@@ -1170,7 +1190,7 @@ def delete_cached_track(track_id: str) -> bool:
         save_offline_index(index)
         removed = True
 
-    root = CACHE_DIR.resolve()
+    root = _get_cache_dir().resolve()
     for ext in (*CACHE_EXTENSIONS, ".part"):
         candidate = root / f"{val_id}{ext}"
         try:
@@ -1211,7 +1231,7 @@ def quarantine_cached_track(track_id: str, source: Optional[Any] = None) -> bool
 
     try:
         source_path = Path(source).resolve()
-        root = CACHE_DIR.resolve()
+        root = _get_cache_dir().resolve()
         source_path.relative_to(root)
     except (OSError, ValueError, RuntimeError):
         return False

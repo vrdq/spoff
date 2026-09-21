@@ -42,6 +42,15 @@ _memory_art_cache: Dict[str, Dict[str, Optional[str]]] = {}
 _cache_loaded = False
 
 
+def is_valid_album_art_url(url: Optional[str]) -> bool:
+    if not url or not isinstance(url, str):
+        return False
+    u = url.lower()
+    if "youtube.com" in u or "ytimg.com" in u:
+        return False
+    return u.startswith("http://") or u.startswith("https://")
+
+
 def _load_disk_cache() -> None:
     global _cache_loaded
     if _cache_loaded:
@@ -54,11 +63,15 @@ def _load_disk_cache() -> None:
                 if isinstance(data, dict):
                     for key, value in data.items():
                         if isinstance(key, str) and isinstance(value, dict):
-                            _memory_art_cache[key] = {
-                                field: item for field, item in value.items()
-                                if field in ("art_url", "artist_art_url", "album_art_url", "source")
-                                and (item is None or isinstance(item, str))
-                            }
+                            entry = {}
+                            for field in ("art_url", "artist_art_url", "album_art_url", "source"):
+                                item = value.get(field)
+                                if item is not None and not isinstance(item, str):
+                                    item = str(item)
+                                if field == "album_art_url" and not is_valid_album_art_url(item):
+                                    item = None
+                                entry[field] = item
+                            _memory_art_cache[key] = entry
     except Exception as e:
         logger.debug(f"Failed to load art cache from disk: {e}")
     finally:
@@ -297,8 +310,10 @@ def resolve_track_artwork(track: Dict[str, Any], timeout: float = 3.5) -> Dict[s
     # 1. Fast check if track already has both
     existing_art = track.get("art_url") or track.get("thumbnail") or track.get("cover_url")
     existing_artist = track.get("artist_art_url")
-    existing_album = track.get("album_art_url") or existing_art
-    if existing_art and existing_artist:
+    existing_album = track.get("album_art_url") or (track.get("cover_url") if track.get("source") == "spotify" else None)
+    if not is_valid_album_art_url(existing_album):
+        existing_album = None
+    if existing_art and existing_artist and existing_album:
         return {
             "art_url": str(existing_art),
             "artist_art_url": str(existing_artist),
@@ -308,15 +323,20 @@ def resolve_track_artwork(track: Dict[str, Any], timeout: float = 3.5) -> Dict[s
 
     # 2. Check cache
     cached = get_cached_artwork(track)
+    cached_album = cached.get("album_art_url")
+    if not is_valid_album_art_url(cached_album):
+        cached_album = None
     if cached.get("art_url") and cached.get("artist_art_url"):
-        return cached
+        res = dict(cached)
+        res["album_art_url"] = cached_album
+        return res
 
     title = str(track.get("title") or "").strip()
     artist = str(track.get("artist") or "").strip()
     t_id = str(track.get("id") or "").strip()
     uri = str(track.get("uri") or "").strip()
 
-    cover_url = cached.get("album_art_url") or cached.get("art_url") or existing_art
+    cover_url = cached_album or existing_album
     artist_url = cached.get("artist_art_url") or existing_artist
     provider = "cache" if (cover_url or artist_url) else "none"
 
@@ -356,22 +376,24 @@ def resolve_track_artwork(track: Dict[str, Any], timeout: float = 3.5) -> Dict[s
             if provider == "none":
                 provider = "itunes"
 
-    # 6. YouTube thumbnail fallback
-    if not cover_url and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
-        cover_url = f"https://img.youtube.com/vi/{t_id}/hqdefault.jpg"
+    # 6. YouTube thumbnail fallback for art_url only (never treat as dedicated album_art_url)
+    yt_thumb = None
+    if not cover_url and not existing_art and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
+        yt_thumb = f"https://img.youtube.com/vi/{t_id}/hqdefault.jpg"
         if provider == "none":
             provider = "youtube"
 
-    main_art = cover_url or artist_url
+    main_art = cover_url or existing_art or yt_thumb or artist_url
 
+    resolved_album = cover_url if is_valid_album_art_url(cover_url) else None
     result: Dict[str, Optional[str]] = {
         "art_url": main_art,
         "artist_art_url": artist_url,
-        "album_art_url": cover_url,
+        "album_art_url": resolved_album,
         "source": provider
     }
 
-    if main_art or artist_url:
+    if main_art or artist_url or resolved_album:
         _save_to_cache(track, result)
 
     return result

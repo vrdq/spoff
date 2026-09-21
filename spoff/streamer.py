@@ -148,7 +148,8 @@ def _run_download_process(
         raise RuntimeError(f"Could not resolve audio for {title}")
     query = resolved.get("webpage_url") or resolved["stream_url"]
 
-    with tempfile.TemporaryDirectory(prefix=f".{val_id}-", dir=storage.CACHE_DIR) as stage:
+    cache_dir = getattr(storage, "_get_cache_dir", lambda: storage.CACHE_DIR)()
+    with tempfile.TemporaryDirectory(prefix=f".{val_id}-", dir=cache_dir) as stage:
         opts = get_base_ydl_opts({
             "format": "bestaudio[ext=m4a]/bestaudio/best",
             "outtmpl": str(Path(stage) / "audio.%(ext)s"),
@@ -175,7 +176,7 @@ def _run_download_process(
             )
         except FileNotFoundError:
             logger.warning("ffmpeg not found in PATH; skipping audio integrity validation")
-        final_path = storage.CACHE_DIR / f"{val_id}{downloaded.suffix.lower()}"
+        final_path = cache_dir / f"{val_id}{downloaded.suffix.lower()}"
         downloaded.replace(final_path)
         meta_to_save = dict(track_meta) if track_meta else {"title": title, "artist": artist}
         register_cached_track(val_id, meta_to_save, final_path)
