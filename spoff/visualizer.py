@@ -14,7 +14,13 @@ logger = logging.getLogger("visualizer")
 
 
 def _preexec_deathsig():
-    pass
+    try:
+        import ctypes
+        libc = ctypes.CDLL(None)
+        # PR_SET_PDEATHSIG = 1
+        libc.prctl(1, signal.SIGTERM, 0, 0, 0)
+    except Exception:
+        pass
 
 
 BAR_GLYPHS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
@@ -135,7 +141,8 @@ bit_format = 8bit
                 ["cava", "-p", self.conf_path],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL
+                stdin=subprocess.DEVNULL,
+                preexec_fn=_preexec_deathsig
             )
             self._thread = threading.Thread(target=self._reader_loop, daemon=True)
             self._thread.start()
@@ -406,6 +413,13 @@ bit_format = 8bit
             except Exception:
                 pass
             self.conf_path = None
+
+        if self._thread and self._thread != threading.current_thread() and self._thread.is_alive():
+            try:
+                self._thread.join(timeout=0.2)
+            except Exception:
+                pass
+            self._thread = None
 
     def __del__(self):
         try:

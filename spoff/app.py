@@ -16,7 +16,7 @@ import threading
 import atexit
 import secrets
 from concurrent.futures import ThreadPoolExecutor
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, TypeVar
 import random
 
 from rich.markup import escape
@@ -30,6 +30,19 @@ from textual.widget import Widget
 from textual.widgets import Static, Input, DataTable, ProgressBar, Button
 from textual.coordinate import Coordinate
 from textual.binding import Binding
+
+_ScreenResultType = TypeVar("_ScreenResultType")
+
+class SafeModalScreen(ModalScreen[_ScreenResultType]):
+    """Modal screen with idempotent dismiss to prevent screen stack corruption."""
+    def dismiss(self, result: Optional[_ScreenResultType] = None) -> None:
+        if getattr(self, "_dismissed", False):
+            return
+        self._dismissed = True
+        try:
+            super().dismiss(result)
+        except Exception:
+            pass
 
 try:
     from .spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url
@@ -766,7 +779,7 @@ class KeyCaptureBox(Static):
     can_focus = True
 
 
-class RebindKeyModal(ModalScreen[Optional[str]]):
+class RebindKeyModal(SafeModalScreen[Optional[str]]):
     def __init__(
         self,
         action_id: str,
@@ -895,7 +908,7 @@ class RebindKeyModal(ModalScreen[Optional[str]]):
             event.stop()
             return
 
-class SettingsModal(ModalScreen[None]):
+class SettingsModal(SafeModalScreen[None]):
     BINDINGS = [
         Binding("escape", "dismiss_or_cancel", "Close", priority=True),
         Binding("q", "dismiss_or_cancel", "Close", show=False),
@@ -1359,7 +1372,7 @@ class SettingsModal(ModalScreen[None]):
         act_id = str(event.row_key.value)
         self.start_rebinding(act_id)
 
-class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
+class AddToPlaylistModal(SafeModalScreen[Optional[Tuple[str, str]]]):
     BINDINGS = [
         Binding("escape", "dismiss_modal", "Cancel"),
         Binding("tab", "switch_focus", "Switch Focus", show=False),
@@ -1392,7 +1405,10 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
         table = self.query_one("#modal-table", DataTable)
         table.cursor_foreground_priority = "renderable"
         table.add_columns("Playlist")
-        liked_count = len(load_liked_songs())
+        try:
+            liked_count = len(load_liked_songs())
+        except Exception:
+            liked_count = 0
         table.add_row(f"★ Liked Songs  [dim]({liked_count} tracks)[/dim]", key="target_liked_songs")
         if self.playlists:
             for p in self.playlists:
@@ -1510,7 +1526,7 @@ class AddToPlaylistModal(ModalScreen[Optional[Tuple[str, str]]]):
             elif idx is not None and 1 <= idx <= len(self.playlists):
                 self.dismiss(("select", self.playlists[idx - 1]["id"]))
 
-class ConfirmModal(ModalScreen[bool]):
+class ConfirmModal(SafeModalScreen[bool]):
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("n", "cancel", "No", show=False),
@@ -1538,7 +1554,7 @@ class ConfirmModal(ModalScreen[bool]):
         self.dismiss(False)
 
 
-class RenamePlaylistModal(ModalScreen[Optional[str]]):
+class RenamePlaylistModal(SafeModalScreen[Optional[str]]):
     BINDINGS = [
         Binding("escape", "dismiss_modal", "Cancel", priority=True),
         Binding("enter", "submit_name", "Rename", priority=True),
@@ -1579,7 +1595,7 @@ class RenamePlaylistModal(ModalScreen[Optional[str]]):
         self.dismiss(None)
 
 
-class ClonePlaylistModal(ModalScreen[Optional[str]]):
+class ClonePlaylistModal(SafeModalScreen[Optional[str]]):
     BINDINGS = [
         Binding("escape", "dismiss_modal", "Cancel", priority=True),
         Binding("enter", "submit_name", "Clone", priority=True),
@@ -1625,7 +1641,7 @@ class ClonePlaylistModal(ModalScreen[Optional[str]]):
         self.dismiss(None)
 
 
-class SpotifyAuthModal(ModalScreen[Optional[str]]):
+class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
     BINDINGS = [
         Binding("escape", "dismiss_modal", "Close"),
         Binding("s", "sync_library", "Sync", show=False),
@@ -1915,7 +1931,7 @@ class SpotifyAuthModal(ModalScreen[Optional[str]]):
 
         threading.Thread(target=_worker, daemon=True).start()
 
-class UpdateModal(ModalScreen[bool]):
+class UpdateModal(SafeModalScreen[bool]):
     BINDINGS = [
         Binding("escape", "cancel", "Cancel"),
         Binding("n", "cancel", "No", show=False),
@@ -1988,7 +2004,7 @@ class UpdateModal(ModalScreen[bool]):
     def action_cancel(self) -> None:
         self.dismiss(False)
 
-class HelpModal(ModalScreen[None]):
+class HelpModal(SafeModalScreen[None]):
     BINDINGS = [
         Binding("escape", "dismiss_modal", "Close"),
         Binding("enter", "dismiss_modal", "Close"),
@@ -2123,7 +2139,7 @@ class HelpModal(ModalScreen[None]):
         self.dismiss(None)
 
 
-class EqualizerModal(ModalScreen[None]):
+class EqualizerModal(SafeModalScreen[None]):
     """
     Studio-grade 10-band Parametric Equalizer Modal Screen.
     Provides live interactive manipulation of RBJ biquad filters,
@@ -2650,7 +2666,7 @@ class EQOpenLiveEditorAction(Static):
             self.screen.open_live_editor()
 
 
-class EQSettingsModal(ModalScreen[None]):
+class EQSettingsModal(SafeModalScreen[None]):
     """
     Studio-grade DSP Engine & Parametric EQ Configuration Modal.
     Provides fine-grained audiophile controls for:
@@ -5174,7 +5190,11 @@ class SpoffTUI(App):
         self.apply_transparency()
         saved_sidebar_w = get_saved_sidebar_width()
         self.query_one("#sidebar").styles.width = saved_sidebar_w
-        self.playlists = load_saved_playlists()
+        try:
+            self.playlists = load_saved_playlists()
+        except Exception as e:
+            logger.error(f"Failed to load saved playlists on mount: {e}")
+            self.playlists = []
         self.apply_advanced_mode()
         self.apply_keybindings()
         self.update_engine_pill()
@@ -5238,7 +5258,11 @@ class SpoffTUI(App):
         saved_t_idx = last_state.get("track_index")
 
         if saved_tab == "liked":
-            liked = load_liked_songs()
+            try:
+                liked = load_liked_songs()
+            except Exception as e:
+                logger.error(f"Failed to load liked songs during state restoration: {e}")
+                liked = []
             if liked:
                 target_track_row = 0
                 if saved_tid:
@@ -5252,7 +5276,11 @@ class SpoffTUI(App):
                 self.switch_view("search")
                 tt.focus()
         elif saved_tab == "offline":
-            offline_tracks = list(load_offline_index().values())
+            try:
+                offline_tracks = list(load_offline_index().values())
+            except Exception as e:
+                logger.error(f"Failed to load offline index during state restoration: {e}")
+                offline_tracks = []
             if offline_tracks:
                 target_track_row = 0
                 if saved_tid:
@@ -6646,14 +6674,14 @@ class SpoffTUI(App):
 
     def _mpris_play(self):
         if self.player.is_paused:
-            self.player.toggle_pause()
+            self.player.resume()
             self.update_player_hud()
         elif self.player.current_track is None:
             self.action_toggle_play()
 
     def _mpris_pause(self):
         if not self.player.is_paused and self.player.current_track:
-            self.player.toggle_pause()
+            self.player.pause()
             self.update_player_hud()
 
     def _mpris_stop(self):
@@ -6845,6 +6873,8 @@ class SpoffTUI(App):
             self.player.stop()
             self.current_index = -1
             self._pending_track = None
+            if self.mpris:
+                self.mpris.update_track(None)
             self.notify_user("End of queue reached.")
             self.update_player_hud()
 
@@ -6878,6 +6908,8 @@ class SpoffTUI(App):
         if self.current_index > 0:
             prev_idx = self.current_index - 1
             self.play_index(prev_idx)
+        elif self.repeat_mode == "all" and len(self.queue) > 1:
+            self.play_index(len(self.queue) - 1)
         elif self.current_index == 0:
             self.player.seek_absolute(0)
             self.notify_user("Restarted track.")
@@ -7133,7 +7165,7 @@ class SpoffTUI(App):
                 return
             mode, val = result
             t_title = track.get("title", "Track")
-            if mode == "liked":
+            if mode == "liked" or val in ("liked_songs", "target_liked_songs"):
                 added = add_track_to_liked_songs(track)
                 self.current_liked_tracks = load_liked_songs()
                 if self.active_tab == "liked":
@@ -8477,6 +8509,7 @@ class SpoffTUI(App):
         self._pending_track = None
         if self.mpris:
             self.mpris.update_status(False, False)
+            self.mpris.update_track(None)
         self.update_player_hud()
         self.notify_user("No playable tracks remain in this queue.")
 

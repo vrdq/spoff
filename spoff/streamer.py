@@ -21,13 +21,15 @@ _active_downloads = set()
 _active_download_futures: Dict[str, Future] = {}
 _download_lock = threading.Lock()
 _stream_cache: Dict[str, Tuple[Dict[str, Any], float]] = {}
+_stream_cache_lock = threading.Lock()
 STREAM_CACHE_TTL = 7200.0  # 2 hours
 
 def invalidate_stream_cache(track_title: str, artist: str, direct_url: Optional[str] = None):
     cache_key = f"{track_title.lower()}::{artist.lower()}"
     if direct_url:
         cache_key = f"{direct_url}::{cache_key}"
-    _stream_cache.pop(cache_key, None)
+    with _stream_cache_lock:
+        _stream_cache.pop(cache_key, None)
 
 
 _download_slots = threading.BoundedSemaphore(4)
@@ -56,11 +58,12 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
     cache_key = f"{track_title.lower()}::{artist.lower()}"
     if direct_url:
         cache_key = f"{direct_url}::{cache_key}"
-    cached_entry = _stream_cache.get(cache_key)
-    if cached_entry is not None:
-        cached_data, cached_ts = cached_entry
-        if time.time() - cached_ts < STREAM_CACHE_TTL:
-            return cached_data
+    with _stream_cache_lock:
+        cached_entry = _stream_cache.get(cache_key)
+        if cached_entry is not None:
+            cached_data, cached_ts = cached_entry
+            if time.time() - cached_ts < STREAM_CACHE_TTL:
+                return cached_data
 
     queries = []
     if direct_url and (direct_url.startswith("http://") or direct_url.startswith("https://")):
@@ -128,9 +131,10 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
                 "thumbnail": item.get("thumbnail"),
                 "ext": item.get("ext", "m4a")
             }
-            if len(_stream_cache) > 500:
-                _stream_cache.clear()
-            _stream_cache[cache_key] = (stream_data, time.time())
+            with _stream_cache_lock:
+                if len(_stream_cache) > 500:
+                    _stream_cache.clear()
+                _stream_cache[cache_key] = (stream_data, time.time())
             return stream_data
     except Exception as e:
         logger.error(f"Error resolving stream for {track_title} {artist}: {e}")
@@ -155,9 +159,14 @@ def _run_download_process(
             "outtmpl": str(Path(stage) / "audio.%(ext)s"),
             "overwrites": True,
         })
-        with yt_dlp.YoutubeDL(cast(Any, opts)) as ydl:
-            if ydl.download([query]) != 0:
-                raise RuntimeError("Audio download failed")
+        try:
+            with yt_dlp.YoutubeDL(cast(Any, opts)) as ydl:
+                if ydl.download([query]) != 0:
+                    invalidate_stream_cache(title, artist, direct_url=direct_url)
+                    raise RuntimeError("Audio download failed")
+        except Exception:
+            invalidate_stream_cache(title, artist, direct_url=direct_url)
+            raise
         candidates = [
             p for p in Path(stage).iterdir()
             if p.suffix.lower() in CACHE_EXTENSIONS

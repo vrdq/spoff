@@ -135,6 +135,9 @@ class MPVController:
                 af_str = self.eq_engine.to_ffmpeg_af()
                 if af_str:
                     cmd.append(f"--af={af_str}")
+                direct_dev = get_direct_hardware_audio_device()
+                if direct_dev:
+                    cmd.append(f"--audio-device={direct_dev}")
 
             self.process = subprocess.Popen(
                 cmd,
@@ -237,8 +240,8 @@ class MPVController:
                                 elif ev_type == "start-file":
                                     entry_id = event.get("playlist_entry_id")
                                     if entry_id is not None:
-                                        self._active_entry_id = entry_id
                                         with self._lock:
+                                            self._active_entry_id = entry_id
                                             if self._pending_callback:
                                                 self._entry_callbacks[entry_id] = self._pending_callback
                                                 self._pending_callback = None
@@ -326,24 +329,29 @@ class MPVController:
             self._send_command(["set_property", "pause", False])
 
     def toggle_pause(self):
-        self.is_paused = not self.is_paused
-        self._send_command(["set_property", "pause", self.is_paused])
+        with self._lock:
+            self.is_paused = not self.is_paused
+            self._send_command(["set_property", "pause", self.is_paused])
 
     def seek(self, seconds_relative: float):
-        self._send_command(["seek", seconds_relative, "relative"])
-        self._last_pos = max(0.0, self._last_pos + seconds_relative)
+        with self._lock:
+            self._send_command(["seek", seconds_relative, "relative"])
+            self._last_pos = max(0.0, self._last_pos + seconds_relative)
 
     def seek_absolute(self, seconds_absolute: float):
-        seconds_absolute = max(0.0, float(seconds_absolute))
-        self._send_command(["seek", seconds_absolute, "absolute"])
-        self._last_pos = seconds_absolute
+        with self._lock:
+            seconds_absolute = max(0.0, float(seconds_absolute))
+            self._send_command(["seek", seconds_absolute, "absolute"])
+            self._last_pos = seconds_absolute
 
     def set_volume(self, volume: int):
-        self._volume = max(0, min(100, volume))
-        self._send_command(["set_property", "volume", self._volume])
+        with self._lock:
+            self._volume = max(0, min(100, volume))
+            self._send_command(["set_property", "volume", self._volume])
 
     def get_volume(self) -> int:
-        return int(self._volume)
+        with self._lock:
+            return int(self._volume)
 
     def get_progress(self) -> tuple[float, float]:
         if not self.current_track:
