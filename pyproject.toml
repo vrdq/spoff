@@ -33,3 +33,8 @@ spoff = "spoff.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["spoff"]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    "ignore::DeprecationWarning:gi.events",
+]
