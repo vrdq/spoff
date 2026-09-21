@@ -25,7 +25,9 @@ _stream_cache_lock = threading.Lock()
 STREAM_CACHE_TTL = 7200.0  # 2 hours
 
 def invalidate_stream_cache(track_title: str, artist: str, direct_url: Optional[str] = None):
-    cache_key = f"{track_title.lower()}::{artist.lower()}"
+    t_clean = str(track_title or "").strip().lower()
+    a_clean = str(artist or "").strip().lower()
+    cache_key = f"{t_clean}::{a_clean}"
     if direct_url:
         cache_key = f"{direct_url}::{cache_key}"
     with _stream_cache_lock:
@@ -55,6 +57,8 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
     """
     Rapidly resolves a playable direct audio stream URL.
     """
+    track_title = str(track_title or "").strip()
+    artist = str(artist or "").strip()
     cache_key = f"{track_title.lower()}::{artist.lower()}"
     if direct_url:
         cache_key = f"{direct_url}::{cache_key}"

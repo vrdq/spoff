@@ -93,6 +93,12 @@ def _save_disk_cache() -> None:
                 except (OSError, ValueError):
                     logger.exception("Could not read artwork cache before merge")
             disk.update(_memory_art_cache)
+            # Enforce max disk cache size
+            max_entries = 2000
+            if len(disk) > max_entries:
+                keys_to_remove = list(disk.keys())[:-max_entries]
+                for k in keys_to_remove:
+                    disk.pop(k, None)
             _atomic_json_dump(cache_f, disk)
     except (OSError, ValueError):
         logger.exception("Could not save artwork cache")
@@ -163,6 +169,11 @@ def _save_to_cache(track: Dict[str, Any], art_data: Dict[str, Any]) -> None:
         if title:
             norm_key = _normalize_key(title, artist)
             _memory_art_cache[norm_key] = art_data
+
+        if len(_memory_art_cache) > 2000:
+            keys_to_remove = list(_memory_art_cache.keys())[:-1500]
+            for k in keys_to_remove:
+                _memory_art_cache.pop(k, None)
 
         _save_disk_cache()
 

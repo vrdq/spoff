@@ -2304,7 +2304,8 @@ class EqualizerModal(SafeModalScreen[None]):
             )
 
         if saved_cursor is not None and saved_cursor.row < len(table.rows):
-            table.move_cursor(row=saved_cursor.row, column=saved_cursor.column)
+            safe_col = min(saved_cursor.column, max(0, len(table.columns) - 1)) if table.columns else 0
+            table.move_cursor(row=saved_cursor.row, column=safe_col)
 
     def _sync_and_refresh(self, row_only: Optional[int] = None) -> None:
         app: Any = self.app
@@ -6205,8 +6206,7 @@ class SpoffTUI(App):
                 if p_id and move_saved_playlist(p_id, -1):
                     new_idx = idx - 1
                     self.playlists = load_saved_playlists()
-                    self.refresh_side_table()
-                    st.move_cursor(row=new_idx)
+                    self.refresh_side_table(target_row=new_idx)
             return
 
         # 2. Dragging/reordering songs in a playlist
@@ -6301,8 +6301,7 @@ class SpoffTUI(App):
                 if p_id and move_saved_playlist(p_id, 1):
                     new_idx = idx + 1
                     self.playlists = load_saved_playlists()
-                    self.refresh_side_table()
-                    st.move_cursor(row=new_idx)
+                    self.refresh_side_table(target_row=new_idx)
             return
 
         # 2. Dragging/reordering songs in a playlist
@@ -6827,6 +6826,9 @@ class SpoffTUI(App):
                 for t in p.get("tracks", []):
                     if isinstance(t, dict) and t.get("id") and (not t.get("art_url") or not t.get("artist_art_url")):
                         work_items.append((p_id, t.get("id"), dict(t)))
+            for t in load_liked_songs():
+                if isinstance(t, dict) and t.get("id") and (not t.get("art_url") or not t.get("artist_art_url")):
+                    work_items.append(("liked", t.get("id"), dict(t)))
             updated = False
             for p_id, t_id, t in work_items:
                 if getattr(self, "_closing", False):
@@ -6842,7 +6844,10 @@ class SpoffTUI(App):
             if updated and not getattr(self, "_closing", False):
                 def _refresh():
                     self.playlists = load_saved_playlists()
+                    self.current_liked_tracks = load_liked_songs()
                     self.refresh_side_table()
+                    if self.active_tab == "liked":
+                        self.render_tracks(self.current_liked_tracks)
                 if hasattr(self, "call_from_thread"):
                     self.call_from_thread(_refresh)
 

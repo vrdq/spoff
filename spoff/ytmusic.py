@@ -132,6 +132,22 @@ def parse_duration_str(dur_str: str) -> int:
     return 0
 
 
+def _safe_duration_ms(val: Any) -> int:
+    """Safely parses duration value from diverse backend formats (int, float, string, or MM:SS)."""
+    if val is None or val == "":
+        return 0
+    if isinstance(val, (int, float)):
+        try:
+            return max(0, int(val * 1000))
+        except (ValueError, OverflowError):
+            return 0
+    try:
+        f = float(str(val).strip())
+        return max(0, int(f * 1000))
+    except (ValueError, TypeError):
+        return parse_duration_str(str(val))
+
+
 def _extract_best_thumbnail(item: Dict[str, Any], default_vid: Optional[str] = None) -> Optional[str]:
     thumbs = item.get("thumbnails")
     if isinstance(thumbs, dict):
@@ -182,7 +198,7 @@ def fetch_ytmusic_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
 
                     dur_ms = parse_duration_str(item.get("duration", ""))
                     if not dur_ms and item.get("duration_seconds"):
-                        dur_ms = int(item["duration_seconds"]) * 1000
+                        dur_ms = _safe_duration_ms(item["duration_seconds"])
 
                     thumb_url = _extract_best_thumbnail(item, default_vid=v_id)
 
@@ -243,7 +259,7 @@ def fetch_ytmusic_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
                         "id": v_id,
                         "title": cleaned_title if cleaned_title else raw_title,
                         "artist": uploader,
-                        "duration_ms": int((e.get("duration") or 0) * 1000),
+                        "duration_ms": _safe_duration_ms(e.get("duration")),
                         "url": f"https://www.youtube.com/watch?v={v_id}",
                         "source": "ytmusic",
                         "art_url": thumb_url,
@@ -302,7 +318,7 @@ def fetch_ytmusic_album(album_id_or_url: str) -> Optional[Dict[str, Any]]:
                 track_artists = ", ".join(a.get("name", "") for a in item.get("artists", []) if a.get("name")) or album_artist
                 dur_ms = parse_duration_str(item.get("duration", ""))
                 if not dur_ms and item.get("duration_seconds"):
-                    dur_ms = int(item["duration_seconds"]) * 1000
+                    dur_ms = _safe_duration_ms(item["duration_seconds"])
 
                 track_thumb = _extract_best_thumbnail(item, default_vid=v_id) or album_thumb
 
@@ -382,7 +398,7 @@ def fetch_ytmusic_track(video_id_or_url: str) -> Optional[Dict[str, Any]]:
                     "id": v_id,
                     "title": res.get("title") or "Unknown Title",
                     "artist": res.get("uploader") or res.get("channel") or "Unknown Artist",
-                    "duration_ms": int((res.get("duration") or 0) * 1000),
+                    "duration_ms": _safe_duration_ms(res.get("duration")),
                     "url": f"https://www.youtube.com/watch?v={v_id}",
                     "source": "ytmusic",
                     "art_url": thumb,
@@ -420,7 +436,7 @@ def search_ytmusic_tracks(query: str, limit: int = 25) -> List[Dict[str, Any]]:
                 dur_str = r.get("duration") or ""
                 dur_ms = parse_duration_str(dur_str)
                 if not dur_ms and r.get("duration_seconds"):
-                    dur_ms = int(r["duration_seconds"]) * 1000
+                    dur_ms = _safe_duration_ms(r["duration_seconds"])
 
                 thumb_url = _extract_best_thumbnail(r, default_vid=v_id)
 
@@ -482,7 +498,7 @@ def search_ytmusic_tracks(query: str, limit: int = 25) -> List[Dict[str, Any]]:
                     "id": t_id,
                     "title": cleaned_title if cleaned_title else title,
                     "artist": uploader,
-                    "duration_ms": int((e.get("duration") or 0) * 1000),
+                    "duration_ms": _safe_duration_ms(e.get("duration")),
                     "url": f"https://www.youtube.com/watch?v={t_id}",
                     "source": "ytmusic",
                     "art_url": thumb,

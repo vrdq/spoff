@@ -136,6 +136,7 @@ def build_auth_url(verifier: str, client_id: str = SPOTIFY_CLIENT_ID, redirect_u
 class CallbackHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
+    allow_reuse_address = True
 
     def get_request(self):
         connection, address = super().get_request()
@@ -300,6 +301,8 @@ def logout_spotify() -> bool:
                 logger.error(f"Error removing {AUTH_FILE}: {e}")
         return False
 
+_token_refresh_lock = threading.Lock()
+
 def get_valid_token() -> Optional[str]:
     """Returns a valid, unexpired access token, auto-refreshing if necessary."""
     auth = load_spotify_auth()
@@ -318,19 +321,29 @@ def get_valid_token() -> Optional[str]:
     # Refresh 60s before expiration
     if time.time() >= expires_at - 60:
         if refresh_token:
-            new_tokens = refresh_spotify_token(refresh_token)
-            if not new_tokens:
-                return None
-            with storage_transaction():
+            with _token_refresh_lock:
                 current = load_spotify_auth()
-                if not current or current.get("refresh_token") != refresh_token:
+                if current:
+                    try:
+                        cur_exp = float(current.get("expires_at", 0))
+                    except (ValueError, TypeError):
+                        cur_exp = 0.0
+                    if time.time() < cur_exp - 60 and current.get("access_token"):
+                        return current.get("access_token")
+
+                new_tokens = refresh_spotify_token(refresh_token)
+                if not new_tokens:
                     return None
-                # Do not overwrite a refresh another worker already committed
-                if current.get("access_token") != auth.get("access_token"):
+                with storage_transaction():
+                    current = load_spotify_auth()
+                    if not current or current.get("refresh_token") != refresh_token:
+                        return None
+                    # Do not overwrite a refresh another worker already committed
+                    if current.get("access_token") != auth.get("access_token"):
+                        return current.get("access_token")
+                    current.update(new_tokens)
+                    save_spotify_auth(current)
                     return current.get("access_token")
-                current.update(new_tokens)
-                save_spotify_auth(current)
-                return current.get("access_token")
         return None
 
     return access_token

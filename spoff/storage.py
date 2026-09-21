@@ -83,6 +83,7 @@ def storage_transaction():
             yield
             return
         lock_path = DATA_DIR / ".storage.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
         with open(lock_path, "a+b") as lockfile:
             fcntl.flock(lockfile.fileno(), fcntl.LOCK_EX)
             _transaction_state.active = True
@@ -1105,7 +1106,21 @@ def mutate_playlist(playlist_id: str, mutate: Callable[[Dict[str, Any]], None]) 
     return False
 
 def merge_track_artwork(playlist_id: str, track_id: str, artwork: Dict[str, Any]) -> bool:
-    """Safely merges resolved artwork URLs into a track in a saved playlist."""
+    """Safely merges resolved artwork URLs into a track in a saved playlist or liked songs."""
+    if playlist_id in ("liked", "spotify_liked_songs", "liked_songs"):
+        with storage_transaction():
+            liked = load_liked_songs()
+            modified = False
+            for track in liked:
+                if isinstance(track, dict) and track.get("id") == track_id:
+                    for key in ("art_url", "artist_art_url", "album_art_url"):
+                        if artwork.get(key) and not track.get(key):
+                            track[key] = artwork[key]
+                            modified = True
+            if modified:
+                save_liked_songs(liked)
+            return modified
+
     def merge(playlist: Dict[str, Any]) -> None:
         for track in playlist.get("tracks", []):
             if isinstance(track, dict) and track.get("id") == track_id:
