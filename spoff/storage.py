@@ -738,13 +738,19 @@ def remove_track_from_liked_songs(track_id_or_title: str, artist: Optional[str] 
     return False
 
 @transactional
-def move_liked_track(track: Dict[str, Any], delta: int) -> bool:
+def move_liked_track(track: Dict[str, Any], delta: int, index: Optional[int] = None) -> bool:
     """Moves a track up (delta=-1) or down (delta=1) in Liked Songs atomically."""
     tracks = load_liked_songs()
-    index = liked_index(tracks, track)
-    if index is None or not (0 <= index + delta < len(tracks)):
+    target_idx = None
+    if index is not None and 0 <= index < len(tracks):
+        cand = tracks[index]
+        if cand.get("id") == track.get("id") or cand.get("uri") == track.get("uri") or liked_index([cand], track) is not None:
+            target_idx = index
+    if target_idx is None:
+        target_idx = liked_index(tracks, track)
+    if target_idx is None or not (0 <= target_idx + delta < len(tracks)):
         return False
-    tracks.insert(index + delta, tracks.pop(index))
+    tracks.insert(target_idx + delta, tracks.pop(target_idx))
     save_liked_songs(tracks)
     return True
 
@@ -899,16 +905,22 @@ def update_playlist_tracks(playlist_id: str, tracks: List[Dict[str, Any]]):
             return
 
 @transactional
-def move_playlist_track(playlist_id: str, track: Dict[str, Any], delta: int) -> bool:
+def move_playlist_track(playlist_id: str, track: Dict[str, Any], delta: int, index: Optional[int] = None) -> bool:
     """Moves a track up (delta=-1) or down (delta=1) in a playlist atomically."""
     existing = load_saved_playlists()
     for p in existing:
         if p.get("id") == playlist_id:
             tracks = p.get("tracks", [])
-            idx = liked_index(tracks, track)
-            if idx is None or not (0 <= idx + delta < len(tracks)):
+            target_idx = None
+            if index is not None and 0 <= index < len(tracks):
+                cand = tracks[index]
+                if cand.get("id") == track.get("id") or cand.get("uri") == track.get("uri") or liked_index([cand], track) is not None:
+                    target_idx = index
+            if target_idx is None:
+                target_idx = liked_index(tracks, track)
+            if target_idx is None or not (0 <= target_idx + delta < len(tracks)):
                 return False
-            tracks.insert(idx + delta, tracks.pop(idx))
+            tracks.insert(target_idx + delta, tracks.pop(target_idx))
             p["tracks"] = tracks
             save_saved_playlists(existing)
             return True

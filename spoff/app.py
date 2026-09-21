@@ -86,7 +86,7 @@ try:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
+        reorder_spotify_playlist_track, sync_playlist_tracks_to_spotify, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track, extract_spotify_playlist_id
     )
     from .lyrics import fetch_lyrics, get_active_lyric_index
@@ -136,7 +136,7 @@ except ImportError:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
+        reorder_spotify_playlist_track, sync_playlist_tracks_to_spotify, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track, extract_spotify_playlist_id
     )
     from lyrics import fetch_lyrics, get_active_lyric_index
@@ -5081,14 +5081,34 @@ class SpoffTUI(App):
             logger.debug(f"Could not persist last played state: {e}")
 
     def _submit_spotify_job(self, fn, *args, **kwargs):
+        def _handle_result(res):
+            if isinstance(res, tuple) and len(res) == 2:
+                ok, msg = res
+                if not ok and msg:
+                    logger.warning(f"Spotify sync task error: {msg}")
+                    if any(w in msg.lower() for w in ("403", "modify", "permission", "scope", "forbidden", "not owner")):
+                        self.call_from_thread(self.notify_user, f"Spotify: {msg}")
+
         jobs = getattr(self, "_spotify_jobs", None)
         if jobs is not None:
-            return jobs.submit(fn, *args, **kwargs)
-        if args or kwargs:
-            target = lambda: fn(*args, **kwargs)
-        else:
-            target = fn
-        t = threading.Thread(target=target, daemon=True)
+            fut = jobs.submit(fn, *args, **kwargs)
+            def _on_done(f):
+                try:
+                    res = f.result()
+                    _handle_result(res)
+                except Exception as exc:
+                    logger.error(f"Spotify job exception: {exc}")
+            fut.add_done_callback(_on_done)
+            return fut
+
+        def _thread_target():
+            try:
+                res = fn(*args, **kwargs)
+                _handle_result(res)
+            except Exception as exc:
+                logger.error(f"Spotify thread job exception: {exc}")
+
+        t = threading.Thread(target=_thread_target, daemon=True)
         t.start()
         return t
 
@@ -6198,7 +6218,7 @@ class SpoffTUI(App):
                 before = list(self.current_playlist_tracks)
                 track = self.current_playlist_tracks[idx]
 
-                if self.current_playlist_id and move_playlist_track(self.current_playlist_id, track, -1):
+                if self.current_playlist_id and move_playlist_track(self.current_playlist_id, track, -1, index=idx):
                     self.playlists = load_saved_playlists()
                     for p in self.playlists:
                         if p.get("id") == self.current_playlist_id:
@@ -6208,20 +6228,16 @@ class SpoffTUI(App):
 
                     # Sync reordering to Spotify in background if this is a Spotify playlist
                     if self.current_playlist_id != "spotify_liked_songs":
-                        is_spotify = (len(self.current_playlist_id) == 22 and self.current_playlist_id.isalnum()) or any(
-                            p.get("id") == self.current_playlist_id and p.get("spotify_id") for p in self.playlists
-                        )
-                        if is_spotify and not is_client_side_track(track):
-                            remote_before = [t for t in before if not is_client_side_track(t)]
-                            remote_after = [t for t in after if not is_client_side_track(t)]
-                            if track in remote_before and track in remote_after:
-                                old_remote = remote_before.index(track)
-                                new_remote = remote_after.index(track)
-                                if old_remote != new_remote:
-                                    self._submit_spotify_job(
-                                        reorder_spotify_playlist_track,
-                                        self.current_playlist_id, old_remote, new_remote
-                                    )
+                        target_pl = next((p for p in self.playlists if p.get("id") == self.current_playlist_id), None)
+                        spotify_pl_id = extract_spotify_playlist_id(target_pl) or extract_spotify_playlist_id(self.current_playlist_id)
+                        if spotify_pl_id and not is_client_side_track(track):
+                            old_remote = sum(1 for t in before[:idx] if not is_client_side_track(t))
+                            new_remote = sum(1 for t in after[:new_idx] if not is_client_side_track(t))
+                            if old_remote != new_remote:
+                                self._submit_spotify_job(
+                                    reorder_spotify_playlist_track,
+                                    spotify_pl_id, old_remote, new_remote
+                                )
 
                     is_queue_mirroring = (
                         bool(self.queue)
@@ -6248,7 +6264,7 @@ class SpoffTUI(App):
                 new_idx = idx - 1
                 track = self.current_liked_tracks.pop(idx)
                 self.current_liked_tracks.insert(new_idx, track)
-                move_liked_track(track, -1)
+                move_liked_track(track, -1, index=idx)
                 save_liked_songs(self.current_liked_tracks)
                 is_queue_mirroring = (
                     bool(self.queue)
@@ -6298,7 +6314,7 @@ class SpoffTUI(App):
                 before = list(self.current_playlist_tracks)
                 track = self.current_playlist_tracks[idx]
 
-                if self.current_playlist_id and move_playlist_track(self.current_playlist_id, track, 1):
+                if self.current_playlist_id and move_playlist_track(self.current_playlist_id, track, 1, index=idx):
                     self.playlists = load_saved_playlists()
                     for p in self.playlists:
                         if p.get("id") == self.current_playlist_id:
@@ -6307,20 +6323,16 @@ class SpoffTUI(App):
                     after = list(self.current_playlist_tracks)
 
                     if self.current_playlist_id != "spotify_liked_songs":
-                        is_spotify = (len(self.current_playlist_id) == 22 and self.current_playlist_id.isalnum()) or any(
-                            p.get("id") == self.current_playlist_id and p.get("spotify_id") for p in self.playlists
-                        )
-                        if is_spotify and not is_client_side_track(track):
-                            remote_before = [t for t in before if not is_client_side_track(t)]
-                            remote_after = [t for t in after if not is_client_side_track(t)]
-                            if track in remote_before and track in remote_after:
-                                old_remote = remote_before.index(track)
-                                new_remote = remote_after.index(track)
-                                if old_remote != new_remote:
-                                    self._submit_spotify_job(
-                                        reorder_spotify_playlist_track,
-                                        self.current_playlist_id, old_remote, new_remote
-                                    )
+                        target_pl = next((p for p in self.playlists if p.get("id") == self.current_playlist_id), None)
+                        spotify_pl_id = extract_spotify_playlist_id(target_pl) or extract_spotify_playlist_id(self.current_playlist_id)
+                        if spotify_pl_id and not is_client_side_track(track):
+                            old_remote = sum(1 for t in before[:idx] if not is_client_side_track(t))
+                            new_remote = sum(1 for t in after[:new_idx] if not is_client_side_track(t))
+                            if old_remote != new_remote:
+                                self._submit_spotify_job(
+                                    reorder_spotify_playlist_track,
+                                    spotify_pl_id, old_remote, new_remote
+                                )
 
                     is_queue_mirroring = (
                         bool(self.queue)
@@ -6347,7 +6359,7 @@ class SpoffTUI(App):
                 new_idx = idx + 1
                 track = self.current_liked_tracks.pop(idx)
                 self.current_liked_tracks.insert(new_idx, track)
-                move_liked_track(track, 1)
+                move_liked_track(track, 1, index=idx)
                 save_liked_songs(self.current_liked_tracks)
                 is_queue_mirroring = (
                     bool(self.queue)

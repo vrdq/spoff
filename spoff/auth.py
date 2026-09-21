@@ -537,6 +537,65 @@ def is_client_side_track(track: Dict[str, Any]) -> bool:
         return False
     return True
 
+def extract_spotify_playlist_id(pl_data: Any) -> Optional[str]:
+    """
+    Extracts a 22-character Spotify playlist ID from a playlist dict, ID string,
+    Spotify web URL, Spotify URI, or API href.
+    """
+    if not pl_data:
+        return None
+
+    if isinstance(pl_data, str):
+        s = pl_data.strip()
+        if not s or s == "spotify_liked_songs":
+            return None
+        if re.fullmatch(r"[A-Za-z0-9]{22}", s) and not s.startswith("local_") and not s.startswith("pl_"):
+            return s
+        m = re.search(r'playlist/([a-zA-Z0-9]{22})', s)
+        if m:
+            return m.group(1)
+        if s.startswith("spotify:playlist:"):
+            parts = s.split(":")
+            if len(parts) >= 3 and re.fullmatch(r"[A-Za-z0-9]{22}", parts[2]):
+                return parts[2]
+        m = re.search(r'/playlists/([a-zA-Z0-9]{22})', s)
+        if m:
+            return m.group(1)
+        return None
+
+    if isinstance(pl_data, dict):
+        sp_id = pl_data.get("spotify_id")
+        if sp_id and isinstance(sp_id, str):
+            extracted = extract_spotify_playlist_id(sp_id)
+            if extracted:
+                return extracted
+
+        pid = pl_data.get("id")
+        if pid and isinstance(pid, str):
+            extracted = extract_spotify_playlist_id(pid)
+            if extracted:
+                return extracted
+
+        url = pl_data.get("url")
+        if url and isinstance(url, str):
+            extracted = extract_spotify_playlist_id(url)
+            if extracted:
+                return extracted
+
+        uri = pl_data.get("uri")
+        if uri and isinstance(uri, str):
+            extracted = extract_spotify_playlist_id(uri)
+            if extracted:
+                return extracted
+
+        href = pl_data.get("href")
+        if href and isinstance(href, str):
+            extracted = extract_spotify_playlist_id(href)
+            if extracted:
+                return extracted
+
+    return None
+
 def merge_spotify_and_client_tracks(
     spotify_tracks: List[Dict[str, Any]],
     existing_tracks: Optional[List[Dict[str, Any]]]
@@ -869,15 +928,14 @@ def add_track_to_spotify_account(
         return False, err
 
     # 2. Existing Spotify playlist ID check
-    target_spotify_pl_id = None
-    if len(playlist_id) == 22 and playlist_id.isalnum() and not playlist_id.startswith("local_"):
-        target_spotify_pl_id = playlist_id
-    else:
+    target_spotify_pl_id = extract_spotify_playlist_id(playlist_id)
+    if not target_spotify_pl_id:
         local_playlists = load_saved_playlists()
         for pl in local_playlists:
-            if pl.get("id") == playlist_id and pl.get("spotify_id"):
-                target_spotify_pl_id = pl["spotify_id"]
-                break
+            if pl.get("id") == playlist_id:
+                target_spotify_pl_id = extract_spotify_playlist_id(pl)
+                if target_spotify_pl_id:
+                    break
 
     # 3. If not found, create the playlist on Spotify
     if not target_spotify_pl_id:
@@ -941,15 +999,14 @@ def remove_track_from_spotify_account(
             return True, "Removed from Spotify Liked Songs"
         return False, err
 
-    target_spotify_pl_id = None
-    if len(playlist_id) == 22 and playlist_id.isalnum() and not playlist_id.startswith("local_"):
-        target_spotify_pl_id = playlist_id
-    else:
+    target_spotify_pl_id = extract_spotify_playlist_id(playlist_id)
+    if not target_spotify_pl_id:
         local_playlists = load_saved_playlists()
         for pl in local_playlists:
-            if pl.get("id") == playlist_id and pl.get("spotify_id"):
-                target_spotify_pl_id = pl["spotify_id"]
-                break
+            if pl.get("id") == playlist_id:
+                target_spotify_pl_id = extract_spotify_playlist_id(pl)
+                if target_spotify_pl_id:
+                    break
 
     if not target_spotify_pl_id:
         return False, "Playlist is not linked to Spotify"
@@ -979,18 +1036,20 @@ def reorder_spotify_playlist_track(
     if not token:
         return False, "Not logged in to Spotify"
 
-    if playlist_id == "spotify_liked_songs":
+    if playlist_id in ("spotify_liked_songs", "liked"):
         return False, "Liked Songs is chronological on Spotify"
 
-    target_spotify_pl_id = None
-    if len(playlist_id) == 22 and playlist_id.isalnum() and not playlist_id.startswith("local_"):
-        target_spotify_pl_id = playlist_id
-    else:
+    if not has_modify_scopes():
+        return False, "Spotify permission required: please re-link account (press 'L') for playlist sync"
+
+    target_spotify_pl_id = extract_spotify_playlist_id(playlist_id)
+    if not target_spotify_pl_id:
         local_playlists = load_saved_playlists()
         for pl in local_playlists:
-            if pl.get("id") == playlist_id and pl.get("spotify_id"):
-                target_spotify_pl_id = pl["spotify_id"]
-                break
+            if pl.get("id") == playlist_id:
+                target_spotify_pl_id = extract_spotify_playlist_id(pl)
+                if target_spotify_pl_id:
+                    break
 
     if not target_spotify_pl_id:
         return False, "Not a Spotify playlist"
@@ -1004,66 +1063,84 @@ def reorder_spotify_playlist_track(
     ok, _, err = spotify_api_request(f"/playlists/{target_spotify_pl_id}/tracks", method="PUT", body=body, token=token)
     if ok:
         return True, "Reordered on Spotify"
+    logger.warning(f"Failed to reorder track on Spotify playlist {target_spotify_pl_id}: {err}")
     return False, err
 
-def extract_spotify_playlist_id(pl_data: Any) -> Optional[str]:
+def sync_playlist_tracks_to_spotify(
+    playlist_id: str,
+    tracks: Optional[List[Dict[str, Any]]] = None,
+    token: Optional[str] = None
+) -> Tuple[bool, str]:
     """
-    Extracts a 22-character Spotify playlist ID from a playlist dict, ID string,
-    Spotify web URL, Spotify URI, or API href.
+    Replaces the remote Spotify playlist track order with the exact order
+    of Spotify tracks in the local playlist.
     """
-    if not pl_data:
-        return None
+    if not playlist_id or playlist_id in ("spotify_liked_songs", "liked"):
+        return False, "Cannot set track order for Liked Songs"
 
-    if isinstance(pl_data, str):
-        s = pl_data.strip()
-        if not s or s == "spotify_liked_songs":
-            return None
-        if re.fullmatch(r"[A-Za-z0-9]{22}", s) and not s.startswith("local_") and not s.startswith("pl_"):
-            return s
-        m = re.search(r'playlist/([a-zA-Z0-9]{22})', s)
-        if m:
-            return m.group(1)
-        if s.startswith("spotify:playlist:"):
-            parts = s.split(":")
-            if len(parts) >= 3 and re.fullmatch(r"[A-Za-z0-9]{22}", parts[2]):
-                return parts[2]
-        m = re.search(r'/playlists/([a-zA-Z0-9]{22})', s)
-        if m:
-            return m.group(1)
-        return None
+    if not token:
+        token = get_valid_token()
+    if not token:
+        return False, "Not logged in to Spotify"
 
-    if isinstance(pl_data, dict):
-        sp_id = pl_data.get("spotify_id")
-        if sp_id and isinstance(sp_id, str):
-            extracted = extract_spotify_playlist_id(sp_id)
-            if extracted:
-                return extracted
+    if not has_modify_scopes():
+        return False, "Spotify permission required: please re-link account (press 'L') for playlist sync"
 
-        pid = pl_data.get("id")
-        if pid and isinstance(pid, str):
-            extracted = extract_spotify_playlist_id(pid)
-            if extracted:
-                return extracted
+    target_spotify_pl_id = extract_spotify_playlist_id(playlist_id)
+    if not target_spotify_pl_id or tracks is None:
+        local_playlists = load_saved_playlists()
+        for pl in local_playlists:
+            if pl.get("id") == playlist_id or extract_spotify_playlist_id(pl) == target_spotify_pl_id:
+                if not target_spotify_pl_id:
+                    target_spotify_pl_id = extract_spotify_playlist_id(pl)
+                if tracks is None:
+                    tracks = pl.get("tracks", [])
+                break
 
-        url = pl_data.get("url")
-        if url and isinstance(url, str):
-            extracted = extract_spotify_playlist_id(url)
-            if extracted:
-                return extracted
+    if not target_spotify_pl_id:
+        return False, "Not a Spotify playlist"
 
-        uri = pl_data.get("uri")
-        if uri and isinstance(uri, str):
-            extracted = extract_spotify_playlist_id(uri)
-            if extracted:
-                return extracted
+    if tracks is None:
+        return False, "No tracks provided"
 
-        href = pl_data.get("href")
-        if href and isinstance(href, str):
-            extracted = extract_spotify_playlist_id(href)
-            if extracted:
-                return extracted
+    # Filter down to Spotify tracks and resolve URIs
+    uris: List[str] = []
+    for t in tracks:
+        if is_client_side_track(t):
+            continue
+        uri = t.get("uri")
+        if uri and str(uri).startswith("spotify:track:"):
+            uris.append(str(uri))
+        elif t.get("id") and len(str(t["id"])) == 22 and str(t["id"]).isalnum() and not str(t["id"]).startswith("local_"):
+            uris.append(f"spotify:track:{t['id']}")
 
-    return None
+    if not uris:
+        return True, "No Spotify tracks to sync"
+
+    first_batch = uris[:100]
+    ok, _, err = spotify_api_request(
+        f"/playlists/{target_spotify_pl_id}/tracks",
+        method="PUT",
+        body={"uris": first_batch},
+        token=token
+    )
+    if not ok:
+        logger.warning(f"Failed to sync playlist tracks to Spotify: {err}")
+        return False, err or "Failed to update playlist tracks on Spotify"
+
+    for i in range(100, len(uris), 100):
+        batch = uris[i:i+100]
+        ok_chunk, _, err_chunk = spotify_api_request(
+            f"/playlists/{target_spotify_pl_id}/tracks",
+            method="POST",
+            body={"uris": batch},
+            token=token
+        )
+        if not ok_chunk:
+            logger.warning(f"Failed to append batch to Spotify playlist: {err_chunk}")
+            return False, err_chunk or f"Failed to append tracks chunk starting at {i}"
+
+    return True, "Playlist track order synced to Spotify"
 
 def delete_spotify_playlist(
     playlist_id: str,
