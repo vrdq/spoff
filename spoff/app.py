@@ -68,6 +68,7 @@ try:
         load_eq_settings, save_eq_settings, remove_deleted_spotify_playlist_id,
         load_liked_songs, save_liked_songs, add_track_to_liked_songs, remove_track_from_liked_songs,
         is_track_liked, get_saved_last_played, save_last_played,
+        get_saved_last_tab, get_saved_last_playlist_id, save_last_tab,
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
         record_deleted_spotify_playlist_id
@@ -118,6 +119,7 @@ except ImportError:
         load_eq_settings, save_eq_settings, remove_deleted_spotify_playlist_id,
         load_liked_songs, save_liked_songs, add_track_to_liked_songs, remove_track_from_liked_songs,
         is_track_liked, get_saved_last_played, save_last_played,
+        get_saved_last_tab, get_saved_last_playlist_id, save_last_tab,
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
         record_deleted_spotify_playlist_id
@@ -5124,6 +5126,12 @@ class SpoffTUI(App):
         self._closing = True
         self._play_request_id += 1
         try:
+            cur_tab = getattr(self, "active_tab", "search")
+            cur_pid = getattr(self, "current_playlist_id", None) if cur_tab == "playlist" else None
+            save_last_tab(cur_tab, cur_pid)
+        except Exception:
+            pass
+        try:
             self._save_playback_state()
         except Exception:
             pass
@@ -5271,8 +5279,8 @@ class SpoffTUI(App):
         st = self.query_one("#side-table", DataTable)
         tt = self.query_one("#track-table", DataTable)
         last_state = get_saved_last_played()
-        saved_tab = last_state.get("tab")
-        saved_pid = last_state.get("playlist_id")
+        saved_tab = get_saved_last_tab() or last_state.get("tab") or "search"
+        saved_pid = get_saved_last_playlist_id() or last_state.get("playlist_id")
         saved_tid = last_state.get("track_id")
         saved_title = last_state.get("track_title")
         saved_artist = last_state.get("track_artist")
@@ -5284,36 +5292,69 @@ class SpoffTUI(App):
             except Exception as e:
                 logger.error(f"Failed to load liked songs during state restoration: {e}")
                 liked = []
-            if liked:
-                target_track_row = 0
-                if saved_tid:
-                    for r_idx, t in enumerate(liked):
-                        if t.get("id") == saved_tid:
-                            target_track_row = r_idx
-                            break
-                self.switch_view("liked", select_row=target_track_row)
-                tt.focus()
-            else:
-                self.switch_view("search")
-                tt.focus()
+            target_track_row = 0
+            if saved_tid and liked:
+                for r_idx, t in enumerate(liked):
+                    if t.get("id") == saved_tid:
+                        target_track_row = r_idx
+                        break
+            self.switch_view("liked", select_row=target_track_row if liked else None)
+            tt.focus()
         elif saved_tab == "offline":
             try:
                 offline_tracks = list(load_offline_index().values())
             except Exception as e:
                 logger.error(f"Failed to load offline index during state restoration: {e}")
                 offline_tracks = []
-            if offline_tracks:
-                target_track_row = 0
-                if saved_tid:
-                    for r_idx, t in enumerate(offline_tracks):
-                        if t.get("id") == saved_tid:
-                            target_track_row = r_idx
+            target_track_row = 0
+            if saved_tid and offline_tracks:
+                for r_idx, t in enumerate(offline_tracks):
+                    if t.get("id") == saved_tid:
+                        target_track_row = r_idx
+                        break
+            self.switch_view("offline", select_row=target_track_row if offline_tracks else None)
+            tt.focus()
+        elif saved_tab == "lyrics":
+            self.switch_view("lyrics")
+        elif saved_tab == "playlist":
+            if self.playlists:
+                matched_pl_idx = None
+                if saved_pid:
+                    for p_idx, p in enumerate(self.playlists):
+                        if p.get("id") == saved_pid:
+                            matched_pl_idx = p_idx
                             break
-                self.switch_view("offline", select_row=target_track_row)
-                tt.focus()
+
+                if matched_pl_idx is not None:
+                    target_pl_idx = matched_pl_idx
+                    pl = self.playlists[target_pl_idx]
+                    pl_tracks = list(pl.get("tracks", []))
+                    target_track_row = 0
+                    if pl_tracks:
+                        found_row = None
+                        if saved_tid:
+                            for r_idx, t in enumerate(pl_tracks):
+                                if t.get("id") == saved_tid:
+                                    found_row = r_idx
+                                    break
+                        if found_row is None and saved_title:
+                            for r_idx, t in enumerate(pl_tracks):
+                                if t.get("title") == saved_title and (not saved_artist or t.get("artist") == saved_artist):
+                                    found_row = r_idx
+                                    break
+                        if found_row is None and isinstance(saved_t_idx, int) and 0 <= saved_t_idx < len(pl_tracks):
+                            found_row = saved_t_idx
+                        if found_row is not None:
+                            target_track_row = found_row
+
+                    st.move_cursor(row=target_pl_idx)
+                    self.load_playlist_by_index(target_pl_idx, focus_tracks=True, select_row=target_track_row)
+                    tt.focus()
+                else:
+                    self.load_playlist_by_index(0, focus_tracks=False)
+                    st.move_cursor(row=0)
             else:
-                self.switch_view("search")
-                tt.focus()
+                self.switch_view("playlist")
         elif saved_tab == "search":
             self.switch_view("search")
             tt.focus()
@@ -5351,11 +5392,7 @@ class SpoffTUI(App):
                 self.load_playlist_by_index(target_pl_idx, focus_tracks=True, select_row=target_track_row)
                 tt.focus()
             else:
-                if saved_tab == "playlist" and self.playlists:
-                    self.load_playlist_by_index(0, focus_tracks=False)
-                    st.move_cursor(row=0)
-                else:
-                    self.switch_view("search")
+                self.switch_view("search")
                 tt.focus()
         else:
             self.switch_view("search")
@@ -5869,6 +5906,12 @@ class SpoffTUI(App):
             if not (self.focused and self.focused.id == "side-table"):
                 lyrics_table.focus()
             self.notify_user("" if self.advanced_mode else "Lyrics: Enter or Click any line to jump to that moment")
+
+        if view in ("search", "playlist", "liked", "offline", "lyrics"):
+            try:
+                save_last_tab(view, getattr(self, "current_playlist_id", None) if view == "playlist" else None)
+            except Exception:
+                pass
 
     def _update_nav_bar(self) -> None:
         tabs = [

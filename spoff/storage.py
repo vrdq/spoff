@@ -531,6 +531,43 @@ def save_visualizer_color(color: str):
         logger.error(f"Error saving visualizer color: {e}")
         raise
 
+def get_saved_last_tab() -> Optional[str]:
+    """Retrieves the last opened tab name from config ('search', 'playlist', 'liked', 'offline', 'lyrics')."""
+    try:
+        cfg = load_config()
+        val = cfg.get("last_tab")
+        if isinstance(val, str) and val in ("search", "playlist", "liked", "offline", "lyrics"):
+            return val
+    except Exception as e:
+        logger.error(f"Error reading last tab: {e}")
+    return None
+
+def get_saved_last_playlist_id() -> Optional[str]:
+    """Retrieves the last active playlist ID from config."""
+    try:
+        cfg = load_config()
+        val = cfg.get("last_playlist_id")
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    except Exception as e:
+        logger.error(f"Error reading last playlist ID: {e}")
+    return None
+
+@transactional
+def save_last_tab(tab: str, playlist_id: Optional[str] = None) -> None:
+    """Persists last active tab and optional playlist ID to config."""
+    try:
+        cfg = load_config()
+        if tab in ("search", "playlist", "liked", "offline", "lyrics"):
+            cfg["last_tab"] = tab
+        if playlist_id is not None:
+            clean_pid = str(playlist_id).strip()
+            if clean_pid:
+                cfg["last_playlist_id"] = clean_pid
+        save_config(cfg)
+    except Exception as e:
+        logger.error(f"Error saving last tab: {e}")
+
 def get_saved_last_played() -> Dict[str, Any]:
     """Retrieves saved last played state from config."""
     try:
@@ -554,6 +591,10 @@ def save_last_played(state: Dict[str, Any]) -> None:
                 if isinstance(val, (str, int, float, bool)):
                     clean_state[k] = val
         cfg["last_played"] = clean_state
+        if "tab" in clean_state and clean_state["tab"] in ("search", "playlist", "liked", "offline", "lyrics"):
+            cfg["last_tab"] = clean_state["tab"]
+        if clean_state.get("playlist_id"):
+            cfg["last_playlist_id"] = clean_state["playlist_id"]
         save_config(cfg)
     except Exception as e:
         logger.error(f"Error saving last played state: {e}")

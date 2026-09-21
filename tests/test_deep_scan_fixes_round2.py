@@ -146,3 +146,76 @@ def test_storage_merge_track_artwork_liked_songs(tmp_path, monkeypatch):
     assert reloaded[0]["artist_art_url"] == "https://resolved.art/artist1.jpg"
     # Should not overwrite existing artwork
     assert reloaded[1]["art_url"] == "https://existing.art"
+
+
+def test_storage_last_tab_persistence(tmp_path, monkeypatch):
+    """Verifies that save_last_tab and get_saved_last_tab persist and retrieve the active tab and playlist ID."""
+    data_dir = tmp_path / "spoff"
+    data_dir.mkdir()
+    monkeypatch.setattr(storage, "DATA_DIR", data_dir)
+    monkeypatch.setattr(storage, "CONFIG_FILE", data_dir / "config.json")
+
+    # Default is None when unset
+    assert storage.get_saved_last_tab() is None
+    assert storage.get_saved_last_playlist_id() is None
+
+    # Save playlist tab with playlist ID
+    storage.save_last_tab("playlist", playlist_id="pl_synthwave")
+    assert storage.get_saved_last_tab() == "playlist"
+    assert storage.get_saved_last_playlist_id() == "pl_synthwave"
+
+    # Save liked tab
+    storage.save_last_tab("liked")
+    assert storage.get_saved_last_tab() == "liked"
+
+    # Invalid tab names are ignored
+    storage.save_last_tab("invalid_tab")
+    assert storage.get_saved_last_tab() == "liked"
+
+
+def test_app_restore_last_opened_tab(tmp_path, monkeypatch):
+    """Verifies that the app restores directly to the last opened tab on startup."""
+    from spoff import app as spoff_app
+    from textual.widgets import DataTable
+
+    data_dir = tmp_path / "spoff"
+    data_dir.mkdir()
+    monkeypatch.setattr(storage, "DATA_DIR", data_dir)
+    monkeypatch.setattr(storage, "CONFIG_FILE", data_dir / "config.json")
+    monkeypatch.setattr(storage, "PLAYLISTS_FILE", data_dir / "playlists.json")
+
+    playlists = [
+        {"id": "pl_1", "name": "Chill", "tracks": [{"id": "t1", "title": "Track 1", "artist": "Artist 1"}]},
+        {"id": "pl_2", "name": "Workout", "tracks": [{"id": "t2", "title": "Track 2", "artist": "Artist 2"}]},
+    ]
+    storage.save_saved_playlists(playlists)
+
+    # 1. Test opening on playlists tab directly to pl_2
+    storage.save_last_tab("playlist", playlist_id="pl_2")
+
+    mock_app = MagicMock()
+    mock_app.playlists = playlists
+    st_mock = MagicMock(spec=DataTable)
+    tt_mock = MagicMock(spec=DataTable)
+    mock_app.query_one.side_effect = lambda sel, *args, **kwargs: st_mock if "side-table" in sel else tt_mock
+
+    spoff_app.SpoffTUI._restore_last_view_state(mock_app)
+    # Should select playlist 1 (Workout)
+    mock_app.load_playlist_by_index.assert_called_with(1, focus_tracks=True, select_row=0)
+    st_mock.move_cursor.assert_called_with(row=1)
+    tt_mock.focus.assert_called()
+
+    # 2. Test opening on liked tab
+    storage.save_last_tab("liked")
+    mock_app.reset_mock()
+    spoff_app.SpoffTUI._restore_last_view_state(mock_app)
+    mock_app.switch_view.assert_called_with("liked", select_row=None)
+    tt_mock.focus.assert_called()
+
+    # 3. Test opening on offline tab
+    storage.save_last_tab("offline")
+    mock_app.reset_mock()
+    spoff_app.SpoffTUI._restore_last_view_state(mock_app)
+    mock_app.switch_view.assert_called_with("offline", select_row=None)
+    tt_mock.focus.assert_called()
+
