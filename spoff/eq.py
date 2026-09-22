@@ -577,9 +577,17 @@ class ParametricEQEngine:
         self._update_filter_coefficients()
 
     def set_sample_rate(self, sample_rate: float) -> None:
-        if sample_rate > 0 and sample_rate != self.sample_rate:
-            self.sample_rate = sample_rate
-            self._update_filter_coefficients()
+        rate = float(sample_rate)
+        if not math.isfinite(rate) or rate < 8000:
+            raise ValueError("Unsupported sample rate")
+        if rate == self.sample_rate:
+            return
+        for band in self.bands:
+            band.frequency = max(10.0, min(band.frequency, rate * 0.495))
+        self.sample_rate = rate
+        self._update_filter_coefficients()
+        if self.auto_headroom:
+            self.preamp_db = self.auto_preamp_headroom()
 
     def set_precision(self, precision: str) -> None:
         p = precision.lower().strip()
@@ -689,12 +697,12 @@ class ParametricEQEngine:
             tot_db += coeffs.magnitude_db(freq_hz, self.sample_rate)
         return tot_db
 
-    def calculate_peak_gain(self, num_points: int = 16384) -> Tuple[float, float]:
+    def calculate_peak_gain(self, num_points: int = 16384, *, ignore_bypass: bool = False) -> Tuple[float, float]:
         """
         Scans the 20 Hz - 20 kHz audio range to find the maximum composite peak gain.
         Returns (peak_gain_dbfs, peak_frequency_hz).
         """
-        if self.bypassed:
+        if self.bypassed and not ignore_bypass:
             return 0.0, 1000.0
 
         coeffs_list = [
@@ -739,9 +747,11 @@ class ParametricEQEngine:
             margin = margin + 0.2
 
         saved_preamp = self.preamp_db
-        self.preamp_db = 0.0
-        peak_gain_no_preamp, _ = self.calculate_peak_gain(num_points=16384)
-        self.preamp_db = saved_preamp
+        try:
+            self.preamp_db = 0.0
+            peak_gain_no_preamp, _ = self.calculate_peak_gain(num_points=16384, ignore_bypass=True)
+        finally:
+            self.preamp_db = saved_preamp
 
         if peak_gain_no_preamp > 0.0:
             recommended = -(peak_gain_no_preamp + margin)

@@ -71,7 +71,7 @@ try:
         get_saved_last_tab, get_saved_last_playlist_id, save_last_tab,
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
-        record_deleted_spotify_playlist_id
+        record_deleted_spotify_playlist_id, liked_index, storage_transaction
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache
     from .search import live_search_tracks
@@ -207,6 +207,17 @@ def resolve_track_url(track: Dict[str, Any]) -> Tuple[str, str]:
         return f"https://music.youtube.com/search?q={encoded}", "YouTube Music"
 
     return "", ""
+
+
+def playback_direct_url(track: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(track, dict):
+        return None
+    if track.get("url"):
+        return str(track["url"])
+    identifier = str(track.get("id") or "")
+    if re.fullmatch(r"[a-zA-Z0-9_-]{11}", identifier):
+        return f"https://www.youtube.com/watch?v={identifier}"
+    return None
 
 
 def resolve_playlist_url(playlist: Dict[str, Any], default_engine: str = "ytmusic") -> Tuple[str, str]:
@@ -930,7 +941,6 @@ class SettingsModal(SafeModalScreen[None]):
 
     def __init__(self):
         super().__init__()
-        self.is_rebinding: bool = False
 
     @property
     def spoff_app(self) -> Any:
@@ -1665,11 +1675,12 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="spotify-dialog"):
-            if self.first_run and not (self.auth_session and get_valid_token()):
+            is_connected = bool(self.auth_session and (self.auth_session.get("access_token") or self.auth_session.get("refresh_token")))
+            if self.first_run and not is_connected:
                 yield Static("WELCOME TO SPOFF - SPOTIFY SETUP", id="spotify-title")
             else:
                 yield Static("SPOTIFY ACCOUNT", id="spotify-title")
-            if self.auth_session and get_valid_token():
+            if is_connected:
                 user = self.auth_session.get("user", {})
                 name = user.get("display_name") or user.get("id") or "Spotify User"
                 email = user.get("email") or ""
@@ -1725,7 +1736,8 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
                 yield Static("", id="spotify-hint")
 
     def on_mount(self) -> None:
-        if self.auth_session and get_valid_token():
+        is_connected = bool(self.auth_session and (self.auth_session.get("access_token") or self.auth_session.get("refresh_token")))
+        if is_connected:
             try:
                 self.query_one("#btn-sync", Button).focus()
             except Exception:
@@ -1738,8 +1750,13 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
                     if tok and self.auth_session is not None:
                         prof = fetch_current_user_profile(tok)
                         if prof:
-                            self.auth_session["user"] = prof
-                            save_spotify_auth(self.auth_session)
+                            with storage_transaction():
+                                current = load_spotify_auth()
+                                if not current or current.get("access_token") != tok:
+                                    return
+                                current["user"] = prof
+                                save_spotify_auth(current)
+                                self.auth_session = current
                             name = prof.get("display_name") or prof.get("id") or "Spotify User"
                             email = prof.get("email") or ""
                             line = f"User: [bold #ffffff]{escape(str(name))}[/]"
@@ -1778,7 +1795,7 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
         self.dismiss(None)
 
     def action_sync_library(self) -> None:
-        if self.auth_session and get_valid_token():
+        if self.auth_session and (self.auth_session.get("access_token") or self.auth_session.get("refresh_token")):
             self.dismiss("sync_now")
 
     def action_relink_account(self) -> None:
@@ -1819,7 +1836,7 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
             event.prevent_default()
             event.stop()
         elif event.key == "enter" and not isinstance(self.focused, Button):
-            if self.auth_session and get_valid_token():
+            if self.auth_session and (self.auth_session.get("access_token") or self.auth_session.get("refresh_token")):
                 self.action_sync_library()
             else:
                 self.start_browser_login()
@@ -1852,7 +1869,7 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
         if self.is_logging_in:
             return
         self.is_logging_in = True
-        self.pkce_verifier, challenge = generate_pkce_pair()
+        self.pkce_verifier, _challenge = generate_pkce_pair()
         auth_url, state = build_auth_url(self.pkce_verifier)
 
         try:
@@ -2581,14 +2598,6 @@ class EQPrecisionToggle(Static):
             self.screen.cycle_precision()
 
 
-class EQAntiDenormalToggle(Static):
-    can_focus = True
-
-    def on_click(self) -> None:
-        if isinstance(self.screen, EQSettingsModal):
-            self.screen.toggle_anti_denormal()
-
-
 class EQAutoHeadroomToggle(Static):
     can_focus = True
 
@@ -2702,7 +2711,6 @@ class EQSettingsModal(SafeModalScreen[None]):
     EQ_TOGGLE_IDS = [
         "eq-opt-sample-rate",
         "eq-opt-precision",
-        "eq-opt-anti-denormal",
         "eq-opt-auto-headroom",
         "eq-opt-headroom-margin",
         "eq-opt-intersample-guard",
@@ -2734,7 +2742,6 @@ class EQSettingsModal(SafeModalScreen[None]):
                 yield Static("[bold #888888]DSP CORE & NUMERICAL PRECISION[/]", classes="eq-settings-section-title")
                 yield EQSampleRateToggle(id="eq-opt-sample-rate", classes="eq-setting-item")
                 yield EQPrecisionToggle(id="eq-opt-precision", classes="eq-setting-item")
-                yield EQAntiDenormalToggle(id="eq-opt-anti-denormal", classes="eq-setting-item")
 
                 yield Static("[bold #888888]DIGITAL HEADROOM & CLIPPING PROTECTION[/]", classes="eq-settings-section-title")
                 yield EQAutoHeadroomToggle(id="eq-opt-auto-headroom", classes="eq-setting-item")
@@ -2824,18 +2831,7 @@ class EQSettingsModal(SafeModalScreen[None]):
                     "[bold #e5c07b]● 32-BIT FLOAT (f32)[/]   [#ffffff]Numerical Precision[/]  [dim]— Standard single precision SIMD filtering[/dim]"
                 )
 
-            # 3. Anti-denormal
-            ad_toggle = self.query_one("#eq-opt-anti-denormal", EQAntiDenormalToggle)
-            if self.engine.anti_denormal:
-                ad_toggle.update(
-                    "[bold #569f68]● ENABLED[/]   [#ffffff]Subnormal Flush Protection[/]  [dim]— Internal engine state (prevents CPU denormal stalls)[/dim]"
-                )
-            else:
-                ad_toggle.update(
-                    "[#767676]○ DISABLED[/]  [#cccccc]Subnormal Flush Protection[/]  [dim]— Standard IEEE 754 gradual underflow[/dim]"
-                )
-
-            # 4. Auto Headroom
+            # 3. Auto Headroom
             ah_toggle = self.query_one("#eq-opt-auto-headroom", EQAutoHeadroomToggle)
             if self.engine.auto_headroom:
                 ah_toggle.update(
@@ -2948,9 +2944,12 @@ class EQSettingsModal(SafeModalScreen[None]):
         self.engine.set_anti_denormal(nxt)
         self._sync_and_save()
         lbl = "Enabled" if nxt else "Disabled"
-        self.query_one("#eq-settings-status-line", Static).update(
-            f"Subnormal flush protection {lbl}."
-        )
+        try:
+            self.query_one("#eq-settings-status-line", Static).update(
+                f"Subnormal flush protection [bold #569f68]{lbl}[/]."
+            )
+        except Exception:
+            pass
 
     def toggle_auto_headroom(self) -> None:
         nxt = not self.engine.auto_headroom
@@ -3036,15 +3035,22 @@ class EQSettingsModal(SafeModalScreen[None]):
             self.notify("Clipboard is empty or unreadable.", title="AutoEQ Import", severity="warning")
             return
 
-        preset = parse_equalizer_apo(text)
-        if not preset:
-            self.query_one("#eq-settings-status-line", Static).update(
-                "[bold #e06c75]Could not detect EqualizerAPO or AutoEQ filter syntax in clipboard.[/]"
-            )
-            self.notify("No valid EqualizerAPO / AutoEQ filters found in clipboard.", title="AutoEQ Import", severity="warning")
-            return
+        try:
+            preset = parse_equalizer_apo(text)
+            if not preset:
+                self.query_one("#eq-settings-status-line", Static).update(
+                    "[bold #e06c75]Could not detect EqualizerAPO or AutoEQ filter syntax in clipboard.[/]"
+                )
+                self.notify("No valid EqualizerAPO / AutoEQ filters found in clipboard.", title="AutoEQ Import", severity="warning")
+                return
 
-        self.engine.load_preset(preset)
+            self.engine.load_preset(preset)
+        except (ValueError, TypeError, OverflowError) as exc:
+            self.query_one("#eq-settings-status-line", Static).update(
+                f"[bold #e06c75]Cannot import EQ: {escape(str(exc))}[/]"
+            )
+            self.notify(f"Cannot import EQ: {exc}", title="AutoEQ Import Error", severity="error")
+            return
         if self.engine.auto_headroom:
             rec = self.engine.auto_preamp_headroom()
             self.engine.set_preamp(rec)
@@ -3113,8 +3119,6 @@ class EQSettingsModal(SafeModalScreen[None]):
             self.cycle_sample_rate()
         elif focused_id == "eq-opt-precision":
             self.cycle_precision()
-        elif focused_id == "eq-opt-anti-denormal":
-            self.toggle_anti_denormal()
         elif focused_id == "eq-opt-auto-headroom":
             self.toggle_auto_headroom()
         elif focused_id == "eq-opt-headroom-margin":
@@ -6304,31 +6308,48 @@ class SpoffTUI(App):
             tt = self.query_one("#track-table", DataTable)
             idx = tt.cursor_row
             if idx is not None and 1 <= idx < len(self.current_liked_tracks):
-                new_idx = idx - 1
-                track = self.current_liked_tracks.pop(idx)
-                self.current_liked_tracks.insert(new_idx, track)
-                move_liked_track(track, -1, index=idx)
-                save_liked_songs(self.current_liked_tracks)
-                is_queue_mirroring = (
-                    bool(self.queue)
-                    and len(self.queue) == len(self.current_liked_tracks)
-                    and 0 <= idx < len(self.queue)
-                    and 0 <= new_idx < len(self.queue)
-                    and (self.queue[idx] == track or (track.get("id") and self.queue[idx].get("id") == track.get("id")))
-                )
-                if is_queue_mirroring:
-                    if self.current_index == idx:
-                        self.current_index = new_idx
-                    elif self.current_index == new_idx:
-                        self.current_index = idx
-                    q_item = self.queue.pop(idx)
-                    self.queue.insert(new_idx, q_item)
-
-                self.render_tracks(self.current_liked_tracks, select_row=new_idx)
-                tt.focus()
+                SpoffTUI._reorder_liked_song(self, idx, -1)
                 return
         elif self.active_tab in ("search", "offline"):
             self.notify_user("Reordering songs is available in Playlists and Liked Songs.")
+
+    def _reorder_liked_song(self, idx: int, delta: int) -> None:
+        if not self.current_liked_tracks or not (0 <= idx < len(self.current_liked_tracks)):
+            return
+        new_candidate = idx + delta
+        if not (0 <= new_candidate < len(self.current_liked_tracks)):
+            return
+        track = self.current_liked_tracks[idx]
+        if not move_liked_track(track, delta, index=idx):
+            new_idx = new_candidate
+            t = self.current_liked_tracks.pop(idx)
+            self.current_liked_tracks.insert(new_idx, t)
+        else:
+            self.current_liked_tracks = load_liked_songs()
+            new_idx = liked_index(self.current_liked_tracks, track)
+            if new_idx is None:
+                new_idx = max(0, min(new_candidate, len(self.current_liked_tracks) - 1))
+
+        is_queue_mirroring = (
+            bool(self.queue)
+            and len(self.queue) == len(self.current_liked_tracks)
+            and 0 <= idx < len(self.queue)
+            and 0 <= new_idx < len(self.queue)
+            and (self.queue[idx] == track or (track.get("id") and self.queue[idx].get("id") == track.get("id")))
+        )
+        if is_queue_mirroring:
+            if self.current_index == idx:
+                self.current_index = new_idx
+            elif self.current_index == new_idx:
+                self.current_index = idx
+            q_item = self.queue.pop(idx)
+            self.queue.insert(new_idx, q_item)
+
+        self.render_tracks(self.current_liked_tracks, select_row=new_idx)
+        try:
+            self.query_one("#track-table", DataTable).focus()
+        except Exception:
+            pass
 
     def action_move_item_down(self):
         if isinstance(self.focused, Input):
@@ -6398,28 +6419,7 @@ class SpoffTUI(App):
             tt = self.query_one("#track-table", DataTable)
             idx = tt.cursor_row
             if idx is not None and 0 <= idx < len(self.current_liked_tracks) - 1:
-                new_idx = idx + 1
-                track = self.current_liked_tracks.pop(idx)
-                self.current_liked_tracks.insert(new_idx, track)
-                move_liked_track(track, 1, index=idx)
-                save_liked_songs(self.current_liked_tracks)
-                is_queue_mirroring = (
-                    bool(self.queue)
-                    and len(self.queue) == len(self.current_liked_tracks)
-                    and 0 <= idx < len(self.queue)
-                    and 0 <= new_idx < len(self.queue)
-                    and (self.queue[idx] == track or (track.get("id") and self.queue[idx].get("id") == track.get("id")))
-                )
-                if is_queue_mirroring:
-                    if self.current_index == idx:
-                        self.current_index = new_idx
-                    elif self.current_index == new_idx:
-                        self.current_index = idx
-                    q_item = self.queue.pop(idx)
-                    self.queue.insert(new_idx, q_item)
-
-                self.render_tracks(self.current_liked_tracks, select_row=new_idx)
-                tt.focus()
+                SpoffTUI._reorder_liked_song(self, idx, 1)
                 return
         elif self.active_tab in ("search", "offline"):
             self.notify_user("Reordering songs is available in Playlists and Liked Songs.")
@@ -7336,7 +7336,7 @@ class SpoffTUI(App):
         row_idx = None
         if isinstance(f, DataTable) and f.id == "track-table":
             row_idx = f.cursor_row
-        elif self.active_tab in ("search", "playlist", "offline"):
+        elif self.active_tab in ("search", "playlist", "liked", "offline"):
             try:
                 tt = self.query_one("#track-table", DataTable)
                 if tt.cursor_row is not None:
@@ -7346,9 +7346,11 @@ class SpoffTUI(App):
 
         tracks = []
         if self.active_tab == "search":
-            tracks = self.search_results
+            tracks = getattr(self, "search_results", [])
         elif self.active_tab == "playlist":
-            tracks = self.current_playlist_tracks
+            tracks = getattr(self, "current_playlist_tracks", [])
+        elif self.active_tab == "liked":
+            tracks = getattr(self, "current_liked_tracks", None) or load_liked_songs()
         elif self.active_tab == "offline":
             tracks = list(load_offline_index().values())
 
@@ -7957,7 +7959,6 @@ class SpoffTUI(App):
                 pl_name = next((p.get("name", "Playlist") for p in self.playlists if p.get("id") == pl_id), "Playlist")
 
                 target_track = t
-                target_track_id = t.get("id")
 
                 def handle_remove_track_confirm(confirmed: Optional[bool]) -> None:
                     if not confirmed:
@@ -7996,6 +7997,9 @@ class SpoffTUI(App):
                                     break
                         if q_idx is not None:
                             was_current = self.current_index == q_idx
+                            if (was_current or getattr(self, "_pending_track", None) is removed_track) and getattr(self, "_pending_track", None) is not None:
+                                self._play_request_id = getattr(self, "_play_request_id", 0) + 1
+                                self._pending_track = None
                             self.queue.pop(q_idx)
                             if not self.queue:
                                 self.current_index = -1
@@ -8056,6 +8060,9 @@ class SpoffTUI(App):
                                     break
                         if q_idx is not None:
                             was_current = (q_idx == self.current_index)
+                            if (was_current or getattr(self, "_pending_track", None) is t) and getattr(self, "_pending_track", None) is not None:
+                                self._play_request_id = getattr(self, "_play_request_id", 0) + 1
+                                self._pending_track = None
                             self.queue.pop(q_idx)
                             if not self.queue:
                                 self.current_index = -1
@@ -8101,6 +8108,9 @@ class SpoffTUI(App):
                                     break
                         if q_idx is not None:
                             was_current = (q_idx == self.current_index)
+                            if (was_current or getattr(self, "_pending_track", None) is t) and getattr(self, "_pending_track", None) is not None:
+                                self._play_request_id = getattr(self, "_play_request_id", 0) + 1
+                                self._pending_track = None
                             self.queue.pop(q_idx)
                             if not self.queue:
                                 self.current_index = -1
@@ -8129,6 +8139,9 @@ class SpoffTUI(App):
                                     break
                         if q_idx is not None:
                             was_current = (q_idx == self.current_index)
+                            if (was_current or getattr(self, "_pending_track", None) is t) and getattr(self, "_pending_track", None) is not None:
+                                self._play_request_id = getattr(self, "_play_request_id", 0) + 1
+                                self._pending_track = None
                             self.queue.pop(q_idx)
                             if not self.queue:
                                 self.current_index = -1
@@ -8512,6 +8525,8 @@ class SpoffTUI(App):
     def _commit_playback(self, req_id: int, source: str, track: Dict[str, Any]) -> bool:
         if getattr(self, "_closing", False) or req_id != getattr(self, "_play_request_id", None):
             return False
+        if getattr(self, "_pending_track", None) is not None and self._pending_track is not track and self._pending_track.get("id") != track.get("id"):
+            return False
         cb = lambda reason="eof": self._on_ui(self._handle_track_end, req_id, reason, track, source)
         if hasattr(self.player, "register_pending_callback"):
             self.player.register_pending_callback(cb, req_id)
@@ -8523,7 +8538,6 @@ class SpoffTUI(App):
             self._playback_failed(req_id, track)
             return False
         self._pending_track = None
-        self.player.playback_finished_callback = cb
         self.notify_user("")
         if self.mpris:
             try:
@@ -8556,7 +8570,7 @@ class SpoffTUI(App):
         if getattr(self, "_closing", False) or req_id != getattr(self, "_play_request_id", None):
             return
         self._pending_track = None
-        invalidate_stream_cache(track.get("title", ""), track.get("artist", ""), track.get("url"))
+        invalidate_stream_cache(track.get("title", ""), track.get("artist", ""), playback_direct_url(track))
         self._failed_indices.add(self.current_index)
         for offset in range(1, len(self.queue) + 1):
             candidate = (self.current_index + offset) % len(self.queue)
@@ -8643,9 +8657,7 @@ class SpoffTUI(App):
 
         self.notify_user(f"Connecting stream for '{title}'...")
 
-        track_url = track.get("url")
-        if not track_url and t_id and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
-            track_url = f"https://www.youtube.com/watch?v={t_id}"
+        track_url = playback_direct_url(track)
 
         res = search_and_resolve_stream(title, artist, direct_url=track_url)
         if getattr(self, "_closing", False) or req_id != getattr(self, "_play_request_id", None):

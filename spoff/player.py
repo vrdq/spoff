@@ -4,6 +4,7 @@ import json
 import socket
 import os
 import time
+import collections
 import logging
 import threading
 import signal
@@ -66,8 +67,7 @@ class MPVController:
         self.current_track: Optional[Dict[str, Any]] = None
         self.is_paused: bool = False
         self._playback_finished_callback: Optional[Callable] = None
-        self._pending_callback: Optional[Callable] = None
-        self._pending_request_id: Optional[Any] = None
+        self._pending_callbacks: collections.deque = collections.deque()
         self._entry_callbacks: Dict[int, Callable] = {}
         self._active_entry_id: Optional[int] = None
         self._lock = threading.RLock()
@@ -80,18 +80,22 @@ class MPVController:
 
     @property
     def playback_finished_callback(self) -> Optional[Callable]:
-        return self._playback_finished_callback
+        with self._lock:
+            return self._playback_finished_callback
 
     @playback_finished_callback.setter
     def playback_finished_callback(self, cb: Optional[Callable]):
-        self._playback_finished_callback = cb
-        self._pending_callback = cb
+        with self._lock:
+            self._playback_finished_callback = cb
+            if cb is not None:
+                self._pending_callbacks.append((cb, None))
+            else:
+                self._pending_callbacks.clear()
 
     def register_pending_callback(self, cb: Callable, request_id: Optional[Any] = None):
         with self._lock:
             self._playback_finished_callback = cb
-            self._pending_callback = cb
-            self._pending_request_id = request_id
+            self._pending_callbacks.append((cb, request_id))
 
     def start_mpv(self):
         with self._lock:
@@ -145,7 +149,6 @@ class MPVController:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=env,
-                preexec_fn=_preexec_deathsig
             )
 
             # Wait for socket to appear
@@ -242,9 +245,9 @@ class MPVController:
                                     if entry_id is not None:
                                         with self._lock:
                                             self._active_entry_id = entry_id
-                                            if self._pending_callback:
-                                                self._entry_callbacks[entry_id] = self._pending_callback
-                                                self._pending_callback = None
+                                            if self._pending_callbacks:
+                                                cb, req_id = self._pending_callbacks.popleft()
+                                                self._entry_callbacks[entry_id] = cb
                                 elif ev_type == "end-file":
                                     reason = event.get("reason")
                                     entry_id = event.get("playlist_entry_id")
@@ -257,6 +260,9 @@ class MPVController:
                                             cb = self._entry_callbacks.pop(entry_id, None)
                                             if entry_id == self._active_entry_id:
                                                 self._active_entry_id = None
+                                        elif self._entry_callbacks:
+                                            k = next(iter(self._entry_callbacks))
+                                            cb = self._entry_callbacks.pop(k, None)
                                         elif self._playback_finished_callback:
                                             cb = self._playback_finished_callback
 
@@ -305,6 +311,8 @@ class MPVController:
                 self.apply_eq()
             ok = self._send_command(["loadfile", source_path_or_url, "replace"])
             if not ok:
+                if self._pending_callbacks:
+                    self._pending_callbacks.pop()
                 self.current_track = None
                 self.is_paused = False
                 return False
@@ -372,6 +380,9 @@ class MPVController:
             if self._listener_stop_event is not None:
                 self._listener_stop_event.set()
                 self._listener_stop_event = None
+            self._pending_callbacks.clear()
+            self._entry_callbacks.clear()
+            self._active_entry_id = None
             self.current_track = None
             self._last_pos = 0.0
             self._duration = 0.0

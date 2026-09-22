@@ -142,7 +142,6 @@ bit_format = 8bit
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 stdin=subprocess.DEVNULL,
-                preexec_fn=_preexec_deathsig
             )
             self._thread = threading.Thread(target=self._reader_loop, daemon=True)
             self._thread.start()

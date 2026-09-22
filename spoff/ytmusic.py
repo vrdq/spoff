@@ -1,4 +1,5 @@
 import re
+import math
 import logging
 import urllib.parse
 import urllib.request
@@ -143,7 +144,11 @@ def _safe_duration_ms(val: Any) -> int:
             return 0
     try:
         f = float(str(val).strip())
+        if not math.isfinite(f):
+            return 0
         return max(0, int(f * 1000))
+    except OverflowError:
+        return 0
     except (ValueError, TypeError):
         return parse_duration_str(str(val))
 

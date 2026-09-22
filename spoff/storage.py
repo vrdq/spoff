@@ -591,10 +591,6 @@ def save_last_played(state: Dict[str, Any]) -> None:
                 if isinstance(val, (str, int, float, bool)):
                     clean_state[k] = val
         cfg["last_played"] = clean_state
-        if "tab" in clean_state and clean_state["tab"] in ("search", "playlist", "liked", "offline", "lyrics"):
-            cfg["last_tab"] = clean_state["tab"]
-        if clean_state.get("playlist_id"):
-            cfg["last_playlist_id"] = clean_state["playlist_id"]
         save_config(cfg)
     except Exception as e:
         logger.error(f"Error saving last played state: {e}")
@@ -786,7 +782,7 @@ def move_liked_track(track: Dict[str, Any], delta: int, index: Optional[int] = N
     target_idx = None
     if index is not None and 0 <= index < len(tracks):
         cand = tracks[index]
-        if cand.get("id") == track.get("id") or cand.get("uri") == track.get("uri") or liked_index([cand], track) is not None:
+        if liked_index([cand], track) is not None:
             target_idx = index
     if target_idx is None:
         target_idx = liked_index(tracks, track)
@@ -956,7 +952,7 @@ def move_playlist_track(playlist_id: str, track: Dict[str, Any], delta: int, ind
             target_idx = None
             if index is not None and 0 <= index < len(tracks):
                 cand = tracks[index]
-                if cand.get("id") == track.get("id") or cand.get("uri") == track.get("uri") or liked_index([cand], track) is not None:
+                if liked_index([cand], track) is not None:
                     target_idx = index
             if target_idx is None:
                 target_idx = liked_index(tracks, track)
@@ -978,7 +974,7 @@ def remove_track_from_playlist_by_index_or_track(playlist_id: str, track: Dict[s
             target_idx = None
             if index is not None and 0 <= index < len(tracks):
                 cand = tracks[index]
-                if cand.get("id") == track.get("id") or liked_index([cand], track) is not None:
+                if liked_index([cand], track) is not None:
                     target_idx = index
             if target_idx is None:
                 target_idx = liked_index(tracks, track)
@@ -1187,7 +1183,10 @@ def load_offline_index() -> Dict[str, Dict[str, Any]]:
                 valid_index = {}
                 for k, v in data.items():
                     if isinstance(k, str) and isinstance(v, dict):
-                        valid_index[k] = v
+                        normalized = normalize_track(v)
+                        if normalized is not None:
+                            normalized["id"] = k
+                            valid_index[k] = normalized
                 return valid_index
     except Exception as e:
         logger.error(f"Error reading offline index: {e}")
