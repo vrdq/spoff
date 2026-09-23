@@ -267,10 +267,15 @@ class MPVController:
             with self._lock:
                 callback = self._next_callback
                 self._next_callback = None
-            self.start_mpv()
-            if self.eq_engine:
-                self.apply_eq()
-            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            try:
+                self.start_mpv()
+                if self.eq_engine:
+                    self.apply_eq()
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            except OSError:
+                logger.exception("Could not start mpv or open its IPC socket")
+                self.stop()
+                return False
             stream = None
             with self._lock:
                 self._close_playback_socket()

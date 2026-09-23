@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .storage import DATA_DIR, _atomic_json_dump
+from .matching import _matches_recording, _seconds
 
 logger = logging.getLogger("spoff.lyrics")
 
@@ -38,7 +39,7 @@ def clean_track_query(title: str, artist: str = "") -> Tuple[str, str]:
 
     # Strip bracketed fluff
     t = re.sub(
-        r"(?i)\s*[\(\[][^)\]]*(?:official|audio|video|remaster|live|lyrics|hd|4k|ft\.?|feat\.?)[^)\]]*[\)\]]",
+        r"(?i)\s*[\(\[][^)\]]*(?:official|audio|video|lyrics|hd|4k|ft\.?|feat\.?)[^)\]]*[\)\]]",
         "",
         t,
     )
@@ -109,6 +110,7 @@ def fetch_lyrics(title: str, artist: str = "", duration_ms: Optional[int] = None
         "plain": str
     }
     """
+    duration_ms = _seconds(duration_ms)
     clean_t, clean_a = clean_track_query(title, artist)
     cache_file = _get_cache_path(clean_t, clean_a, duration_ms)
 
@@ -177,7 +179,14 @@ def fetch_lyrics(title: str, artist: str = "", duration_ms: Optional[int] = None
                 if s_resp.status == 200:
                     s_data = json.loads(s_resp.read().decode("utf-8"))
                     if isinstance(s_data, list) and len(s_data) > 0:
-                        raw_json = s_data[0]
+                        for candidate in s_data:
+                            if not isinstance(candidate, dict):
+                                continue
+                            metadata = {"title": candidate.get("trackName"), "artist": candidate.get("artistName"),
+                                        "duration": candidate.get("duration")}
+                            if _matches_recording(metadata, clean_t, clean_a, duration_ms / 1000):
+                                raw_json = candidate
+                                break
         except Exception as e:
             logger.debug(f"LRCLIB search fallback failed for '{clean_t}': {e}")
 

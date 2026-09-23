@@ -16,11 +16,27 @@ from spoff.eq import (
     render_curve,
     parse_equalizer_apo,
 )
+import tempfile
+from pathlib import Path
+from spoff import storage
 from spoff.storage import load_eq_settings, save_eq_settings
 from spoff.player import MPVController
 
 
 class TestParametricEQDSP(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.old_data_dir = storage.DATA_DIR
+        self.old_config_file = storage.CONFIG_FILE
+        storage.DATA_DIR = Path(self.temp_dir.name)
+        storage.CONFIG_FILE = storage.DATA_DIR / "config.json"
+        storage.DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        storage.DATA_DIR = self.old_data_dir
+        storage.CONFIG_FILE = self.old_config_file
+        self.temp_dir.cleanup()
+
     def test_rbj_peaking_biquad_coefficients(self):
         """Validates Peaking EQ biquad filter calculations against RBJ cookbook formulae."""
         band = EQBand(

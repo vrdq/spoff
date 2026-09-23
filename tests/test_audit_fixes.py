@@ -13,6 +13,8 @@ class AuditFixesTests(unittest.TestCase):
         self.old_data_dir = storage.DATA_DIR
         self.old_cache_dir = storage.CACHE_DIR
         self.old_playlists_file = storage.PLAYLISTS_FILE
+        self.old_liked_file = storage.LIKED_SONGS_FILE
+        self.old_config_file = storage.CONFIG_FILE
         self.old_index_file = storage.INDEX_FILE
         self.old_auth_file = auth.AUTH_FILE
         self.old_streamer_cache_dir = streamer.CACHE_DIR
@@ -21,6 +23,8 @@ class AuditFixesTests(unittest.TestCase):
         storage.DATA_DIR.mkdir(parents=True, exist_ok=True)
         storage.CACHE_DIR.mkdir(parents=True, exist_ok=True)
         storage.PLAYLISTS_FILE = storage.DATA_DIR / "playlists.json"
+        storage.LIKED_SONGS_FILE = storage.DATA_DIR / "liked_songs.json"
+        storage.CONFIG_FILE = storage.DATA_DIR / "config.json"
         storage.INDEX_FILE = storage.DATA_DIR / "offline_index.json"
         auth.AUTH_FILE = storage.DATA_DIR / "spotify_auth.json"
         streamer.CACHE_DIR = storage.CACHE_DIR
@@ -31,6 +35,8 @@ class AuditFixesTests(unittest.TestCase):
         storage.DATA_DIR = self.old_data_dir
         storage.CACHE_DIR = self.old_cache_dir
         storage.PLAYLISTS_FILE = self.old_playlists_file
+        storage.LIKED_SONGS_FILE = self.old_liked_file
+        storage.CONFIG_FILE = self.old_config_file
         storage.INDEX_FILE = self.old_index_file
         auth.AUTH_FILE = self.old_auth_file
         streamer.CACHE_DIR = self.old_streamer_cache_dir
@@ -136,8 +142,8 @@ class AuditFixesTests(unittest.TestCase):
                 self.pop(key, None)
                 return val
         cache = EvictingDict({"title::artist": ({"stream_url": "fake"}, 0)})
-        with patch.object(streamer, "_stream_cache", cache), patch.object(streamer.yt_dlp, "YoutubeDL") as mock_ydl:
-            mock_ydl.return_value.__enter__.return_value.extract_info.return_value = {"entries": [{"url": "direct"}]}
+        with patch("spoff.ytmusic.get_ytmusic_client", return_value=None), patch.object(streamer, "_stream_cache", cache), patch.object(streamer.yt_dlp, "YoutubeDL") as mock_ydl:
+            mock_ydl.return_value.__enter__.return_value.extract_info.return_value = {"entries": [{"url": "direct", "title": "Title", "artist": "Artist"}]}
             # Ensures KeyError is not raised during safe get
             res = streamer.search_and_resolve_stream("Title", "Artist")
             self.assertIsNotNone(res)

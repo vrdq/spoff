@@ -442,6 +442,21 @@ class TestPlaylistSelectorAndLikedTabAppLogic(unittest.TestCase):
 
 class TestDeckTrackFormatting(unittest.TestCase):
     def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.old_data_dir = storage.DATA_DIR
+        self.old_cache_dir = storage.CACHE_DIR
+        self.old_playlists_file = storage.PLAYLISTS_FILE
+        self.old_liked_file = storage.LIKED_SONGS_FILE
+        self.old_config_file = storage.CONFIG_FILE
+
+        storage.DATA_DIR = Path(self.temp_dir.name)
+        storage.CACHE_DIR = storage.DATA_DIR / "cache"
+        storage.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        storage.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        storage.PLAYLISTS_FILE = storage.DATA_DIR / "playlists.json"
+        storage.LIKED_SONGS_FILE = storage.DATA_DIR / "liked_songs.json"
+        storage.CONFIG_FILE = storage.DATA_DIR / "config.json"
+
         self.app = SpoffTUI()
         self.app.player = Mock()
         self.app.player.get_progress.return_value = (10, 100)
@@ -452,6 +467,12 @@ class TestDeckTrackFormatting(unittest.TestCase):
 
     def tearDown(self):
         self.focused_patch.stop()
+        storage.DATA_DIR = self.old_data_dir
+        storage.CACHE_DIR = self.old_cache_dir
+        storage.PLAYLISTS_FILE = self.old_playlists_file
+        storage.LIKED_SONGS_FILE = self.old_liked_file
+        storage.CONFIG_FILE = self.old_config_file
+        self.temp_dir.cleanup()
 
     def test_deck_track_with_artist_uses_dimmed_em_dash_separator(self):
         from collections import defaultdict

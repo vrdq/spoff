@@ -2,15 +2,19 @@ import re
 import time
 import logging
 import threading
+import json
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, Callable, cast
 from concurrent.futures import Future
 import yt_dlp
 try:
     from . import storage
+    from .matching import _seconds, _matches_recording
     from .storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS
 except ImportError:
     import storage  # type: ignore
+    from matching import _seconds, _matches_recording
     from storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS  # type: ignore
 
 import tempfile
@@ -53,12 +57,35 @@ def get_base_ydl_opts(extra_opts=None):
         opts.update(extra_opts)
     return opts
 
-def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """
-    Rapidly resolves a playable direct audio stream URL.
-    """
+def cached_audio_matches_duration(path: Path, duration_ms: Any) -> bool:
+    """Probe old cache entries; unknown duration is not evidence of a mismatch."""
+    expected = _seconds(duration_ms) / 1000
+    if not expected:
+        return True
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
+            capture_output=True, text=True, check=True, timeout=5,
+        )
+        actual = _seconds(json.loads(result.stdout).get("format", {}).get("duration"))
+        return not actual or abs(actual - expected) <= max(8.0, expected * 0.04)
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        logger.warning("Could not verify cached audio duration: %s", path)
+        return True
+
+
+def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optional[str] = None,
+                              expected_duration_ms: Any = None) -> Optional[Dict[str, Any]]:
     track_title = str(track_title or "").strip()
     artist = str(artist or "").strip()
+    if direct_url:
+        if not isinstance(direct_url, str):
+            return None
+        try:
+            urlsplit(direct_url)
+        except ValueError:
+            return None
+    duration = _seconds(expected_duration_ms) / 1000
     cache_key = f"{track_title.lower()}::{artist.lower()}"
     if direct_url:
         cache_key = f"{direct_url}::{cache_key}"
@@ -66,49 +93,77 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
         cached_entry = _stream_cache.get(cache_key)
         if cached_entry is not None:
             cached_data, cached_ts = cached_entry
-            if time.time() - cached_ts < STREAM_CACHE_TTL:
+            if time.time() - cached_ts < STREAM_CACHE_TTL and cached_data.get("expected_duration", 0) == duration:
                 return cached_data
 
-    queries = []
-    if direct_url and (direct_url.startswith("http://") or direct_url.startswith("https://")):
-        queries.append(direct_url)
-    elif track_title.startswith("http://") or track_title.startswith("https://"):
-        queries.append(track_title)
-    elif len(track_title) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', track_title):
-        queries.append(f"https://www.youtube.com/watch?v={track_title}")
+    def is_spotify(url):
+        host = (urlsplit(url).hostname or "").lower()
+        return url.startswith("spotify:") or host == "spotify.com" or host.endswith(".spotify.com")
 
-    clean_artist = "" if artist.lower() in ("unknown artist", "unknown", "none", "") else artist.strip()
-    if clean_artist:
-        queries.extend([
-            f"{track_title} {clean_artist} audio",
-            f"{track_title} {clean_artist}",
-        ])
+    exact_url = None
+    if direct_url and re.fullmatch(r"[a-zA-Z0-9_-]{11}", direct_url):
+        exact_url = f"https://www.youtube.com/watch?v={direct_url}"
+    elif direct_url and direct_url.startswith(("http://", "https://")) and not is_spotify(direct_url):
+        exact_url = direct_url
+    elif not direct_url and track_title.startswith(("http://", "https://")) and not is_spotify(track_title):
+        exact_url = track_title
+
+    clean_artist = "" if artist.lower() in ("unknown artist", "unknown", "none", "") else artist
+    queries = []
+    if exact_url:
+        # A chosen recording is authoritative. Failure must not select another song.
+        queries.append((exact_url, True))
     else:
-        queries.extend([
-            f"{track_title} audio",
-            track_title,
-        ])
-    ydl_opts = get_base_ydl_opts()
+        if not track_title or not clean_artist:
+            logger.warning("Insufficient metadata to match recording: %s / %s", track_title, artist)
+            return None
+        try:
+            try:
+                from .ytmusic import get_ytmusic_client
+            except ImportError:
+                from ytmusic import get_ytmusic_client
+            ytm = get_ytmusic_client()
+            if ytm:
+                for performer in dict.fromkeys((clean_artist, clean_artist.split(",")[0].strip())):
+                    matches = ytm.search(f"{performer} {track_title}", filter="songs", limit=10)
+                    for match in matches or []:
+                        if match.get("videoId") and _matches_recording(match, track_title, clean_artist, duration):
+                            query = (f"https://www.youtube.com/watch?v={match['videoId']}", True)
+                            if query not in queries:
+                                queries.append(query)
+                    if queries:
+                        break
+        except Exception:
+            logger.debug("YTMusic song match lookup failed", exc_info=True)
+        primary_artist = clean_artist.split(",")[0].strip()
+        queries.append((f"ytsearch5:{primary_artist} - {track_title} official audio", False))
+
     try:
-        with yt_dlp.YoutubeDL(cast(Any, ydl_opts)) as ydl:
+        with yt_dlp.YoutubeDL(cast(Any, get_base_ydl_opts())) as ydl:
             item = None
-            for query in queries:
+            for query, identity_verified in queries:
                 try:
                     res = ydl.extract_info(query, download=False)
-                    if res:
-                        entries: Any = res.get("entries")
-                        if entries:
-                            entry_list = list(entries) if not isinstance(entries, list) else entries
-                            if entry_list:
-                                item = entry_list[0]
-                                break
-                        else:
-                            item = res
-                            break
-                except Exception as ex:
-                    logger.debug(f"Search query '{query}' failed: {ex}")
-                    continue
-
+                    if not res:
+                        continue
+                    entries = res.get("entries")
+                    candidates = entries if entries is not None else [res]
+                    for candidate in candidates:
+                        if not isinstance(candidate, dict):
+                            continue
+                        if not identity_verified and not _matches_recording(candidate, track_title, clean_artist, duration):
+                            continue
+                        actual_duration = _seconds(candidate.get("duration"))
+                        if not exact_url and duration and actual_duration and abs(actual_duration - duration) > max(8.0, duration * 0.04):
+                            continue
+                        if not (candidate.get("url") or candidate.get("formats") or candidate.get("webpage_url")):
+                            continue
+                        item = candidate
+                        break
+                    if item:
+                        break
+                except Exception:
+                    logger.debug("Stream extraction failed for %s", query, exc_info=True)
             if not item:
                 return None
 
@@ -130,6 +185,8 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
 
             stream_data = {
                 "stream_url": stream_url,
+                "expected_duration": duration,
+                "resolved_title": item.get("title"),
                 "duration": item.get("duration", 0),
                 "webpage_url": item.get("webpage_url"),
                 "thumbnail": item.get("thumbnail"),
@@ -151,7 +208,14 @@ def _run_download_process(
     direct_url: Optional[str] = None,
     track_meta: Optional[Dict[str, Any]] = None,
 ) -> Path:
-    resolved = search_and_resolve_stream(title, artist, direct_url=direct_url)
+    cached = get_cached_track_path(val_id)
+    if cached and cached_audio_matches_duration(cached, (track_meta or {}).get("duration_ms")):
+        register_cached_track(val_id, track_meta or {"title": title, "artist": artist}, cached)
+        return cached
+    resolved = search_and_resolve_stream(
+        title, artist, direct_url=direct_url,
+        expected_duration_ms=(track_meta or {}).get("duration_ms"),
+    )
     if not resolved or not resolved.get("stream_url"):
         raise RuntimeError(f"Could not resolve audio for {title}")
     query = resolved.get("webpage_url") or resolved["stream_url"]
@@ -189,9 +253,21 @@ def _run_download_process(
             )
         except FileNotFoundError:
             logger.warning("ffmpeg not found in PATH; skipping audio integrity validation")
+        if not cached_audio_matches_duration(downloaded, (track_meta or {}).get("duration_ms")):
+            invalidate_stream_cache(title, artist, direct_url=direct_url)
+            raise RuntimeError("Downloaded recording does not match the requested duration")
         final_path = cache_dir / f"{val_id}{downloaded.suffix.lower()}"
         downloaded.replace(final_path)
+        # An older file in a preferred extension must not shadow the replacement.
+        superseded = [cache_dir / f"{val_id}{ext}" for ext in CACHE_EXTENSIONS
+                      if ext != downloaded.suffix.lower() and (cache_dir / f"{val_id}{ext}").is_file()]
+        if superseded:
+            archive = Path(tempfile.mkdtemp(prefix=f".replaced-{val_id}-", dir=cache_dir))
+            for old in superseded:
+                old.replace(archive / old.name)
         meta_to_save = dict(track_meta) if track_meta else {"title": title, "artist": artist}
+        meta_to_save["resolved_url"] = resolved.get("webpage_url")
+        meta_to_save["resolved_title"] = resolved.get("resolved_title")
         register_cached_track(val_id, meta_to_save, final_path)
         return final_path
 
@@ -218,7 +294,8 @@ def download_track_to_cache(
         return None
 
     cached_path = get_cached_track_path(val_id)
-    if cached_path and cached_path.is_file() and cached_path.stat().st_size > 0:
+    if (cached_path and cached_path.is_file() and cached_path.stat().st_size > 0
+            and not _seconds((track_meta or {}).get("duration_ms"))):
         meta_to_save = dict(track_meta) if track_meta else {"title": title, "artist": artist}
         try:
             register_cached_track(val_id, meta_to_save, cached_path)

@@ -102,8 +102,8 @@ def test_streamer_sanitization(monkeypatch):
         mock_ydl.return_value.__enter__.return_value = mock_instance
 
         res = streamer.search_and_resolve_stream(None, None)
-        assert res is not None
-        assert res.get("stream_url") == "https://stream.audio/sample"
+        assert res is None
+        mock_instance.extract_info.assert_not_called()
 
 
 def test_ytmusic_safe_duration_ms():

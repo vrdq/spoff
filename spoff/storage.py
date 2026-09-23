@@ -927,8 +927,35 @@ def create_local_playlist(name: str) -> Dict[str, Any]:
     save_saved_playlists(existing)
     return playlist
 
+def get_track_index_in_playlist(playlist: Dict[str, Any], track: Dict[str, Any]) -> Optional[int]:
+    """Returns 0-based index of track in playlist if present, else None."""
+    if not isinstance(playlist, dict) or not isinstance(track, dict):
+        return None
+    tracks = playlist.get("tracks", [])
+    if not isinstance(tracks, list):
+        return None
+    idx = liked_index(tracks, track)
+    if idx is not None:
+        return idx
+    t_id = track.get("id")
+    t_title = str(track.get("title") or "").strip().casefold()
+    t_artist = str(track.get("artist") or "").strip().casefold()
+    for i, t in enumerate(tracks):
+        if not isinstance(t, dict):
+            continue
+        if t_id and t.get("id") and t.get("id") == t_id:
+            return i
+        if t_title and str(t.get("title") or "").strip().casefold() == t_title:
+            if not t_artist or not str(t.get("artist") or "").strip().casefold() or str(t.get("artist") or "").strip().casefold() == t_artist:
+                return i
+    return None
+
+def is_track_in_playlist(playlist: Dict[str, Any], track: Dict[str, Any]) -> bool:
+    """Checks whether a track is present in a playlist by ID or case-insensitive title and artist."""
+    return get_track_index_in_playlist(playlist, track) is not None
+
 @transactional
-def add_track_to_playlist(playlist_id: str, track: Dict[str, Any]) -> bool:
+def add_track_to_playlist(playlist_id: str, track: Dict[str, Any], allow_duplicate: bool = False) -> bool:
     if not playlist_id or not isinstance(track, dict):
         return False
     existing = load_saved_playlists()
@@ -936,11 +963,14 @@ def add_track_to_playlist(playlist_id: str, track: Dict[str, Any]) -> bool:
         if p.get("id") == playlist_id:
             if "tracks" not in p or not isinstance(p["tracks"], list):
                 p["tracks"] = []
+            if not allow_duplicate and is_track_in_playlist(p, track):
+                return False
             for t in p["tracks"]:
-                if t.get("id") and track.get("id") and t.get("id") == track.get("id"):
-                    return False
-                if t.get("title") and track.get("title") and t.get("title") == track.get("title") and t.get("artist") == track.get("artist"):
-                    return False
+                if not allow_duplicate:
+                    if t.get("id") and track.get("id") and t.get("id") == track.get("id"):
+                        return False
+                    if t.get("title") and track.get("title") and t.get("title") == track.get("title") and t.get("artist") == track.get("artist"):
+                        return False
             p["tracks"].append(track)
             save_saved_playlists(existing)
             return True
@@ -1224,12 +1254,15 @@ def _reconcile_offline_cache(index: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str
             if fp:
                 try:
                     p_file = Path(fp)
-                    if not p_file.is_file() or p_file.stat().st_size == 0:
+                    if p_file.stat().st_size == 0:
                         del index[track_id]
                         changed = True
-                except OSError:
+                except FileNotFoundError:
                     del index[track_id]
                     changed = True
+                except OSError:
+                    # Permission/transient I/O failures do not prove deletion.
+                    continue
             elif track_id not in available_ids and (entry.get("is_offline") or "path" in entry):
                 del index[track_id]
                 changed = True
@@ -1362,6 +1395,7 @@ def register_cached_track(track_id: str, meta: Dict[str, Any], filepath: Path):
         dur_ms = int(float(meta.get("duration_ms") or 0))
     except (ValueError, TypeError):
         dur_ms = 0
+    previous = index.get(val_id, {})
     index[val_id] = {
         "id": val_id,
         "title": meta.get("title", "Unknown"),
@@ -1370,6 +1404,11 @@ def register_cached_track(track_id: str, meta: Dict[str, Any], filepath: Path):
         "filepath": str(filepath.resolve()),
         "size_bytes": filepath.stat().st_size
     }
+    # Keep source identity when an offline track is played or downloaded again.
+    for key in ("url", "uri", "source", "album", "art_url", "thumbnail", "resolved_url", "resolved_title"):
+        value = meta.get(key) or previous.get(key)
+        if isinstance(value, str) and value:
+            index[val_id][key] = value
     save_offline_index(index)
     logger.info(f"Registered cached track: {val_id} -> {filepath}")
 

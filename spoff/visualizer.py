@@ -137,7 +137,7 @@ bit_format = 8bit
             logger.info(f"CAVA 60+ FPS audio visualizer active ({self.bars_count} bars @ {self.fps} FPS).")
         except Exception as e:
             logger.debug(f"Could not start CAVA: {e}")
-            self.proc = None
+            self.stop()
 
     def _reader_loop(self) -> None:
         if not self.proc or not self.proc.stdout:
