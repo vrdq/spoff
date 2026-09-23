@@ -637,11 +637,8 @@ class TestEQSettingsModalUI(unittest.TestCase):
                 modal.cycle_precision()
                 self.assertEqual(engine.precision, "f64")
 
-                # Test toggle anti-denormal
-                modal.toggle_anti_denormal()
-                self.assertFalse(engine.anti_denormal)
-                modal.toggle_anti_denormal()
-                self.assertTrue(engine.anti_denormal)
+                # Unsupported backend setting is no longer exposed in the UI.
+                self.assertNotIn("eq-opt-anti-denormal", modal.EQ_TOGGLE_IDS)
 
                 # Test toggle auto headroom
                 modal.toggle_auto_headroom()
@@ -810,5 +807,4 @@ class TestDirectHardwareAudioDevice(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
 

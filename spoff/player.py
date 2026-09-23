@@ -4,24 +4,12 @@ import json
 import socket
 import os
 import time
-import collections
 import logging
 import threading
-import signal
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 
 logger = logging.getLogger("player")
-
-
-def _preexec_deathsig():
-    try:
-        import ctypes
-        libc = ctypes.CDLL(None)
-        # PR_SET_PDEATHSIG = 1
-        libc.prctl(1, signal.SIGTERM, 0, 0, 0)
-    except Exception:
-        pass
 
 
 def get_direct_hardware_audio_device() -> Optional[str]:
@@ -67,9 +55,10 @@ class MPVController:
         self.current_track: Optional[Dict[str, Any]] = None
         self.is_paused: bool = False
         self._playback_finished_callback: Optional[Callable] = None
-        self._pending_callbacks: collections.deque = collections.deque()
-        self._entry_callbacks: Dict[int, Callable] = {}
-        self._active_entry_id: Optional[int] = None
+        self._next_callback: Optional[Callable] = None
+        self._load_lock = threading.Lock()
+        self._playback_socket: Optional[socket.socket] = None
+        self._playback_thread: Optional[threading.Thread] = None
         self._lock = threading.RLock()
         self._listener_stop_event: Optional[threading.Event] = None
         self._listener_thread: Optional[threading.Thread] = None
@@ -87,15 +76,12 @@ class MPVController:
     def playback_finished_callback(self, cb: Optional[Callable]):
         with self._lock:
             self._playback_finished_callback = cb
-            if cb is not None:
-                self._pending_callbacks.append((cb, None))
-            else:
-                self._pending_callbacks.clear()
+            self._next_callback = cb
 
     def register_pending_callback(self, cb: Callable, request_id: Optional[Any] = None):
         with self._lock:
             self._playback_finished_callback = cb
-            self._pending_callbacks.append((cb, request_id))
+            self._next_callback = cb
 
     def start_mpv(self):
         with self._lock:
@@ -240,37 +226,6 @@ class MPVController:
                                         self._duration = float(val)
                                     elif name == "pause" and val is not None:
                                         self.is_paused = bool(val)
-                                elif ev_type == "start-file":
-                                    entry_id = event.get("playlist_entry_id")
-                                    if entry_id is not None:
-                                        with self._lock:
-                                            self._active_entry_id = entry_id
-                                            if self._pending_callbacks:
-                                                cb, req_id = self._pending_callbacks.popleft()
-                                                self._entry_callbacks[entry_id] = cb
-                                elif ev_type == "end-file":
-                                    reason = event.get("reason")
-                                    entry_id = event.get("playlist_entry_id")
-                                    if reason == "error":
-                                        logger.warning("MPV reported playback end due to stream error")
-
-                                    cb = None
-                                    with self._lock:
-                                        if entry_id is not None:
-                                            cb = self._entry_callbacks.pop(entry_id, None)
-                                            if entry_id == self._active_entry_id:
-                                                self._active_entry_id = None
-                                        elif self._entry_callbacks:
-                                            k = next(iter(self._entry_callbacks))
-                                            cb = self._entry_callbacks.pop(k, None)
-                                        elif self._playback_finished_callback:
-                                            cb = self._playback_finished_callback
-
-                                    if cb and reason in ("eof", "error") and not stop_event.is_set():
-                                        try:
-                                            cb(reason or "eof")
-                                        except TypeError:
-                                            cb()
                             except Exception:
                                 pass
             except Exception:
@@ -305,26 +260,115 @@ class MPVController:
         self.apply_eq()
 
     def load_and_play(self, source_path_or_url: str, track_meta: Dict[str, Any]) -> bool:
-        with self._lock:
+        # A load owns its IPC connection from command submission through EOF.
+        # This subscribes before loading and avoids guessing ownership from a
+        # different listener's delayed/missed start-file events.
+        with self._load_lock:
+            with self._lock:
+                callback = self._next_callback
+                self._next_callback = None
             self.start_mpv()
             if self.eq_engine:
                 self.apply_eq()
-            ok = self._send_command(["loadfile", source_path_or_url, "replace"])
-            if not ok:
-                if self._pending_callbacks:
-                    self._pending_callbacks.pop()
-                self.current_track = None
-                self.is_paused = False
-                return False
-            self.current_track = track_meta
-            self.is_paused = False
-            self._last_pos = 0.0
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            stream = None
+            with self._lock:
+                self._close_playback_socket()
+                self._playback_socket = sock
             try:
-                self._duration = float(track_meta.get("duration_ms") or 0) / 1000.0
-            except (ValueError, TypeError):
-                self._duration = 0.0
-            self._send_command(["set_property", "pause", False])
-            return True
+                sock.settimeout(2.0)
+                sock.connect(self.socket_path)
+                stream = sock.makefile("rb")
+                sock.sendall((json.dumps({
+                    "command": ["loadfile", source_path_or_url, "replace"],
+                    "request_id": 1,
+                }) + "\n").encode())
+                acknowledged = False
+                entry_id = None
+                deferred = []
+                deadline = time.monotonic() + 2.0
+                while not acknowledged or entry_id is None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError("mpv load ownership timed out")
+                    sock.settimeout(remaining)
+                    line = stream.readline(1024 * 1024)
+                    if not line:
+                        raise OSError("mpv disconnected during load")
+                    event = json.loads(line)
+                    if event.get("request_id") == 1:
+                        if event.get("error") != "success":
+                            raise OSError(f"mpv rejected load: {event.get('error')}")
+                        acknowledged = True
+                    elif event.get("event") == "start-file":
+                        entry_id = event.get("playlist_entry_id")
+                    else:
+                        deferred.append(event)
+                sock.settimeout(None)
+                with self._lock:
+                    if self._playback_socket is not sock:
+                        raise OSError("playback canceled during load")
+                    self.current_track = track_meta
+                    self.is_paused = False
+                    self._last_pos = 0.0
+                    try:
+                        self._duration = float(track_meta.get("duration_ms") or 0) / 1000.0
+                    except (ValueError, TypeError):
+                        self._duration = 0.0
+                    self._playback_thread = threading.Thread(
+                        target=self._watch_playback,
+                        args=(sock, stream, entry_id, callback, deferred), daemon=True,
+                    )
+                    self._playback_thread.start()
+                self._send_command(["set_property", "pause", False])
+                return True
+            except (OSError, ValueError) as exc:
+                logger.warning("Could not establish mpv playback ownership: %s", exc)
+                # An unacknowledged command might still execute. Retire the
+                # process so it cannot produce a late start for the next load.
+                self.stop()
+                if stream is not None:
+                    stream.close()
+                sock.close()
+                return False
+
+    def _close_playback_socket(self):
+        sock, self._playback_socket = self._playback_socket, None
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            sock.close()
+
+    def _watch_playback(self, sock, stream, entry_id, callback, deferred):
+        reason = "error"
+        try:
+            while True:
+                if deferred:
+                    event = deferred.pop(0)
+                else:
+                    line = stream.readline(1024 * 1024)
+                    if not line:
+                        break
+                    event = json.loads(line)
+                if event.get("event") == "end-file" and event.get("playlist_entry_id") == entry_id:
+                    reason = event.get("reason")
+                    break
+        except (OSError, ValueError):
+            logger.warning("mpv playback event connection lost")
+        finally:
+            stream.close()
+            with self._lock:
+                owned = self._playback_socket is sock
+                if owned:
+                    self._close_playback_socket()
+            sock.close()
+        if owned and callback is not None and reason in ("eof", "error"):
+            try:
+                callback(reason)
+            except Exception:
+                logger.exception("Playback completion callback failed")
 
     def pause(self):
         with self._lock:
@@ -380,9 +424,11 @@ class MPVController:
             if self._listener_stop_event is not None:
                 self._listener_stop_event.set()
                 self._listener_stop_event = None
-            self._pending_callbacks.clear()
-            self._entry_callbacks.clear()
-            self._active_entry_id = None
+            self._next_callback = None
+            self._playback_finished_callback = None
+            self._close_playback_socket()
+            playback_to_join = self._playback_thread
+            self._playback_thread = None
             self.current_track = None
             self._last_pos = 0.0
             self._duration = 0.0
@@ -412,6 +458,8 @@ class MPVController:
                 listener_to_join.join(timeout=0.5)
             except Exception:
                 pass
+        if playback_to_join and playback_to_join != threading.current_thread():
+            playback_to_join.join(timeout=0.5)
 
     def __del__(self):
         try:

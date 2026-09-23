@@ -123,8 +123,9 @@ class TestAuditFindingsSept22(unittest.TestCase):
         # Fix: last_tab remains 'liked'
         self.assertEqual(storage.get_saved_last_tab(), "liked")
 
-    # Finding 4: Pending callback queue correctly routes rapid MPV loadfile EOF events
-    def test_04_pending_callback_queue_handles_rapid_loadfile(self):
+    # Property listeners must not guess which load owns an event.
+    # Full load/EOF routing is exercised in test_playback_ipc_ownership.py.
+    def test_04_property_listener_does_not_consume_playback_callbacks(self):
         controller = player.MPVController()
         first, second = Mock(), Mock()
         controller.register_pending_callback(first, 1)
@@ -150,10 +151,8 @@ class TestAuditFindingsSept22(unittest.TestCase):
         with patch.object(player.os.path, "exists", return_value=True), patch.object(player.socket, "socket", return_value=sock):
             controller._ipc_listener(stop)
 
-        # Fix: FIFO queue routes callbacks correctly to each playlist entry;
-        # entry 10 stopped so first is not called; entry 11 reached EOF so second is called.
         first.assert_not_called()
-        second.assert_called_once_with("eof")
+        second.assert_not_called()
 
     # Finding 5: Deleting pending track cancels playback request
     def test_05_delete_pending_track_cancels_playback_request(self):
@@ -241,6 +240,7 @@ class TestAuditFindingsSept22(unittest.TestCase):
         auth.save_spotify_auth(stale)
         f = types.SimpleNamespace(
             auth_session=dict(stale),
+            is_mounted=True,
             query_one=Mock(),
             app=types.SimpleNamespace(call_from_thread=lambda fn: fn()),
         )
@@ -298,3 +298,119 @@ class TestAuditFindingsSept22(unittest.TestCase):
         compose_fn = next(n for n in modal_cls.body if isinstance(n, ast.FunctionDef) and n.name == "compose")
         calls = [node.func.id for node in ast.walk(compose_fn) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)]
         self.assertNotIn("get_valid_token", calls)
+
+    def test_failed_reorder_reloads_library_without_moving_queue(self):
+        a, b = track("a"), track("b")
+        storage.save_liked_songs([a])  # b removed since rendering.
+        f = make_fake_app(current_liked_tracks=[a, b], queue=[a, b], current_index=1)
+        app.SpoffTUI._reorder_liked_song(f, 1, -1)
+        self.assertEqual([t["id"] for t in f.current_liked_tracks], ["a"])
+        self.assertEqual(f.queue, [a, b])
+        self.assertEqual(f.current_index, 1)
+
+    def test_reorder_keeps_playing_occurrence_when_library_has_new_rows(self):
+        a, b, c, added = (track(x) for x in ("a", "b", "c", "new"))
+        storage.save_liked_songs([added, a, b, c])
+        f = make_fake_app(current_liked_tracks=[a, b, c], queue=[a, b, c], current_index=1)
+        app.SpoffTUI._reorder_liked_song(f, 1, 1)
+        self.assertEqual([t["id"] for t in f.current_liked_tracks], ["new", "a", "c", "b"])
+        self.assertEqual([t["id"] for t in f.queue], ["a", "c", "b"])
+        self.assertIs(f.queue[f.current_index], b)
+
+    def test_deleting_other_duplicate_preserves_pending_occurrence(self):
+        a = track("a")
+        f = make_fake_app(
+            focused=types.SimpleNamespace(id="track-table", cursor_row=0),
+            active_tab="search", search_results=[a, a], queue=[a, a],
+            current_index=1, _pending_track=a,
+        )
+        app.SpoffTUI.action_delete_item(f)
+        self.assertEqual(f._play_request_id, 1)
+        self.assertIs(f._pending_track, a)
+        self.assertTrue(app.SpoffTUI._commit_playback(f, 1, "source", a))
+
+    def test_unlike_pending_track_rejects_late_commit(self):
+        a, b = track("a"), track("b")
+        storage.save_liked_songs([a, b])
+        focused = Mock(spec=app.DataTable, id="track-table", cursor_row=0)
+        f = make_fake_app(
+            _is_ready=True, active_tab="liked", focused=focused,
+            current_liked_tracks=[a, b], queue=[a, b], current_index=0,
+            _pending_track=a, _get_current_view_tracks=lambda: [a, b],
+            _submit_spotify_job=Mock(),
+        )
+        f.player.current_track = None
+        app.SpoffTUI.action_like_track(f)
+        self.assertIsNone(f._pending_track)
+        self.assertFalse(app.SpoffTUI._commit_playback(f, 1, "source", a))
+
+    def test_high_rate_clipboard_import_uses_engine_sample_rate(self):
+        engine = eq.ParametricEQEngine(sample_rate=96000)
+        f = types.SimpleNamespace(app=Mock(), query_one=Mock(), notify=Mock(),
+                                  engine=engine, _sync_and_save=Mock())
+        text = "Filter 1: ON PK Fc 30000 Hz Gain 2 dB Q 1"
+        with patch.object(app, "read_from_clipboard", return_value=text):
+            app.EQSettingsModal.import_from_clipboard(f)
+        self.assertEqual(engine.bands[0].frequency, 30000)
+        f._sync_and_save.assert_called_once()
+
+    def test_invalid_import_does_not_mutate_engine(self):
+        engine = eq.ParametricEQEngine()
+        before = engine.to_dict()
+        f = types.SimpleNamespace(app=Mock(), query_one=Mock(), notify=Mock(), engine=engine)
+        with patch.object(app, "read_from_clipboard", return_value="Filter 1: ON PK Fc 1000 Hz Gain 99 dB Q 1"):
+            app.EQSettingsModal.import_from_clipboard(f)
+        self.assertEqual(engine.to_dict(), before)
+
+    def test_commit_rejects_missing_queue_occurrence(self):
+        a = track("a")
+        f = make_fake_app(_pending_track=a, queue=[], current_index=-1)
+        self.assertFalse(app.SpoffTUI._commit_playback(f, 1, "source", a))
+        f.player.load_and_play.assert_not_called()
+
+    def test_profile_result_cannot_restore_logged_out_session(self):
+        credentials = dict(access_token="token", refresh_token="refresh", expires_at=9999999999)
+        auth.save_spotify_auth(credentials)
+        f = types.SimpleNamespace(auth_session=dict(credentials), query_one=Mock(), is_mounted=True,
+                                  app=types.SimpleNamespace(call_from_thread=Mock()))
+        def profile(token):
+            auth.logout_spotify()
+            return {"display_name": "Old account"}
+        with patch.object(app, "get_valid_token", return_value="token"), \
+             patch.object(app, "fetch_current_user_profile", side_effect=profile), \
+             patch.object(app.threading, "Thread", side_effect=lambda target, **kw: types.SimpleNamespace(start=target)):
+            app.SpotifyAuthModal.on_mount(f)
+        self.assertIsNone(auth.load_spotify_auth())
+        f.app.call_from_thread.assert_not_called()
+
+    def test_profile_worker_publishes_modal_state_only_on_ui_thread(self):
+        credentials = dict(access_token="token", refresh_token="refresh", expires_at=9999999999)
+        auth.save_spotify_auth(credentials)
+        entered, release = threading.Event(), threading.Event()
+        updates, threads = [], []
+        real_thread = threading.Thread
+        def spawn(**kwargs):
+            thread = real_thread(**kwargs)
+            threads.append(thread)
+            return thread
+        def token():
+            entered.set()
+            assert release.wait(2)
+            return "token"
+        f = types.SimpleNamespace(auth_session=dict(credentials), query_one=Mock(), is_mounted=True,
+                                  app=types.SimpleNamespace(call_from_thread=updates.append))
+        with patch.object(app, "get_valid_token", side_effect=token), \
+             patch.object(app, "fetch_current_user_profile", return_value={"display_name": "Test"}), \
+             patch.object(app.threading, "Thread", side_effect=spawn):
+            try:
+                app.SpotifyAuthModal.on_mount(f)
+                self.assertTrue(entered.wait(1))
+                self.assertNotIn("user", f.auth_session)
+            finally:
+                release.set()
+                for thread in threads:
+                    thread.join(2)
+        self.assertNotIn("user", f.auth_session)
+        self.assertEqual(len(updates), 1)
+        updates[0]()
+        self.assertEqual(f.auth_session["user"]["display_name"], "Test")

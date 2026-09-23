@@ -54,7 +54,7 @@ try:
         load_saved_playlists, add_saved_playlist, remove_saved_playlist,
         rename_saved_playlist, clone_saved_playlist, move_saved_playlist, merge_track_artwork,
         create_local_playlist, add_track_to_playlist,
-        update_playlist_tracks, get_cached_track_path, load_offline_index,
+        update_playlist_tracks, get_cached_track_path, load_offline_index, register_cached_track,
         delete_cached_track, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
@@ -122,7 +122,7 @@ except ImportError:
         get_saved_last_tab, get_saved_last_playlist_id, save_last_tab,
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
-        record_deleted_spotify_playlist_id
+        record_deleted_spotify_playlist_id, liked_index, storage_transaction
     )
     from streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache
     from search import live_search_tracks
@@ -1756,13 +1756,15 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
                                     return
                                 current["user"] = prof
                                 save_spotify_auth(current)
-                                self.auth_session = current
                             name = prof.get("display_name") or prof.get("id") or "Spotify User"
                             email = prof.get("email") or ""
                             line = f"User: [bold #ffffff]{escape(str(name))}[/]"
                             if email:
                                 line += f"  [#767676]({escape(str(email))})[/]"
                             def _update():
+                                if not self.is_mounted:
+                                    return
+                                self.auth_session = current
                                 try:
                                     self.query_one("#spotify-user-info", Static).update(line)
                                 except Exception:
@@ -2924,10 +2926,12 @@ class EQSettingsModal(SafeModalScreen[None]):
         cur = self.engine.sample_rate
         cur_idx = rates.index(cur) if cur in rates else 1
         nxt = rates[(cur_idx + 1) % len(rates)]
+        clamped = sum(b.frequency > nxt * 0.495 for b in self.engine.bands)
         self.engine.set_sample_rate(nxt)
         self._sync_and_save()
+        adjustment = f" Adjusted {clamped} band(s) to fit this rate." if clamped else ""
         self.query_one("#eq-settings-status-line", Static).update(
-            f"Audio DSP sample rate set to [bold #569f68]{nxt/1000.0:.1f} kHz[/]."
+            f"Audio DSP sample rate set to [bold #569f68]{nxt/1000.0:.1f} kHz[/].{adjustment}"
         )
 
     def cycle_precision(self) -> None:
@@ -2938,18 +2942,6 @@ class EQSettingsModal(SafeModalScreen[None]):
         self.query_one("#eq-settings-status-line", Static).update(
             f"Filter computation precision set to [bold #569f68]{lbl}[/]."
         )
-
-    def toggle_anti_denormal(self) -> None:
-        nxt = not self.engine.anti_denormal
-        self.engine.set_anti_denormal(nxt)
-        self._sync_and_save()
-        lbl = "Enabled" if nxt else "Disabled"
-        try:
-            self.query_one("#eq-settings-status-line", Static).update(
-                f"Subnormal flush protection [bold #569f68]{lbl}[/]."
-            )
-        except Exception:
-            pass
 
     def toggle_auto_headroom(self) -> None:
         nxt = not self.engine.auto_headroom
@@ -3036,7 +3028,7 @@ class EQSettingsModal(SafeModalScreen[None]):
             return
 
         try:
-            preset = parse_equalizer_apo(text)
+            preset = parse_equalizer_apo(text, sample_rate=self.engine.sample_rate)
             if not preset:
                 self.query_one("#eq-settings-status-line", Static).update(
                     "[bold #e06c75]Could not detect EqualizerAPO or AutoEQ filter syntax in clipboard.[/]"
@@ -6320,30 +6312,23 @@ class SpoffTUI(App):
         if not (0 <= new_candidate < len(self.current_liked_tracks)):
             return
         track = self.current_liked_tracks[idx]
-        if not move_liked_track(track, delta, index=idx):
-            new_idx = new_candidate
-            t = self.current_liked_tracks.pop(idx)
-            self.current_liked_tracks.insert(new_idx, t)
-        else:
-            self.current_liked_tracks = load_liked_songs()
-            new_idx = liked_index(self.current_liked_tracks, track)
-            if new_idx is None:
-                new_idx = max(0, min(new_candidate, len(self.current_liked_tracks) - 1))
-
         is_queue_mirroring = (
-            bool(self.queue)
-            and len(self.queue) == len(self.current_liked_tracks)
-            and 0 <= idx < len(self.queue)
-            and 0 <= new_idx < len(self.queue)
-            and (self.queue[idx] == track or (track.get("id") and self.queue[idx].get("id") == track.get("id")))
+            bool(self.queue) and len(self.queue) == len(self.current_liked_tracks)
+            and all(liked_index([queued], visible) is not None
+                    for queued, visible in zip(self.queue, self.current_liked_tracks))
         )
-        if is_queue_mirroring:
+        moved = move_liked_track(track, delta, index=idx)
+        self.current_liked_tracks = load_liked_songs()
+        new_idx = liked_index(self.current_liked_tracks, track)
+        if moved and is_queue_mirroring:
+            # The queue is a playback snapshot; move within that snapshot,
+            # not to an index from a concurrently changed library.
             if self.current_index == idx:
-                self.current_index = new_idx
-            elif self.current_index == new_idx:
+                self.current_index = new_candidate
+            elif self.current_index == new_candidate:
                 self.current_index = idx
             q_item = self.queue.pop(idx)
-            self.queue.insert(new_idx, q_item)
+            self.queue.insert(new_candidate, q_item)
 
         self.render_tracks(self.current_liked_tracks, select_row=new_idx)
         try:
@@ -7157,6 +7142,9 @@ class SpoffTUI(App):
                                 break
                     if q_idx is not None:
                         was_current = (q_idx == self.current_index)
+                        if was_current and getattr(self, "_pending_track", None) is not None:
+                            self._play_request_id += 1
+                            self._pending_track = None
                         self.queue.pop(q_idx)
                         if not self.queue:
                             self.current_index = -1
@@ -7551,6 +7539,12 @@ class SpoffTUI(App):
 
         cached_path = get_cached_track_path(t_id)
         if cached_path and cached_path.exists() and cached_path.stat().st_size > 10000:
+            try:
+                register_cached_track(t_id, track, cached_path)
+            except Exception:
+                pass
+            if self.active_tab == "offline":
+                self.render_tracks(list(load_offline_index().values()))
             self.notify_user(f"'{title}' is already cached offline.")
             return
 
@@ -7607,7 +7601,12 @@ class SpoffTUI(App):
         for t in tracks:
             tid = t.get("id") or str(hash(t.get("title", "") + t.get("artist", "")))
             c = get_cached_track_path(tid)
-            if not (c and c.exists() and c.stat().st_size > 10000):
+            if c and c.exists() and c.stat().st_size > 10000:
+                try:
+                    register_cached_track(tid, t, c)
+                except Exception:
+                    pass
+            else:
                 needed.append(t)
 
         total = len(tracks)
@@ -7997,7 +7996,7 @@ class SpoffTUI(App):
                                     break
                         if q_idx is not None:
                             was_current = self.current_index == q_idx
-                            if (was_current or getattr(self, "_pending_track", None) is removed_track) and getattr(self, "_pending_track", None) is not None:
+                            if was_current and getattr(self, "_pending_track", None) is not None:
                                 self._play_request_id = getattr(self, "_play_request_id", 0) + 1
                                 self._pending_track = None
                             self.queue.pop(q_idx)
@@ -8060,7 +8059,7 @@ class SpoffTUI(App):
                                     break
                         if q_idx is not None:
                             was_current = (q_idx == self.current_index)
-                            if (was_current or getattr(self, "_pending_track", None) is t) and getattr(self, "_pending_track", None) is not None:
+                            if was_current and getattr(self, "_pending_track", None) is not None:
                                 self._play_request_id = getattr(self, "_play_request_id", 0) + 1
                                 self._pending_track = None
                             self.queue.pop(q_idx)
@@ -8108,7 +8107,7 @@ class SpoffTUI(App):
                                     break
                         if q_idx is not None:
                             was_current = (q_idx == self.current_index)
-                            if (was_current or getattr(self, "_pending_track", None) is t) and getattr(self, "_pending_track", None) is not None:
+                            if was_current and getattr(self, "_pending_track", None) is not None:
                                 self._play_request_id = getattr(self, "_play_request_id", 0) + 1
                                 self._pending_track = None
                             self.queue.pop(q_idx)
@@ -8139,7 +8138,7 @@ class SpoffTUI(App):
                                     break
                         if q_idx is not None:
                             was_current = (q_idx == self.current_index)
-                            if (was_current or getattr(self, "_pending_track", None) is t) and getattr(self, "_pending_track", None) is not None:
+                            if was_current and getattr(self, "_pending_track", None) is not None:
                                 self._play_request_id = getattr(self, "_play_request_id", 0) + 1
                                 self._pending_track = None
                             self.queue.pop(q_idx)
@@ -8525,8 +8524,14 @@ class SpoffTUI(App):
     def _commit_playback(self, req_id: int, source: str, track: Dict[str, Any]) -> bool:
         if getattr(self, "_closing", False) or req_id != getattr(self, "_play_request_id", None):
             return False
-        if getattr(self, "_pending_track", None) is not None and self._pending_track is not track and self._pending_track.get("id") != track.get("id"):
-            return False
+        pending = getattr(self, "_pending_track", None)
+        if pending is not None:
+            if liked_index([pending], track) is None:
+                return False
+            if not (0 <= self.current_index < len(self.queue)):
+                return False
+            if liked_index([self.queue[self.current_index]], track) is None:
+                return False
         cb = lambda reason="eof": self._on_ui(self._handle_track_end, req_id, reason, track, source)
         if hasattr(self.player, "register_pending_callback"):
             self.player.register_pending_callback(cb, req_id)
@@ -8652,6 +8657,10 @@ class SpoffTUI(App):
 
         cached = get_cached_track_path(t_id)
         if cached:
+            try:
+                register_cached_track(t_id, track, cached)
+            except Exception:
+                pass
             self.call_from_thread(self._commit_playback, req_id, str(cached), track)
             return
 

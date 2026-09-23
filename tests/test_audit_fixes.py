@@ -311,9 +311,8 @@ class AuditFixesTests(unittest.TestCase):
         self.assertTrue(app.has_class("transparent-mode"))
 
     def test_subprocess_pdeathsig_and_destructors(self):
-        # Verify preexec death signal handlers run cleanly
-        player._preexec_deathsig()
-        visualizer._preexec_deathsig()
+        self.assertFalse(hasattr(player, "_preexec_deathsig"))
+        self.assertFalse(hasattr(visualizer, "_preexec_deathsig"))
         self.assertTrue(hasattr(player.MPVController, "__del__"))
         self.assertTrue(hasattr(visualizer.CavaVisualizer, "__del__"))
 

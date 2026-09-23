@@ -6,21 +6,10 @@ import tempfile
 import logging
 import threading
 import subprocess
-import signal
 from typing import Optional, List, Dict
 from textual.widgets import Static
 
 logger = logging.getLogger("visualizer")
-
-
-def _preexec_deathsig():
-    try:
-        import ctypes
-        libc = ctypes.CDLL(None)
-        # PR_SET_PDEATHSIG = 1
-        libc.prctl(1, signal.SIGTERM, 0, 0, 0)
-    except Exception:
-        pass
 
 
 BAR_GLYPHS = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]

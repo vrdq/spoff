@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 from spoff.player import MPVController
-from spoff.visualizer import CavaVisualizer, _preexec_deathsig
+from spoff.visualizer import CavaVisualizer
 from spoff.streamer import (
     invalidate_stream_cache,
     search_and_resolve_stream,
@@ -54,11 +54,8 @@ def test_mpv_controller_locking_and_direct_audio():
         controller.stop()
 
 
-def test_visualizer_preexec_deathsig_and_thread_join():
-    """Verify _preexec_deathsig executes cleanly and stop() joins worker thread."""
-    # Test _preexec_deathsig doesn't crash on standard Linux
-    _preexec_deathsig()
-
+def test_visualizer_thread_join():
+    """Stop joins the visualizer's reader thread."""
     vis = CavaVisualizer(bars=16)
     mock_thread = MagicMock()
     mock_thread.is_alive.return_value = True

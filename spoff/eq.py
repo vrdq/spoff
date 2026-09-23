@@ -441,7 +441,7 @@ BUILTIN_PRESETS: List[EQPreset] = [
 # EQUALIZER APO & AUTOEQ PARSER
 # ============================================================================
 
-def parse_equalizer_apo(text: str, default_name: str = "Imported AutoEQ") -> Optional[EQPreset]:
+def parse_equalizer_apo(text: str, default_name: str = "Imported AutoEQ", *, sample_rate: float = 48000.0) -> Optional[EQPreset]:
     """
     Parses AutoEQ or EqualizerAPO (Peace) configuration text into an EQPreset.
     Handles:
@@ -532,7 +532,7 @@ def parse_equalizer_apo(text: str, default_name: str = "Imported AutoEQ") -> Opt
         preamp_db=preamp_db,
         bands=bands
     )
-    return validate_preset(preset, 48000.0)
+    return validate_preset(preset, sample_rate)
 
 
 # ============================================================================
@@ -578,7 +578,7 @@ class ParametricEQEngine:
 
     def set_sample_rate(self, sample_rate: float) -> None:
         rate = float(sample_rate)
-        if not math.isfinite(rate) or rate < 8000:
+        if not math.isfinite(rate) or not 8000 <= rate <= 192000:
             raise ValueError("Unsupported sample rate")
         if rate == self.sample_rate:
             return
@@ -697,7 +697,7 @@ class ParametricEQEngine:
             tot_db += coeffs.magnitude_db(freq_hz, self.sample_rate)
         return tot_db
 
-    def calculate_peak_gain(self, num_points: int = 16384, *, ignore_bypass: bool = False) -> Tuple[float, float]:
+    def calculate_peak_gain(self, num_points: int = 16384, *, ignore_bypass: bool = False, preamp_db: Optional[float] = None) -> Tuple[float, float]:
         """
         Scans the 20 Hz - 20 kHz audio range to find the maximum composite peak gain.
         Returns (peak_gain_dbfs, peak_frequency_hz).
@@ -705,12 +705,13 @@ class ParametricEQEngine:
         if self.bypassed and not ignore_bypass:
             return 0.0, 1000.0
 
+        preamp = self.preamp_db if preamp_db is None else preamp_db
         coeffs_list = [
             b.calculate_coefficients(self.sample_rate)
             for b in self.bands if b.enabled
         ]
         if not coeffs_list:
-            return self.preamp_db, 1000.0
+            return preamp, 1000.0
 
         # Dense logarithmic frequency sweep + band center frequencies
         max_gain_db = -999.0
@@ -724,7 +725,7 @@ class ParametricEQEngine:
             z_inv = cmath.exp(-1j * w)
             z_inv2 = z_inv * z_inv
 
-            tot_db = self.preamp_db
+            tot_db = preamp
             for c in coeffs_list:
                 num = c.b0 + c.b1 * z_inv + c.b2 * z_inv2
                 den = 1.0 + c.a1 * z_inv + c.a2 * z_inv2
@@ -746,12 +747,9 @@ class ParametricEQEngine:
         if self.intersample_guard and margin_db is None:
             margin = margin + 0.2
 
-        saved_preamp = self.preamp_db
-        try:
-            self.preamp_db = 0.0
-            peak_gain_no_preamp, _ = self.calculate_peak_gain(num_points=16384, ignore_bypass=True)
-        finally:
-            self.preamp_db = saved_preamp
+        peak_gain_no_preamp, _ = self.calculate_peak_gain(
+            num_points=16384, ignore_bypass=True, preamp_db=0.0,
+        )
 
         if peak_gain_no_preamp > 0.0:
             recommended = -(peak_gain_no_preamp + margin)

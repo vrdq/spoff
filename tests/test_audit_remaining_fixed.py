@@ -230,8 +230,9 @@ class TestAuditRemainingFixed(unittest.TestCase):
         with patch.object(player.os.path, "exists", return_value=True), patch.object(player.socket, "socket", return_value=sock):
             controller._ipc_listener(stop)
 
-        # Only entry 100's EOF should have triggered the callback (once), entry 99 was ignored
-        self.assertEqual(called_reasons, ["eof"])
+        # The property listener must never bind callbacks by arrival order.
+        # Command-connection ownership is tested in test_playback_ipc_ownership.py.
+        self.assertEqual(called_reasons, [])
 
     def test_f3_quitting_during_pending_switch_saves_committed_state(self):
         track_a = dict(id="track_A", title="Song A", artist="Artist A")

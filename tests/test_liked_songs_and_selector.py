@@ -574,6 +574,7 @@ class TestDeckTrackFormatting(unittest.TestCase):
     def test_liked_songs_reorder_queue_mirroring(self):
         self.app.active_tab = "liked"
         tracks = [{"id": "1", "title": "A"}, {"id": "2", "title": "B"}, {"id": "3", "title": "C"}]
+        storage.save_liked_songs(tracks)
         self.app.current_liked_tracks = list(tracks)
         self.app.queue = list(tracks)
         self.app.current_index = 1
@@ -1021,4 +1022,3 @@ class TestLastPlayedRestoration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

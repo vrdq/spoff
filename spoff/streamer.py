@@ -219,6 +219,11 @@ def download_track_to_cache(
 
     cached_path = get_cached_track_path(val_id)
     if cached_path and cached_path.is_file() and cached_path.stat().st_size > 10000:
+        meta_to_save = dict(track_meta) if track_meta else {"title": title, "artist": artist}
+        try:
+            register_cached_track(val_id, meta_to_save, cached_path)
+        except Exception:
+            pass
         if on_complete:
             on_complete(cached_path)
         return None

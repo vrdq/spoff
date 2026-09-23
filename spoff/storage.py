@@ -1166,7 +1166,74 @@ def merge_track_artwork(playlist_id: str, track_id: str, artwork: Dict[str, Any]
                         track[key] = artwork[key]
     return mutate_playlist(playlist_id, merge)
 
+
+def _reconcile_offline_cache(index: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, Any]], bool]:
+    """Scans CACHE_DIR to ensure all physically cached audio files are represented in the offline index."""
+    changed = False
+    try:
+        cache_dir = _get_cache_dir()
+        if not cache_dir.is_dir():
+            return index, False
+
+        known_meta: Optional[Dict[str, Dict[str, Any]]] = None
+
+        for p in cache_dir.iterdir():
+            try:
+                if not p.is_file() or p.is_symlink():
+                    continue
+                if p.suffix.lower() not in CACHE_EXTENSIONS or p.stat().st_size <= 10000:
+                    continue
+                val_id = p.stem
+                validate_track_id(val_id)
+            except (ValueError, OSError):
+                continue
+
+            if val_id not in index:
+                if known_meta is None:
+                    known_meta = {}
+                    try:
+                        for pl in load_saved_playlists():
+                            for t in pl.get("tracks", []):
+                                if t.get("id"):
+                                    known_meta[t["id"]] = t
+                        for t in load_liked_songs():
+                            if t.get("id") and t["id"] not in known_meta:
+                                known_meta[t["id"]] = t
+                    except Exception:
+                        pass
+
+                m = known_meta.get(val_id, {})
+                title = m.get("title") or f"Offline Track ({val_id[:11]})"
+                artist = m.get("artist") or "Offline Library"
+                dur = m.get("duration_ms") or 0
+                entry = dict(m)
+                entry.update({
+                    "id": val_id,
+                    "title": str(title),
+                    "artist": str(artist),
+                    "duration_ms": int(dur),
+                    "filepath": str(p.resolve()),
+                    "size_bytes": p.stat().st_size,
+                    "is_offline": True,
+                })
+                index[val_id] = entry
+                changed = True
+            else:
+                entry = index[val_id]
+                resolved_p = str(p.resolve())
+                if entry.get("filepath") != resolved_p:
+                    entry["filepath"] = resolved_p
+                    changed = True
+                if not entry.get("size_bytes"):
+                    entry["size_bytes"] = p.stat().st_size
+                    changed = True
+    except Exception as e:
+        logger.debug(f"Cache reconciliation error: {e}")
+    return index, changed
+
+@transactional
 def load_offline_index() -> Dict[str, Dict[str, Any]]:
+    valid_index: Dict[str, Dict[str, Any]] = {}
     try:
         idx_file = _get_index_file()
         if idx_file.exists() and idx_file.stat().st_size > 0:
@@ -1179,15 +1246,13 @@ def load_offline_index() -> Dict[str, Dict[str, Any]]:
                         logger.warning(f"Non-dict offline index backed up to {corrupted}")
                     except Exception:
                         pass
-                    return {}
-                valid_index = {}
+                    data = {}
                 for k, v in data.items():
                     if isinstance(k, str) and isinstance(v, dict):
                         normalized = normalize_track(v)
                         if normalized is not None:
                             normalized["id"] = k
                             valid_index[k] = normalized
-                return valid_index
     except Exception as e:
         logger.error(f"Error reading offline index: {e}")
         try:
@@ -1198,7 +1263,15 @@ def load_offline_index() -> Dict[str, Dict[str, Any]]:
                 logger.warning(f"Corrupted offline index backed up to {corrupted}")
         except Exception:
             pass
-    return {}
+
+    valid_index, changed = _reconcile_offline_cache(valid_index)
+    if changed:
+        try:
+            save_offline_index(valid_index)
+        except Exception:
+            pass
+
+    return valid_index
 
 def save_offline_index(index: Dict[str, Dict[str, Any]]) -> None:
     _atomic_json_dump(_get_index_file(), index)

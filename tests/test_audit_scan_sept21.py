@@ -177,9 +177,8 @@ class TestAuditScanSept21(unittest.TestCase):
         self.assertTrue(engine.anti_denormal)
 
     # --- S8 Tests ---
-    def test_s8_preexec_deathsig_callable(self):
-        # Should execute without throwing an unhandled exception
-        player._preexec_deathsig()
+    def test_s8_no_python_preexec_hook(self):
+        self.assertFalse(hasattr(player, "_preexec_deathsig"))
 
 
 if __name__ == "__main__":

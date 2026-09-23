@@ -288,7 +288,8 @@ def save_spotify_auth(data: Dict[str, Any]):
         from .storage import _atomic_json_dump
     except ImportError:
         from storage import _atomic_json_dump
-    _atomic_json_dump(AUTH_FILE, data, mode=0o600)
+    with storage_transaction():
+        _atomic_json_dump(AUTH_FILE, data, mode=0o600)
 
 def logout_spotify() -> bool:
     """Removes saved Spotify auth session."""
