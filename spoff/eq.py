@@ -717,8 +717,12 @@ class ParametricEQEngine:
         max_gain_db = -999.0
         peak_freq = 20.0
 
-        freq_list = [20.0 * (1000.0 ** (i / (num_points - 1))) for i in range(num_points)]
-        freq_list.extend([b.frequency for b in self.bands if b.enabled and 20.0 <= b.frequency <= 20000.0])
+        count = max(2, num_points)
+        lower = min(20.0, *(b.frequency for b in self.bands if b.enabled))
+        upper = self.sample_rate / 2.0
+        freq_list = [lower * ((upper / lower) ** (i / (count - 1))) for i in range(count)]
+        freq_list.append(upper)
+        freq_list.extend(b.frequency for b in self.bands if b.enabled)
 
         for f in freq_list:
             w = 2.0 * math.pi * f / self.sample_rate
@@ -753,7 +757,7 @@ class ParametricEQEngine:
 
         if peak_gain_no_preamp > 0.0:
             recommended = -(peak_gain_no_preamp + margin)
-            return round(recommended, 1)
+            return math.floor(recommended * 10) / 10
         return 0.0
 
     def get_curve_points(self, num_points: int = 80) -> List[Tuple[float, float]]:

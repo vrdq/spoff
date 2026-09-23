@@ -105,9 +105,9 @@ class TestOfflineCacheReconciliation(unittest.TestCase):
 
 
     def test_reconcile_ignores_small_or_temporary_files(self):
-        # Tiny file <= 10000 bytes
+        # Empty 0-byte file
         tiny_file = storage.CACHE_DIR / "tiny.m4a"
-        tiny_file.write_bytes(b"T" * 500)
+        tiny_file.write_bytes(b"")
 
         # Temp hidden file
         hidden_file = storage.CACHE_DIR / ".stage.m4a"
@@ -162,7 +162,8 @@ class TestOfflineCacheReconciliation(unittest.TestCase):
         }
 
         app._play_request_id = 42
-        SpoffTUI.start_playback.__wrapped__(app, track, req_id=42)
+        with patch("threading.Thread"):
+            SpoffTUI.start_playback.__wrapped__(app, track, req_id=42)
 
         # offline index should now have cached_play
         index = storage.load_offline_index()

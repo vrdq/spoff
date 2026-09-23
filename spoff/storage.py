@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import uuid
+import hashlib
 import shutil
 import tempfile
 import fcntl
@@ -12,7 +13,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from contextlib import contextmanager
 from functools import wraps
-from typing import List, Dict, Optional, Any, Callable
+from typing import List, Dict, Optional, Any, Callable, Tuple
 
 DATA_DIR = Path.home() / ".local" / "share" / "spoff"
 OLD_DATA_DIR = Path.home() / ".local" / "share" / "spotato-tui"
@@ -193,6 +194,24 @@ _init_storage_once()
 
 # Cache extensions supported by downloader and local playback
 CACHE_EXTENSIONS = (".m4a", ".opus", ".mp3", ".webm", ".ogg", ".flac")
+
+def stable_track_id(track: Dict[str, Any]) -> str:
+    """Generates a deterministic persistent identifier for tracks lacking an upstream ID."""
+    if isinstance(track, dict) and track.get("id"):
+        return str(track["id"])
+    if not isinstance(track, dict):
+        return "local_" + hashlib.sha256(str(track).encode("utf-8")).hexdigest()[:24]
+    title = track.get("title") or track.get("name") or ""
+    artist = track.get("artist") or track.get("artists") or ""
+    identity = [
+        str(track.get("source") or ""),
+        str(track.get("url") or ""),
+        str(track.get("uri") or ""),
+        str(title),
+        str(artist),
+    ]
+    encoded = json.dumps(identity, ensure_ascii=False, separators=(",", ":"))
+    return "local_" + hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
 
 def validate_track_id(track_id: str) -> str:
     """Validates track_id against path traversal and special characters."""
@@ -834,6 +853,7 @@ def load_saved_playlists() -> List[Dict[str, Any]]:
 
     valid_playlists = []
     migrated_liked = []
+    legacy_containers = []
     had_liked = False
     abort_migration = False
     for p in data:
@@ -841,10 +861,10 @@ def load_saved_playlists() -> List[Dict[str, Any]]:
             continue
         if p.get("id") == "spotify_liked_songs":
             had_liked = True
+            legacy_containers.append(p)
             legacy = p.get("tracks", [])
             if not isinstance(legacy, list) or not all(isinstance(t, dict) for t in legacy):
                 abort_migration = True
-                valid_playlists.append(p)
                 continue
             migrated_liked.extend([t for t in legacy if isinstance(t, dict)])
             continue
@@ -856,7 +876,17 @@ def load_saved_playlists() -> List[Dict[str, Any]]:
             p["tracks"] = [normalize_track(t) for t in p["tracks"] if isinstance(t, dict) and normalize_track(t) is not None]
         valid_playlists.append(p)
 
-    if had_liked and not abort_migration:
+    if abort_migration:
+        valid_playlists.extend(legacy_containers)
+        try:
+            corrupted = pl_file.with_suffix(".json.corrupted")
+            if not corrupted.exists():
+                shutil.copy2(pl_file, corrupted)
+        except Exception:
+            pass
+        return valid_playlists
+
+    if had_liked:
         merged = load_liked_songs()
         for track in migrated_liked:
             norm = normalize_track(track)
@@ -1173,7 +1203,36 @@ def _reconcile_offline_cache(index: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str
     try:
         cache_dir = _get_cache_dir()
         if not cache_dir.is_dir():
-            return index, False
+            cache_dir.mkdir(parents=True, exist_ok=True)
+
+        available_ids = set()
+        for p in cache_dir.iterdir():
+            try:
+                if not p.is_file() or p.is_symlink():
+                    continue
+                if p.suffix.lower() not in CACHE_EXTENSIONS or p.stat().st_size == 0:
+                    continue
+                val_id = p.stem
+                validate_track_id(val_id)
+                available_ids.add(val_id)
+            except (ValueError, OSError):
+                continue
+
+        # Prune index entries whose audio file was removed from disk
+        for track_id, entry in list(index.items()):
+            fp = entry.get("filepath")
+            if fp:
+                try:
+                    p_file = Path(fp)
+                    if not p_file.is_file() or p_file.stat().st_size == 0:
+                        del index[track_id]
+                        changed = True
+                except OSError:
+                    del index[track_id]
+                    changed = True
+            elif track_id not in available_ids and (entry.get("is_offline") or "path" in entry):
+                del index[track_id]
+                changed = True
 
         known_meta: Optional[Dict[str, Dict[str, Any]]] = None
 
@@ -1181,7 +1240,7 @@ def _reconcile_offline_cache(index: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str
             try:
                 if not p.is_file() or p.is_symlink():
                     continue
-                if p.suffix.lower() not in CACHE_EXTENSIONS or p.stat().st_size <= 10000:
+                if p.suffix.lower() not in CACHE_EXTENSIONS or p.stat().st_size == 0:
                     continue
                 val_id = p.stem
                 validate_track_id(val_id)
@@ -1286,7 +1345,7 @@ def get_cached_track_path(track_id: str) -> Optional[Path]:
     for ext in CACHE_EXTENSIONS:
         try:
             track_path = cache_path(val_id, ext)
-            if track_path.is_file() and track_path.stat().st_size > 10000:
+            if track_path.is_file() and track_path.stat().st_size > 0:
                 return track_path
         except (FileNotFoundError, ValueError, OSError):
             continue
@@ -1296,7 +1355,7 @@ def get_cached_track_path(track_id: str) -> Optional[Path]:
 def register_cached_track(track_id: str, meta: Dict[str, Any], filepath: Path):
     val_id = validate_track_id(track_id)
     filepath = Path(filepath)
-    if not filepath.is_file() or filepath.stat().st_size <= 10000:
+    if not filepath.is_file() or filepath.stat().st_size == 0:
         raise ValueError(f"Incomplete cached audio file: {filepath}")
     index = load_offline_index()
     try:

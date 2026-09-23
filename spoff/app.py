@@ -54,7 +54,7 @@ try:
         load_saved_playlists, add_saved_playlist, remove_saved_playlist,
         rename_saved_playlist, clone_saved_playlist, move_saved_playlist, merge_track_artwork,
         create_local_playlist, add_track_to_playlist,
-        update_playlist_tracks, get_cached_track_path, load_offline_index, register_cached_track,
+        update_playlist_tracks, get_cached_track_path, load_offline_index, register_cached_track, stable_track_id,
         delete_cached_track, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
@@ -1672,6 +1672,7 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
         self.server: Optional[OAuthCallbackServer] = None
         self.pkce_verifier: Optional[str] = None
         self.is_logging_in: bool = False
+        self._login_attempt: Optional[object] = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="spotify-dialog"):
@@ -1791,6 +1792,7 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
             self.start_browser_login()
 
     def action_dismiss_modal(self) -> None:
+        self._login_attempt = None
         if self.server:
             self.server.stop()
             self.server = None
@@ -1804,6 +1806,7 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
         self.start_browser_login()
 
     def action_logout_account(self) -> None:
+        self._login_attempt = None
         if self.auth_session:
             logout_spotify()
             self.auth_session = None
@@ -1922,6 +1925,8 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
         threading.Thread(target=_open, daemon=True).start()
 
     def process_auth_code(self, code: str) -> None:
+        attempt = object()
+        self._login_attempt = attempt
         try:
             self.query_one("#spotify-status", Static).update("[dim]Exchanging tokens and fetching profile...[/dim]")
         except Exception:
@@ -1934,21 +1939,25 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
                 prof = fetch_current_user_profile(tokens["access_token"])
                 if prof:
                     tokens["user"] = prof
-                save_spotify_auth(tokens)
-                def _finish():
-                    if self.server:
-                        self.server.stop()
-                        self.server = None
-                    self.dismiss("login_success")
-                self.app.call_from_thread(_finish)
-            else:
-                def _fail():
+
+            def _finish():
+                if not getattr(self, "is_mounted", True) or getattr(self, "_login_attempt", None) is not attempt:
+                    return
+                if not tokens or not tokens.get("access_token"):
                     try:
                         self.query_one("#spotify-status", Static).update("[bold #c47676]Token exchange failed. Please try again.[/]")
                     except Exception:
                         pass
                     self.is_logging_in = False
-                self.app.call_from_thread(_fail)
+                    return
+
+                save_spotify_auth(tokens)
+                if self.server:
+                    self.server.stop()
+                    self.server = None
+                self.dismiss("login_success")
+
+            self.app.call_from_thread(_finish)
 
         threading.Thread(target=_worker, daemon=True).start()
 
@@ -5139,7 +5148,7 @@ class SpoffTUI(App):
             pass
         try:
             if hasattr(self, "_spotify_jobs") and self._spotify_jobs:
-                self._spotify_jobs.shutdown(wait=False, cancel_futures=True)
+                self._spotify_jobs.shutdown(wait=False, cancel_futures=False)
         except Exception:
             pass
         try:
@@ -5464,14 +5473,6 @@ class SpoffTUI(App):
             else:
                 self.query_one("#track-table", DataTable).focus()
 
-    def _get_active_tracks(self) -> List[Dict[str, Any]]:
-        if self.active_tab == "search":
-            return self.search_results
-        elif self.active_tab == "offline":
-            return list(load_offline_index().values())
-        elif self.active_tab == "playlist":
-            return self.current_playlist_tracks
-        return []
 
     def on_resize(self, event: events.Resize) -> None:
         self._last_rendered_width = event.size.width
@@ -6030,8 +6031,7 @@ class SpoffTUI(App):
         playing_idx: Optional[int] = None
 
         for idx, t in enumerate(tracks):
-            raw_id = t.get("id")
-            t_id = str(raw_id) if raw_id is not None else str(hash(t.get("title", "") + t.get("artist", "")))
+            t_id = stable_track_id(t)
             is_cached = get_cached_track_path(t_id) is not None if t_id else False
             raw_src = str(t.get("source", "")).lower()
             if raw_src == "local" or str(t.get("filepath", "")).startswith("/"):
@@ -7533,12 +7533,12 @@ class SpoffTUI(App):
             self.notify_user("No playlist selected to download.")
 
     def _download_single_track(self, track: Dict[str, Any]):
-        t_id = track.get("id") or str(hash(track.get("title", "") + track.get("artist", "")))
+        t_id = stable_track_id(track)
         title = track.get("title") or "Unknown Track"
         artist = track.get("artist") or "Unknown Artist"
 
         cached_path = get_cached_track_path(t_id)
-        if cached_path and cached_path.exists() and cached_path.stat().st_size > 10000:
+        if cached_path and cached_path.exists() and cached_path.stat().st_size > 0:
             try:
                 register_cached_track(t_id, track, cached_path)
             except Exception:
@@ -7591,6 +7591,10 @@ class SpoffTUI(App):
         )
 
     def _bulk_download_playlist(self, playlist: Dict[str, Any]):
+        if getattr(self, "_bulk_download_in_progress", False):
+            self.notify_user("Bulk download already in progress. Please wait for it to complete.")
+            return
+
         name = playlist.get("name") or "Playlist"
         tracks = list(playlist.get("tracks") or [])
         if not tracks:
@@ -7599,24 +7603,15 @@ class SpoffTUI(App):
 
         needed: List[Dict[str, Any]] = []
         for t in tracks:
-            tid = t.get("id") or str(hash(t.get("title", "") + t.get("artist", "")))
+            tid = stable_track_id(t)
             c = get_cached_track_path(tid)
-            if c and c.exists() and c.stat().st_size > 10000:
-                try:
-                    register_cached_track(tid, t, c)
-                except Exception:
-                    pass
-            else:
+            if not c:
                 needed.append(t)
 
         total = len(tracks)
         already_cached = total - len(needed)
         if not needed:
             self.notify_user(f"All {total} tracks in '{name}' are already cached offline.")
-            return
-
-        if getattr(self, "_bulk_download_in_progress", False):
-            self.notify_user("Bulk download already in progress. Please wait for it to complete.")
             return
 
         self._bulk_download_in_progress = True
@@ -7631,10 +7626,40 @@ class SpoffTUI(App):
             success_count = 0
             fail_count = 0
             try:
+                # Batch register any existing cached tracks with new metadata in background
+                try:
+                    with storage_transaction():
+                        idx = load_offline_index()
+                        idx_changed = False
+                        for t in tracks:
+                            tid = stable_track_id(t)
+                            c = get_cached_track_path(tid)
+                            if c:
+                                entry = idx.get(tid)
+                                if not entry or entry.get("title") != t.get("title") or entry.get("artist") != t.get("artist"):
+                                    try:
+                                        dur_ms = int(float(t.get("duration_ms") or 0))
+                                    except (ValueError, TypeError):
+                                        dur_ms = 0
+                                    idx[tid] = {
+                                        "id": tid,
+                                        "title": t.get("title", "Unknown"),
+                                        "artist": t.get("artist", "Unknown"),
+                                        "duration_ms": dur_ms,
+                                        "filepath": str(c.resolve()),
+                                        "size_bytes": c.stat().st_size,
+                                        "is_offline": True,
+                                    }
+                                    idx_changed = True
+                        if idx_changed:
+                            save_offline_index(idx)
+                except Exception:
+                    pass
+
                 for idx, t in enumerate(needed, 1):
                     t_title = t.get("title") or "Unknown"
                     t_artist = t.get("artist") or "Unknown"
-                    t_id = t.get("id") or str(hash(t_title + t_artist))
+                    t_id = stable_track_id(t)
                     t_url = t.get("url")
                     if not t_url and t_id and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
                         t_url = f"https://www.youtube.com/watch?v={t_id}"
@@ -8234,6 +8259,8 @@ class SpoffTUI(App):
         # MPRIS Desktop Media Integration
         if self.mpris:
             self.mpris.update_position(pos)
+            if dur > 0:
+                self.mpris.update_duration(dur)
             self.mpris.update_volume(self.volume)
             self.mpris.update_status(curr is not None, is_paused)
 
@@ -8594,12 +8621,21 @@ class SpoffTUI(App):
 
     @work(thread=True)
     def start_playback(self, track: Dict[str, Any], req_id: int):
-        t_id = track.get("id") or str(hash(track.get("title", "") + track.get("artist", "")))
+        def is_current():
+            return (not getattr(self, "_closing", False)
+                    and req_id == getattr(self, "_play_request_id", None))
+
+        if not is_current():
+            return
+
+        t_id = stable_track_id(track)
         title = track.get("title", "Unknown")
         artist = track.get("artist", "Unknown")
 
         # Asynchronously fetch synced lyrics in background
         def _fetch_lyr_bg():
+            if not is_current():
+                return
             try:
                 dur_ms = track.get("duration_ms")
                 lyr = fetch_lyrics(title, artist, dur_ms)
@@ -8607,7 +8643,7 @@ class SpoffTUI(App):
                 logger.exception("Failed to fetch lyrics")
                 lyr = None
             def _publish_lyrics():
-                if req_id == getattr(self, "_play_request_id", None):
+                if is_current():
                     self.current_lyrics = lyr
                     if self.active_tab == "lyrics":
                         self.render_lyrics()
@@ -8620,7 +8656,7 @@ class SpoffTUI(App):
         except Exception:
             logger.exception("Failed to get cached artwork")
             cached_art = {}
-        if cached_art:
+        if cached_art and is_current():
             if not track.get("art_url") and cached_art.get("art_url"):
                 track["art_url"] = cached_art["art_url"]
             if not track.get("artist_art_url") and cached_art.get("artist_art_url"):
@@ -8629,7 +8665,7 @@ class SpoffTUI(App):
                 track["album_art_url"] = cached_art["album_art_url"]
 
         def _fetch_art_bg():
-            if req_id != getattr(self, "_play_request_id", None):
+            if not is_current():
                 return
             try:
                 art_dict = resolve_track_artwork(track)
@@ -8638,7 +8674,7 @@ class SpoffTUI(App):
                 art_dict = {}
             if art_dict and (art_dict.get("art_url") or art_dict.get("artist_art_url") or art_dict.get("album_art_url")):
                 def _publish_art():
-                    if req_id != getattr(self, "_play_request_id", None):
+                    if not is_current():
                         return
                     if not track.get("art_url") and art_dict.get("art_url"):
                         track["art_url"] = art_dict["art_url"]
@@ -8657,6 +8693,8 @@ class SpoffTUI(App):
 
         cached = get_cached_track_path(t_id)
         if cached:
+            if not is_current():
+                return
             try:
                 register_cached_track(t_id, track, cached)
             except Exception:
@@ -8664,12 +8702,15 @@ class SpoffTUI(App):
             self.call_from_thread(self._commit_playback, req_id, str(cached), track)
             return
 
+        if not is_current():
+            return
+
         self.notify_user(f"Connecting stream for '{title}'...")
 
         track_url = playback_direct_url(track)
 
         res = search_and_resolve_stream(title, artist, direct_url=track_url)
-        if getattr(self, "_closing", False) or req_id != getattr(self, "_play_request_id", None):
+        if not is_current():
             return
 
         if not res or not res.get("stream_url"):
@@ -8773,16 +8814,24 @@ def main():
     elif any(arg in sys.argv for arg in ("--notifs", "--notif", "--notifications", "--enable-notifications", "--notifications=on")):
         notif_arg = True
 
+    exit_code = 0
     try:
         app = SpoffTUI(visualizer_enabled=vis_arg, notifications_enabled=notif_arg)
         app.run()
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        logger.critical(f"Fatal application error: {e}", exc_info=True)
+        exit_code = 1
+        raise
     finally:
         try:
             if app:
                 app._cleanup_on_exit()
         except Exception:
             pass
-        os._exit(0)
+        if exit_code != 0:
+            sys.exit(exit_code)
 
 if __name__ == "__main__":
     main()

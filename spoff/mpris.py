@@ -19,6 +19,15 @@ except Exception as e:
     GLib = None  # type: ignore
     HAS_DBUS = False
 
+try:
+    from .storage import stable_track_id
+except ImportError:
+    try:
+        from storage import stable_track_id
+    except ImportError:
+        def stable_track_id(t):
+            return str(t.get("id") or hash(t.get("title", "") + t.get("artist", "")))
+
 class SpoffMPRISDbus:
     """
     D-Bus object implementing the org.mpris.MediaPlayer2 and
@@ -233,7 +242,7 @@ class SpoffMPRISDbus:
         length = length.unpack() if (length is not None and hasattr(length, "unpack")) else length
         if not self.CanSeek or track_id != current or pos_us < 0:
             return
-        if length is not None and pos_us > length:
+        if length is not None and length > 0 and pos_us > length:
             return
         callback = self.callbacks.get("set_position")
         if callback:
@@ -338,7 +347,7 @@ class MPRISService:
             })
             return
 
-        raw_id = str(track.get("id") or hash(track.get("title", "") + track.get("artist", "")))
+        raw_id = stable_track_id(track)
         hex_id = raw_id.encode("utf-8").hex()
         track_obj_path = f"/org/mpris/MediaPlayer2/track/t_{hex_id}"
 
@@ -357,8 +366,9 @@ class MPRISService:
             "mpris:trackid": GLib.Variant("o", track_obj_path),
             "xesam:title": GLib.Variant("s", str(title)),
             "xesam:artist": GLib.Variant("as", artists_list),
-            "mpris:length": GLib.Variant("x", max(0, dur_us))
         }
+        if dur_us > 0:
+            meta["mpris:length"] = GLib.Variant("x", dur_us)
 
         art_url = track.get("art_url") or track.get("thumbnail") or track.get("cover_url")
         artist_art_url = track.get("artist_art_url")
@@ -426,6 +436,26 @@ class MPRISService:
         if not self.dbus_obj or pos_sec is None or not math.isfinite(pos_sec):
             return
         self.dbus_obj.Position = max(0, int(pos_sec * 1_000_000))
+
+    def update_duration(self, dur_sec: float) -> None:
+        if not self.dbus_obj or GLib is None or dur_sec is None or not math.isfinite(dur_sec) or dur_sec <= 0:
+            return
+        dur_us = int(dur_sec * 1_000_000)
+        current_meta = getattr(self.dbus_obj, "Metadata", None)
+        if not isinstance(current_meta, dict):
+            return
+        curr_len = current_meta.get("mpris:length")
+        if curr_len is not None:
+            try:
+                curr_val = curr_len.unpack() if hasattr(curr_len, "unpack") else curr_len
+                if abs(curr_val - dur_us) < 1_000_000:
+                    return
+            except Exception:
+                pass
+        meta = dict(current_meta)
+        meta["mpris:length"] = GLib.Variant("x", dur_us)
+        self.dbus_obj.Metadata = meta
+        self._emit_changed({"Metadata": meta})
 
     def update_volume(self, vol_int: int) -> None:
         if not HAS_DBUS or not self.dbus_obj or GLib is None:

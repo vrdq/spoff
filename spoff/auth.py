@@ -17,13 +17,13 @@ try:
     from .storage import (
         DATA_DIR, load_saved_playlists, save_saved_playlists, storage_transaction, mutate_playlist,
         get_deleted_spotify_playlist_ids, record_deleted_spotify_playlist_id,
-        load_liked_songs, save_liked_songs
+        load_liked_songs, save_liked_songs, stable_track_id
     )
 except ImportError:
     from storage import (
         DATA_DIR, load_saved_playlists, save_saved_playlists, storage_transaction, mutate_playlist,
         get_deleted_spotify_playlist_ids, record_deleted_spotify_playlist_id,
-        load_liked_songs, save_liked_songs
+        load_liked_songs, save_liked_songs, stable_track_id
     )
 
 logger = logging.getLogger("auth")
@@ -475,7 +475,7 @@ def fetch_playlist_tracks(token: str, playlist_id: str) -> Optional[List[Dict[st
             if not entry or not entry.get("track"):
                 continue
             t = entry["track"]
-            t_id = t.get("id") or str(hash(t.get("name", "") + str(t.get("artists", []))))
+            t_id = t.get("id") or stable_track_id(t)
             artists = ", ".join(a.get("name", "Unknown") for a in t.get("artists", []))
             album_info = t.get("album") or {}
             album_name = album_info.get("name")
@@ -509,7 +509,7 @@ def fetch_liked_songs(token: str, max_tracks: Optional[int] = 200) -> Optional[L
             if not entry or not entry.get("track"):
                 continue
             t = entry["track"]
-            t_id = t.get("id") or str(hash(t.get("name", "") + str(t.get("artists", []))))
+            t_id = t.get("id") or stable_track_id(t)
             artists = ", ".join(a.get("name", "Unknown") for a in t.get("artists", []))
             album_info = t.get("album") or {}
             album_name = album_info.get("name")
@@ -640,14 +640,10 @@ def merge_spotify_and_client_tracks(
         return list(spotify_tracks)
 
     merged: List[Dict[str, Any]] = []
-    seen_client_keys = set()
 
     # Top client tracks preceding any Spotify track
     for ct in client_buckets.pop(None, []):
-        ckey = ct.get("id") or (str(ct.get("title", "")).strip().lower(), str(ct.get("artist", "")).strip().lower())
-        if ckey not in seen_client_keys:
-            seen_client_keys.add(ckey)
-            merged.append(ct)
+        merged.append(ct)
 
     # Fresh Spotify tracks with their anchored client tracks
     for st in spotify_tracks:
@@ -663,18 +659,12 @@ def merge_spotify_and_client_tracks(
 
         if matched_anchor is not None:
             for ct in client_buckets.pop(matched_anchor, []):
-                ckey = ct.get("id") or (str(ct.get("title", "")).strip().lower(), str(ct.get("artist", "")).strip().lower())
-                if ckey not in seen_client_keys:
-                    seen_client_keys.add(ckey)
-                    merged.append(ct)
+                merged.append(ct)
 
     # Any remaining client tracks whose Spotify anchors were removed on Spotify
     for remaining_list in client_buckets.values():
         for ct in remaining_list:
-            ckey = ct.get("id") or (str(ct.get("title", "")).strip().lower(), str(ct.get("artist", "")).strip().lower())
-            if ckey not in seen_client_keys:
-                seen_client_keys.add(ckey)
-                merged.append(ct)
+            merged.append(ct)
 
     return merged
 
@@ -732,9 +722,6 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
                 synced_count += 1
             else:
                 logger.info("Local liked songs modified during sync fetch; preserving local edits.")
-
-        # Ensure spotify_liked_songs is not in current_playlists
-        current_playlists = [p for p in current_playlists if p.get("id") != "spotify_liked_songs"]
 
         for pl, tracks in fetched_remote:
             p_id = pl.get("id")
