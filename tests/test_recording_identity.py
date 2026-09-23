@@ -242,3 +242,23 @@ def test_eleven_character_title_is_not_treated_as_a_video_id():
 
 def test_malformed_direct_url_fails_without_crashing():
     assert streamer.search_and_resolve_stream('Song','Artist','https://[') is None
+
+
+@pytest.mark.parametrize('title,duration,accepted', [
+    ('Crave You (feat. Giselle)', '3:55', True),
+    ('Crave You (feat. Giselle)', '4:19', False),
+    ('Crave You (Adventure Club Remix)', '3:57', False),
+    ('Crave You (Live) (feat. Giselle)', '3:55', False),
+    ('Crave You (feat. Someone Else)', '3:55', False),
+])
+def test_crave_you_feature_credit_keeps_recording_checks(title, duration, accepted):
+    candidate = song(title, artist='Flight Facilities', duration=duration)
+    assert streamer._matches_recording(candidate, 'Crave You',
+                                      'Flight Facilities, Giselle', 234.776) is accepted
+
+
+def test_feature_credit_can_move_from_requested_title_to_candidate_artists():
+    candidate = {'title': 'Crave You', 'artists': [{'name': 'Flight Facilities'},
+                 {'name': 'Giselle'}], 'duration': 235}
+    assert streamer._matches_recording(candidate, 'Crave You (feat. Giselle)',
+                                      'Flight Facilities', 234.776)

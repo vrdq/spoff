@@ -77,3 +77,23 @@ Download thread creation failure now returns through the existing error callback
 Bulk repair of an existing offline entry now retains its source URL, resolved recording URL/title, album and other stored fields when refreshing its display metadata. Previously the replacement dictionary discarded those fields. A regression test verifies the persisted entry after the real bulk-worker control flow.
 
 Validation: **358 passed, 1 skipped, 4 subtests passed**; `git diff --check` clean. Further reliability review remains active.
+
+### Crave You: featured credit mismatch
+
+Spotify track `4MWmpfC07n0lJ9lwOFXrak` has title `Crave You`, artists
+`Flight Facilities, Giselle`, and duration 234776 ms. YouTube Music returns
+`Crave You (feat. Giselle)` with Flight Facilities in the artist field and
+235 seconds duration. Exact normalized title comparison rejected this valid
+candidate and left playback unable to resolve.
+
+The shared matcher now removes parenthesized/bracketed featured credits only
+when those names are present in the other provider's artist metadata. Version
+qualifiers remain significant, and performer and duration checks still apply.
+Regression coverage includes the matching recording, a longer recording,
+Adventure Club remix, live version, unknown featured performer, and reversed
+credit placement. Live stream resolution succeeded for video `xjj_OVvVQFc`,
+with title `Crave You (feat. Giselle)` and duration 235 seconds. This verifies
+stream resolution, not a listening comparison or full download.
+
+Validation: 364 tests passed, 1 skipped, 4 subtests passed; `git diff --check`
+passed.

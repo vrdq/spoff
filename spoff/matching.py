@@ -37,7 +37,23 @@ def _matches_recording(item: Dict[str, Any], title: str, artist: str, duration: 
         if _normalized_name(prefix) in requested_artists:
             candidate_artists.append(prefix)
             candidate_title = rest
-    if _normalized_name(candidate_title) != _normalized_name(title):
+    def title_without_known_credits(value, credits):
+        # Providers move featured performers between title and artist fields.
+        # Remove only explicitly credited names; keep every version qualifier.
+        def replace(match):
+            names = re.split(r"\s*(?:,|&|\band\b)\s*", match.group(1), flags=re.I)
+            if names and all(_normalized_name(name) in credits for name in names):
+                return " "
+            return match.group(0)
+
+        return re.sub(r"[\[(](?:feat\.?|ft\.?|featuring)\s+([^\[\]()]+)[\])]",
+                      replace, value, flags=re.I)
+
+    normalized_title = title_without_known_credits(title, {
+        _normalized_name(a) for a in candidate_artists if a
+    })
+    candidate_title = title_without_known_credits(candidate_title, set(requested_artists))
+    if _normalized_name(candidate_title) != _normalized_name(normalized_title):
         return False
     if not requested_artists or not any(
         _normalized_name(re.sub(r"(?i)\s*-\s*topic$", "", a)) in requested_artists
@@ -48,5 +64,4 @@ def _matches_recording(item: Dict[str, Any], title: str, artist: str, duration: 
     if duration and (not candidate_duration or abs(candidate_duration - duration) > max(8.0, duration * 0.04)):
         return False
     return True
-
 
