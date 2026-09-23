@@ -45,3 +45,11 @@ The commit also preserves the checkout's existing direct-link search, playlist d
 Metadata matching is conservative, not audio fingerprinting. Equal-title/equal-duration recordings can still be ambiguous across catalogs. Ambiguous or unavailable matches now fail rather than deliberately taking an unchecked substitute. This may reject some legitimate uploads with unusual metadata. Existing same-duration bad caches cannot be reliably identified by a duration probe alone; missing ffprobe also prevents that check. Exact selected YouTube URLs do not require a cross-catalog match.
 
 Provider availability, geographic restrictions, authentication throttling, and yt-dlp extractor changes remain external failure sources. The suite does not simulate every network outage or every desktop/D-Bus environment. No authenticated remote library was modified as part of validation. Shutdown tests cover normal and rapid playback lifecycle; abrupt process termination cannot guarantee completion of outstanding network edits.
+
+## Follow-up: download completion ownership
+
+A further lifecycle review found that download futures invoked callbacks before the job released its semaphore slot and active-job registration. A callback chaining another download could receive a false capacity error. Jobs now retire their registration and release the slot before delivering success or failure. Tests use a one-slot semaphore and chain a second blocking download from both callback paths, verifying exactly one slot is returned.
+
+Completion notification exceptions also previously called the download-error callback, incorrectly presenting successfully saved audio as failed. Callback exceptions are now logged separately from transfer errors. The same delivery function handles subscribers waiting on an existing download.
+
+Validation after these fixes: **343 passed, 1 skipped, 4 subtests passed**; `git diff --check` clean. These are additional verified fixes; the broader reliability goal remains active.

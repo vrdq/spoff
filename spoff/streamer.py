@@ -334,21 +334,32 @@ def download_track_to_cache(
     def _deliver(fut: Future):
         try:
             res_p = fut.result()
-            if on_complete:
-                on_complete(res_p)
-        except Exception as ex:
+        except Exception as exc:
             if on_error:
-                on_error(ex)
+                try:
+                    on_error(exc)
+                except Exception:
+                    logger.exception("Download error callback failed for %s", val_id)
+            return
+        if on_complete:
+            try:
+                on_complete(res_p)
+            except Exception:
+                # A UI notification failure does not make downloaded audio fail.
+                logger.exception("Download completion callback failed for %s", val_id)
 
     if not is_new:
         if blocking:
             try:
-                res_p = future.result(timeout=300)
-                if on_complete:
-                    on_complete(res_p)
-            except Exception as ex:
-                if on_error:
-                    on_error(ex)
+                future.result(timeout=300)
+            except TimeoutError as exc:
+                if not future.done():
+                    if on_error:
+                        on_error(exc)
+                    return None
+            except Exception:
+                pass  # _deliver handles the completed failure exactly once.
+            _deliver(future)
             return None
         else:
             future.add_done_callback(_deliver)
@@ -357,22 +368,28 @@ def download_track_to_cache(
     future.add_done_callback(_deliver)
 
     def _worker():
+        result = None
+        error = None
         try:
-            final_path = _run_download_process(
+            result = _run_download_process(
                 val_id, title, artist, direct_url=direct_url, track_meta=track_meta
             )
-            if not future.done():
-                future.set_result(final_path)
-        except Exception as e:
-            logger.error(f"Failed to cache track {val_id}: {e}")
-            if not future.done():
-                future.set_exception(e)
+        except Exception as exc:
+            logger.error("Failed to cache track %s: %s", val_id, exc)
+            error = exc
         finally:
+            # Future callbacks run synchronously. Retire this job before invoking
+            # them so a completion/error callback can immediately start another.
             with _download_lock:
                 _active_download_futures.pop(val_id, None)
                 _active_downloads.discard(val_id)
             if acquired_slot:
                 _download_slots.release()
+        if not future.done():
+            if error is not None:
+                future.set_exception(error)
+            else:
+                future.set_result(result)
 
     if blocking:
         _worker()
