@@ -23,16 +23,15 @@ def test_searching_is_independent_of_notifications():
     fake,pill = fake_app(_search_loading_request_id=1, notifications_enabled=False)
     app.SpoffTUI._update_loading_status(fake)
     pill.update.assert_called_with('Searching…')
-    assert pill.display is True
     fake._pending_track={'title':'Song'}
     app.SpoffTUI._update_loading_status(fake)
-    pill.update.assert_called_with('Loading song… · Searching…')
+    pill.update.assert_called_with("Loading 'Song'…")
     fake._search_loading_request_id=None
     app.SpoffTUI._update_loading_status(fake)
-    pill.update.assert_called_with('Loading song…')
+    pill.update.assert_called_with("Loading 'Song'…")
     fake._pending_track=None
     app.SpoffTUI._update_loading_status(fake)
-    assert pill.display is False
+    pill.update.assert_called_with('')
 
 
 def test_search_success_clears_activity():
@@ -40,7 +39,7 @@ def test_search_success_clears_activity():
     with patch.object(app.SpoffTUI,'_run_search'):
         app.SpoffTUI._search_worker.__wrapped__(fake,'song',1,'ytmusic','YouTube Music')
     assert fake._search_loading_request_id is None
-    assert pill.display is False
+    pill.update.assert_called_with('')
 
 
 def test_search_exception_clears_activity_and_reports_failure():
@@ -48,7 +47,7 @@ def test_search_exception_clears_activity_and_reports_failure():
     with patch.object(app.SpoffTUI,'_run_search',side_effect=RuntimeError('provider failed')):
         app.SpoffTUI._search_worker.__wrapped__(fake,'song',1,'ytmusic','YouTube Music')
     assert fake._search_loading_request_id is None
-    assert pill.display is False
+    pill.update.assert_called_with('')
     fake.notify_user.assert_called_once_with('Search failed. Please try again.',force=True)
 
 
@@ -92,7 +91,7 @@ def test_loading_is_visible_above_seek_bar_in_real_layout(size):
             application._search_loading_request_id=1
             application._update_loading_status()
             await pilot.pause()
-            pill=application.query_one('#loading-pill',Static)
+            pill=application.query_one('#notification-line',Static)
             bar=application.query_one('#playback-bar')
             assert pill.display
             assert pill.region.width >= len('Searching…')
@@ -101,10 +100,91 @@ def test_loading_is_visible_above_seek_bar_in_real_layout(size):
             application._pending_track={'title':'Song'}
             application._update_loading_status()
             await pilot.pause()
-            assert pill.region.width >= len('Loading song… · Searching…')
+            assert str(pill.content) == "Loading 'Song'…"
             application._search_loading_request_id=None
             application._pending_track=None
             application._update_loading_status()
             await pilot.pause()
-            assert not pill.display
+            assert str(pill.content) == ""
+            assert not list(application.query("#loading-pill, #download-pill"))
+            application.set_download_status("Downloading 3/15 from Favorites: Song", channel="bulk")
+            await pilot.pause()
+            assert str(pill.content) == "Downloading 3/15 from Favorites: Song"
+            assert pill.region.y < bar.region.y
+            assert not list(application.query("Toast"))
     asyncio.run(check_layout())
+
+
+def test_download_channels_share_one_line_and_resume_after_completion():
+    fake,bar=fake_app(_thread_id=threading.get_ident())
+    timers=[]
+    fake.set_timer=lambda delay,fn: timers.append(fn)
+    app.SpoffTUI.set_download_status(fake,'Downloading 2/10 from Favorites',channel='bulk')
+    app.SpoffTUI.set_download_status(fake,'Saved Song offline.',channel='single',clear_after=4)
+    bar.update.assert_called_with('Saved Song offline.')
+    timers[0]()
+    bar.update.assert_called_with('Downloading 2/10 from Favorites')
+    assert set(fake._download_statuses) == {'bulk'}
+
+
+def test_foreground_loading_temporarily_replaces_download_progress():
+    fake,bar=fake_app(_thread_id=threading.get_ident())
+    app.SpoffTUI.set_download_status(fake,'Downloading 2/10 from Favorites',channel='bulk')
+    fake._pending_track={'title':'Song'}
+    app.SpoffTUI._render_status_line(fake)
+    bar.update.assert_called_with("Loading 'Song'…")
+    fake._pending_track=None
+    app.SpoffTUI._render_status_line(fake)
+    bar.update.assert_called_with('Downloading 2/10 from Favorites')
+
+
+def test_brief_copy_confirmation_resumes_existing_download():
+    fake,bar=fake_app(_thread_id=threading.get_ident())
+    app.SpoffTUI.set_download_status(fake,'Downloading 2/10 from Favorites',channel='bulk')
+    with patch.object(app.time,'monotonic',return_value=100):
+        app.SpoffTUI.notify_user(fake,'Copied song link.',force=True)
+    bar.update.assert_called_with('Copied song link.')
+    with patch.object(app.time,'monotonic',return_value=104):
+        app.SpoffTUI._render_status_line(fake)
+    bar.update.assert_called_with('Downloading 2/10 from Favorites')
+
+
+def test_single_download_emits_no_duplicate_toast():
+    from types import MethodType
+    fake,bar=fake_app(_thread_id=threading.get_ident(),_on_ui=lambda fn,*a,**kw:fn(*a,**kw),
+                      search_results=[],notify=Mock(),set_timer=Mock())
+    fake.set_download_status=MethodType(app.SpoffTUI.set_download_status,fake)
+    with patch.object(app,'get_cached_track_path',return_value=None),patch.object(app,'download_track_to_cache') as download:
+        app.SpoffTUI._download_single_track(fake,{'id':'song','title':'Song','artist':'Artist'})
+        bar.update.assert_called_with("Downloading 'Song'…")
+        download.call_args.kwargs['on_complete']('song.m4a')
+    bar.update.assert_called_with("Saved 'Song' offline.")
+    fake.notify.assert_not_called()
+    fake.query_one.assert_called_with('#notification-line',Static)
+
+
+@pytest.mark.parametrize('already_cached',[False,True])
+def test_bulk_download_runs_and_reports_only_one_status_surface(tmp_path,already_cached):
+    from types import MethodType
+    fake,bar=fake_app(_thread_id=threading.get_ident(),notify=Mock(),set_timer=Mock())
+    fake.set_download_status=MethodType(app.SpoffTUI.set_download_status,fake)
+    cached=tmp_path/'song.m4a'
+    cached.write_bytes(b'audio')
+    tracks=[{'id':'song','title':'Song','artist':'Artist'}]
+    def complete_download(*args,**kwargs):
+        kwargs['on_complete'](cached)
+    def inline_thread(*args,**kwargs):
+        return SimpleNamespace(start=kwargs['target'])
+    with patch.object(app.threading,'Thread',side_effect=inline_thread), \
+         patch.object(app,'get_cached_track_path',return_value=cached if already_cached else None), \
+         patch.object(app,'cached_audio_matches_duration',return_value=True), \
+         patch.object(app,'load_offline_index',return_value={}), \
+         patch.object(app,'save_offline_index'), \
+         patch.object(app,'download_track_to_cache',side_effect=complete_download) as download:
+        app.SpoffTUI._bulk_download_playlist(fake,{'name':'Favorites','tracks':tracks})
+    assert not fake._bulk_download_in_progress
+    assert download.call_count == (0 if already_cached else 1)
+    expected="'Favorites' is already available offline (1 song)." if already_cached else "Saved 1/1 song from 'Favorites' offline."
+    bar.update.assert_called_with(expected)
+    fake.notify.assert_not_called()
+    assert all(call.args[0]=='#notification-line' for call in fake.query_one.call_args_list)

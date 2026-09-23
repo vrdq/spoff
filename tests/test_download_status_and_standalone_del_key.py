@@ -1,5 +1,6 @@
 import unittest
 from unittest.mock import Mock, patch
+from textual.widgets import Static
 from spoff.app import (
     canonicalize_key,
     format_key_display,
@@ -51,21 +52,15 @@ class TestDownloadStatusAndDelKey(unittest.TestCase):
         self.assertFalse(key_matches("del", None, "D"))
         self.assertFalse(key_matches("shift+delete", None, "D"))
 
-    def test_set_download_status_updates_pill_and_notif(self):
-        app = Mock(spec=SpoffTUI)
-        app._thread_id = 12345
-        app.notifications_enabled = True
-        app._download_pill_text = ""
-        mock_pill = Mock()
-        mock_notif = Mock()
-        app.query_one = Mock(side_effect=lambda sel, *args: mock_pill if sel == "#download-pill" else mock_notif)
-
-        # Call SpoffTUI.set_download_status on our mocked app instance
+    def test_download_progress_uses_only_existing_status_line(self):
+        from types import SimpleNamespace
+        status = Mock()
+        app = SimpleNamespace(_thread_id=12345, notifications_enabled=False,
+                              query_one=Mock(return_value=status))
         with patch("threading.get_ident", return_value=12345):
-            SpoffTUI.set_download_status(app, "[bold #569f68]⬇ INSTALLING (3/15)[/]", "Bulk installing track 3...")
-            self.assertEqual(app._download_pill_text, "[bold #569f68]⬇ INSTALLING (3/15)[/]")
-            mock_pill.update.assert_called_with("[bold #569f68]⬇ INSTALLING (3/15)[/]")
-            app.notify_user.assert_called_with("Bulk installing track 3...", force=True)
+            SpoffTUI.set_download_status(app, "Downloading 3/15 from 'Favorites': Song")
+        app.query_one.assert_called_once_with("#notification-line", Static)
+        status.update.assert_called_once_with("Downloading 3/15 from 'Favorites': Song")
 
 
 if __name__ == "__main__":

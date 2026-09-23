@@ -24,7 +24,7 @@ from rich.table import Table
 from rich.text import Text
 from textual import events, work
 from textual.css.query import NoMatches
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.screen import ModalScreen
 from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
@@ -2250,8 +2250,6 @@ class UpdateModal(SafeModalScreen[bool]):
             self.query_one("#update-status", Static).update("[bold #c4a768]Pulling latest changes from GitHub...[/]")
         except Exception:
             pass
-        if hasattr(self.app, "set_download_status"):
-            self.app.set_download_status("[bold #c4a768]▲ UPDATING...[/]", "Updating Spoff from GitHub repository...")
 
         def _worker():
             try:
@@ -2264,16 +2262,12 @@ class UpdateModal(SafeModalScreen[bool]):
                 try:
                     if ok:
                         self._update_complete = True
-                        if hasattr(self.app, "set_download_status"):
-                            self.app.set_download_status("[bold #569f68]✓ UPDATED[/]", "Updated to latest version! Please restart Spoff.", clear_after=4.0)
                         try:
                             self.query_one("#update-status", Static).update(f"[bold #569f68]{escape(msg)} Restart Spoff to apply.[/]")
                             self.query_one("#update-hint", Static).update("[dim]Press Esc or Enter to close[/dim]")
                         except Exception:
                             pass
                     else:
-                        if hasattr(self.app, "set_download_status"):
-                            self.app.set_download_status("[bold #e06c75]✗ UPDATE FAILED[/]", f"Update failed: {msg}", clear_after=4.0)
                         try:
                             self.query_one("#update-status", Static).update(f"[bold #c47676]{escape(msg)}[/]")
                         except Exception:
@@ -3845,20 +3839,9 @@ class SpoffTUI(App):
         text-style: bold;
     }
 
-    #shuf-pill, #rep-pill, #download-pill, #loading-pill {
+    #shuf-pill, #rep-pill {
         width: auto;
         margin-right: 1;
-    }
-
-    #loading-pill {
-        color: #c4a768;
-        text-style: bold;
-        display: none;
-    }
-
-    #download-pill {
-        color: #569f68;
-        text-style: bold;
     }
 
     /* BOTTOM TRANSPORT DECK */
@@ -4030,7 +4013,7 @@ class SpoffTUI(App):
 
     #notification-line {
         height: 1;
-        color: #666666;
+        color: #929292;
         text-style: italic;
     }
 
@@ -4979,9 +4962,10 @@ class SpoffTUI(App):
         self.current_index: int = -1
         self._pending_track: Optional[Dict[str, Any]] = None
         self._bulk_download_in_progress: bool = False
-        self._download_pill_text: str = ""
+        self._download_statuses: Dict[str, Tuple[str, object]] = {}
+        self._status_message: str = ""
+        self._status_notice_until: float = 0.0
         self._active_single_downloads: int = 0
-        self._last_dl_status_stamp: float = 0.0
         self.playlists: List[Dict[str, Any]] = []
         self.current_playlist_tracks: List[Dict[str, Any]] = []
         self.current_playlist_id: Optional[str] = None
@@ -5091,8 +5075,9 @@ class SpoffTUI(App):
         if not self.notifications_enabled:
             def _clear():
                 try:
-                    bar = self.query_one("#notification-line", Static)
-                    bar.update("")
+                    self._status_message = ""
+                    self._status_notice_until = 0.0
+                    SpoffTUI._render_status_line(self)
                 except Exception:
                     pass
             if threading.get_ident() == getattr(self, "_thread_id", None):
@@ -5492,8 +5477,6 @@ class SpoffTUI(App):
                 yield Static("[dim]No track playing[/dim]", id="deck-track")
                 yield Static("", id="deck-stats-pill")
                 yield VisualizerWidget(self.visualizer, id="deck-visualizer")
-                yield Static("", id="loading-pill", markup=False)
-                yield Static("", id="download-pill")
                 yield Static("", id="shuf-pill")
                 yield Static("", id="rep-pill")
             with Horizontal(id="deck-line-2"):
@@ -5755,15 +5738,31 @@ class SpoffTUI(App):
             return
         return super().notify(*args, **kwargs)
 
+    def _render_status_line(self) -> None:
+        """Use one quiet status surface; resume background progress after notices."""
+        pending = getattr(self, "_pending_track", None)
+        if pending is not None:
+            title = pending.get("title") or "song"
+            text = f"Loading '{title}'…"
+        elif getattr(self, "_search_loading_request_id", None) is not None:
+            text = getattr(self, "_search_status_text", "Searching…")
+        elif time.monotonic() < getattr(self, "_status_notice_until", 0.0):
+            text = getattr(self, "_status_message", "")
+        else:
+            downloads = getattr(self, "_download_statuses", {})
+            text = next(reversed(downloads.values()))[0] if downloads else getattr(self, "_status_message", "")
+        try:
+            self.query_one("#notification-line", Static).update(escape(text))
+        except (NoMatches, AttributeError, ScreenStackError):
+            pass
+
     def notify_user(self, text: str, force: bool = False):
         if text and not force and not getattr(self, "notifications_enabled", True):
             return
         def _update():
-            try:
-                bar = self.query_one("#notification-line", Static)
-                bar.update(escape(text))
-            except Exception:
-                pass
+            self._status_message = text
+            self._status_notice_until = time.monotonic() + 3 if text else 0.0
+            SpoffTUI._render_status_line(self)
         if threading.get_ident() == getattr(self, "_thread_id", None):
             _update()
         else:
@@ -5773,47 +5772,28 @@ class SpoffTUI(App):
                 pass
 
     def _update_loading_status(self) -> None:
-        """Render request-owned activity separately from transient notifications."""
-        if not getattr(self, "_is_mounted", False):
-            return
-        loading_song = getattr(self, "_pending_track", None) is not None
-        searching = getattr(self, "_search_loading_request_id", None) is not None
-        labels = []
-        if loading_song:
-            labels.append("Loading song…")
-        if searching:
-            labels.append("Searching…")
-        try:
-            pill = self.query_one("#loading-pill", Static)
-            pill.update(" · ".join(labels))
-            pill.display = bool(labels)
-        except NoMatches:
-            pass  # The screen may not have mounted yet.
+        if getattr(self, "_is_mounted", False):
+            SpoffTUI._render_status_line(self)
 
-    def set_download_status(self, pill_text: str, notif_text: Optional[str] = None, clear_after: Optional[float] = None) -> None:
-        """Updates the download indicator badge directly above the seek bar and the notification line."""
+    def set_download_status(self, text: str, clear_after: Optional[float] = None, *, channel: str = "download") -> None:
+        """Show download progress in the existing grey line, without badges/toasts."""
         def _update():
-            self._download_pill_text = pill_text
+            statuses = getattr(self, "_download_statuses", None)
+            if statuses is None:
+                statuses = self._download_statuses = {}
             stamp = object()
-            self._last_dl_status_stamp = stamp
-            try:
-                self.query_one("#download-pill", Static).update(pill_text)
-            except Exception:
-                pass
-            if notif_text:
-                self.notify_user(notif_text, force=True)
+            statuses.pop(channel, None)
+            statuses[channel] = (text, stamp)
+            self._status_message = ""
+            self._status_notice_until = 0.0
+            SpoffTUI._render_status_line(self)
             if clear_after:
                 def _clear():
-                    if getattr(self, "_last_dl_status_stamp", 0) == stamp:
-                        self._download_pill_text = ""
-                        try:
-                            self.query_one("#download-pill", Static).update("")
-                        except Exception:
-                            pass
-                try:
-                    self.set_timer(clear_after, _clear)
-                except Exception:
-                    pass
+                    current = statuses.get(channel)
+                    if current is not None and current[1] is stamp:
+                        statuses.pop(channel)
+                        SpoffTUI._render_status_line(self)
+                self.set_timer(clear_after, _clear)
 
         if threading.get_ident() == getattr(self, "_thread_id", None):
             _update()
@@ -7869,7 +7849,6 @@ class SpoffTUI(App):
             return
 
         title = track.get("title", "Unknown Track")
-        artist = track.get("artist", "Unknown Artist")
         share_url, source_label = resolve_track_url(track)
 
         if not share_url:
@@ -7880,11 +7859,6 @@ class SpoffTUI(App):
 
         if copied:
             self.notify_user(f"Copied {source_label} link for '{title}' to clipboard")
-            try:
-                msg = f"[bold #ffffff]{escape_markup(title)}[/]  [#666666]•[/]  [#aaaaaa]{escape_markup(artist)}[/]\n[#666666]{escape_markup(share_url)}[/]"
-                self.notify(msg, title="✓  Copied to clipboard", timeout=3.0)
-            except Exception:
-                pass
         else:
             self.notify_user(f"Share link: {share_url}")
 
@@ -7939,9 +7913,6 @@ class SpoffTUI(App):
             return
 
         name = target_pl.get("name", "Playlist")
-        tracks = target_pl.get("tracks") or []
-        track_count = len(tracks)
-        count_str = f"{track_count} {'track' if track_count == 1 else 'tracks'}"
 
         share_url, source_label = resolve_playlist_url(target_pl, default_engine=self.search_engine)
         if not share_url:
@@ -7952,11 +7923,6 @@ class SpoffTUI(App):
 
         if copied:
             self.notify_user(f"Copied {source_label} link for '{name}' to clipboard")
-            try:
-                msg = f"[bold #ffffff]{escape_markup(name)}[/]  [#666666]•[/]  [#aaaaaa]{count_str}[/]\n[#666666]{escape_markup(share_url)}[/]"
-                self.notify(msg, title="✓  Copied to clipboard", timeout=3.0)
-            except Exception:
-                pass
         else:
             self.notify_user(f"Share link: {share_url}")
 
@@ -8044,11 +8010,11 @@ class SpoffTUI(App):
             self.notify_user("No playlist selected to download.")
 
     def _download_single_track(self, track: Dict[str, Any]):
-        def _dl_status(pill_text: str, notif_text: Optional[str] = None, clear_after: Optional[float] = None):
+        def _dl_status(text: str, clear_after: Optional[float] = None):
             if hasattr(self, "set_download_status"):
-                self.set_download_status(pill_text, notif_text, clear_after)
-            elif notif_text and hasattr(self, "notify_user"):
-                self.notify_user(notif_text)
+                self.set_download_status(text, clear_after, channel="single")
+            else:
+                self.notify_user(text, force=True)
 
         t_id = stable_track_id(track)
         title = track.get("title") or "Unknown Track"
@@ -8062,7 +8028,11 @@ class SpoffTUI(App):
                 pass
             if self.active_tab == "offline":
                 self.render_tracks(list(load_offline_index().values()))
-            _dl_status("[bold #569f68]✓ CACHED[/]", f"'{title}' is already cached offline.", clear_after=2.5)
+            remaining = getattr(self, "_active_single_downloads", 0)
+            if remaining:
+                _dl_status(f"'{title}' is already offline. {remaining} downloads remaining…")
+            else:
+                _dl_status(f"'{title}' is already available offline.", clear_after=3.0)
             return
 
         track_url = track.get("url")
@@ -8070,25 +8040,16 @@ class SpoffTUI(App):
             track_url = f"https://www.youtube.com/watch?v={t_id}"
 
         self._active_single_downloads = getattr(self, "_active_single_downloads", 0) + 1
-        dl_cnt = self._active_single_downloads
-        dl_badge = f"[bold #569f68]⬇ INSTALLING ({dl_cnt})[/]" if dl_cnt > 1 else "[bold #569f68]⬇ INSTALLING[/]"
-        _dl_status(dl_badge, f"⬇ Installing '{title}' for offline playback...")
-        try:
-            self.notify(f"[bold #ffffff]{escape_markup(title)}[/]\n[#aaaaaa]{escape_markup(artist)}[/]", title="⬇ Downloading for Offline", timeout=2.5)
-        except Exception:
-            pass
+        count = self._active_single_downloads
+        _dl_status(f"Downloading '{title}'…" if count == 1 else f"Downloading {count} songs…")
 
         def _on_done(path):
             self._active_single_downloads = max(0, getattr(self, "_active_single_downloads", 1) - 1)
             rem = self._active_single_downloads
             if rem > 0:
-                _dl_status(f"[bold #569f68]⬇ INSTALLING ({rem})[/]", f"✓ Saved '{title}' to offline library.")
+                _dl_status(f"Saved '{title}' offline. {rem} downloads remaining…")
             else:
-                _dl_status("[bold #569f68]✓ INSTALLED[/]", f"✓ Saved '{title}' to offline library.", clear_after=3.0)
-            try:
-                self._on_ui(self.notify, f"[bold #ffffff]{escape_markup(title)}[/] is ready offline", title="✓ Download Finished", timeout=3.0)
-            except Exception:
-                pass
+                _dl_status(f"Saved '{title}' offline.", clear_after=4.0)
             def _refresh():
                 if self.active_tab == "offline":
                     self.render_tracks(list(load_offline_index().values()))
@@ -8102,13 +8063,9 @@ class SpoffTUI(App):
             self._active_single_downloads = max(0, getattr(self, "_active_single_downloads", 1) - 1)
             rem = self._active_single_downloads
             if rem > 0:
-                _dl_status(f"[bold #569f68]⬇ INSTALLING ({rem})[/]", f"✗ Download failed for '{title}'.")
+                _dl_status(f"Could not download '{title}'. {rem} downloads remaining…")
             else:
-                _dl_status("[bold #e06c75]✗ FAILED[/]", f"✗ Download failed for '{title}'.", clear_after=3.0)
-            try:
-                self._on_ui(self.notify, f"Could not download '{title}'", title="✗ Download Error", timeout=3.0)
-            except Exception:
-                pass
+                _dl_status(f"Could not download '{title}'. Try again.", clear_after=6.0)
 
         download_track_to_cache(
             t_id,
@@ -8134,14 +8091,11 @@ class SpoffTUI(App):
         total = len(tracks)
         self._bulk_download_in_progress = True
 
-        def _dl_status(pill_text: str, notif_text: Optional[str] = None, clear_after: Optional[float] = None):
+        def _dl_status(text: str, clear_after: Optional[float] = None):
             if hasattr(self, "set_download_status"):
-                self.set_download_status(pill_text, notif_text, clear_after)
-            elif notif_text:
-                if hasattr(self, "call_from_thread") and hasattr(self, "notify_user"):
-                    self.call_from_thread(self.notify_user, notif_text)
-                elif hasattr(self, "notify_user"):
-                    self.notify_user(notif_text)
+                self.set_download_status(text, clear_after, channel="bulk")
+            else:
+                self.call_from_thread(self.notify_user, text)
 
         def _worker():
             success_count = 0
@@ -8185,7 +8139,7 @@ class SpoffTUI(App):
                         needed.append(t)
 
                 if not needed:
-                    _dl_status("[bold #569f68]✓ ALL CACHED[/]", f"All {total} tracks in '{name}' are already cached offline.", clear_after=3.0)
+                    _dl_status(f"'{name}' is already available offline ({total} {'song' if total == 1 else 'songs'}).", clear_after=4.0)
                     def _refresh_if_offline():
                         if self.active_tab == "offline":
                             self.render_tracks(list(load_offline_index().values()))
@@ -8193,33 +8147,14 @@ class SpoffTUI(App):
                     return
 
                 to_dl_count = len(needed)
-                already_cached = total - to_dl_count
-                _dl_status(
-                    f"[bold #569f68]⬇ BULK (0/{to_dl_count})[/]",
-                    f"Starting download of {to_dl_count} tracks for '{name}' ({already_cached} already cached)..."
-                )
-                try:
-                    self.call_from_thread(
-                        self.notify,
-                        f"Downloading {to_dl_count} songs from '{name}'",
-                        title="⬇ Bulk Download Started",
-                        timeout=3.5
-                    )
-                except Exception:
-                    pass
-
+                unit = "song" if to_dl_count == 1 else "songs"
+                _dl_status(f"Downloading {to_dl_count} {unit} from '{name}'…")
                 for idx, t in enumerate(needed, 1):
                     t_title = t.get("title") or "Unknown"
                     t_artist = t.get("artist") or "Unknown"
                     t_id = stable_track_id(t)
-                    t_url = t.get("url")
-                    if not t_url and t_id and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
-                        t_url = f"https://www.youtube.com/watch?v={t_id}"
-
-                    _dl_status(
-                        f"[bold #569f68]⬇ BULK ({idx}/{to_dl_count})[/]",
-                        f"⬇ Bulk installing ({idx}/{to_dl_count}): '{t_title}' from '{name}'..."
-                    )
+                    t_url = playback_direct_url(t)
+                    _dl_status(f"Downloading {idx}/{to_dl_count} from '{name}': {t_title}")
 
                     dl_ok = [False]
 
@@ -8247,34 +8182,28 @@ class SpoffTUI(App):
                     else:
                         fail_count += 1
 
-                msg = f"✓ Finished caching '{name}': {success_count}/{to_dl_count} tracks saved."
-                if fail_count > 0:
-                    msg += f" ({fail_count} failed)"
-                final_badge = f"[bold #569f68]✓ BULK DONE ({success_count}/{to_dl_count})[/]" if fail_count == 0 else f"[bold #e5c07b]⚠ BULK ({success_count}/{to_dl_count})[/]"
-                _dl_status(final_badge, msg, clear_after=4.0)
-                try:
-                    self.call_from_thread(
-                        self.notify,
-                        f"Cached {success_count} songs from '{name}' for offline play",
-                        title="✓ Bulk Download Complete",
-                        timeout=4.0
-                    )
-                except Exception:
-                    pass
+                msg = f"Saved {success_count}/{to_dl_count} {unit} from '{name}' offline."
+                if fail_count:
+                    msg += f" {fail_count} failed; try downloading the playlist again."
+                _dl_status(msg, clear_after=6.0 if fail_count else 4.0)
                 def _final_refresh():
                     if self.active_tab == "playlist":
                         self.render_tracks(self.current_playlist_tracks)
                     elif self.active_tab == "offline":
                         self.render_tracks(list(load_offline_index().values()))
                 self.call_from_thread(_final_refresh)
+            except Exception:
+                logger.exception("Bulk download failed for %s", name)
+                _dl_status(f"Could not finish downloading '{name}'. Try again.", clear_after=6.0)
             finally:
                 self._bulk_download_in_progress = False
 
+        _dl_status(f"Checking offline songs in '{name}'…")
         try:
             threading.Thread(target=_worker, daemon=True).start()
         except Exception:
             self._bulk_download_in_progress = False
-            self.notify_user("Failed to start bulk download thread.")
+            _dl_status("Could not start the download. Try again.", clear_after=6.0)
 
     def _get_target_playlist(self) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
         """Resolves the active or selected playlist and its index in self.playlists based on focus/active tab."""
@@ -8798,13 +8727,6 @@ class SpoffTUI(App):
             rep_badge = "[#ffffff]REP-1[/]"
         self.query_one("#rep-pill", Static).update(rep_badge)
 
-        # Update download / installation indicator
-        try:
-            dl_badge = getattr(self, "_download_pill_text", "")
-            self.query_one("#download-pill", Static).update(dl_badge)
-        except Exception:
-            pass
-
         # Update synced lyrics tracking
         if self.active_tab == "lyrics" and self.current_lyrics and self.current_lyrics.get("synced"):
             lines = self.current_lyrics.get("lines", [])
@@ -8926,10 +8848,8 @@ class SpoffTUI(App):
         engine = self.search_engine
         engine_name = "Spotify" if engine == "spotify" else "YouTube Music"
         is_url = bool(re.search(r'^(?:https?://|spotify:)', query.strip()))
-        if is_url:
-            self.notify_user("Resolving track from URL...", force=True)
-        else:
-            self.notify_user(f"Searching {engine_name} for '{query}'...", force=True)
+        self._search_status_text = "Looking up that track link…" if is_url else f"Searching {engine_name} for '{query}'…"
+        self.notify_user(self._search_status_text, force=True)
         self._search_loading_request_id = req_id
         SpoffTUI._update_loading_status(self)
         try:
@@ -9228,7 +9148,7 @@ class SpoffTUI(App):
             self.mpris.update_status(False, False)
             self.mpris.update_track(None)
         self.update_player_hud()
-        self.notify_user("No playable tracks remain in this queue.")
+        self.notify_user("No playable tracks remain in this queue.", force=True)
 
     @work(thread=True)
     def start_playback(self, track: Dict[str, Any], req_id: int):
@@ -9337,7 +9257,7 @@ class SpoffTUI(App):
             return
 
         if not res or not res.get("stream_url"):
-            self.notify_user(f"Could not find a playable matching recording for '{title}'.")
+            self.notify_user(f"Could not find a playable matching recording for '{title}'.", force=True)
             self.call_from_thread(self._playback_failed, req_id, track)
             return
 

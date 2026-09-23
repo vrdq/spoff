@@ -141,7 +141,7 @@ def test_old_download_timer_does_not_clear_new_progress():
     SpoffTUI.set_download_status(fake,'Done',clear_after=2)
     SpoffTUI.set_download_status(fake,'Downloading')
     timers[0]()
-    assert fake._download_pill_text == 'Downloading'
+    assert fake._download_statuses['download'][0] == 'Downloading'
 
 
 def test_local_unlike_during_remote_fetch_is_preserved():

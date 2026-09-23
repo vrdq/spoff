@@ -61,3 +61,11 @@ Added a dedicated status above the seek bar for `Searching…` and `Loading song
 Search and playback preparation now route unexpected exceptions through visible error handling and the existing playback recovery path. Tests cover success, exceptions, overlapping activity, stale completion, and actual Textual layout at 100×30 and 60×20 terminal sizes.
 
 Validation: **350 passed, 1 skipped, 4 subtests passed**. The broader reliability goal remains active.
+
+## Refinement: one grey status line
+
+The separate loading and download badges have been removed following user feedback. The existing grey line above the seek bar is now the single status surface for search, song loading, download progress and results. It displays one message at a time: foreground loading/search takes priority, brief action confirmations can interrupt background progress, and the latest download status resumes afterward. Single and bulk download state remain independently owned so one completion timer cannot clear another operation.
+
+Removed duplicate download and copied-link popups and the update modal's duplicate messages in the obscured playback deck. Download wording now consistently uses “Downloading” and “Saved offline” instead of mixing installing, caching, badges and notifications. The status text remains grey with increased contrast. Bulk cache checking has immediate feedback; an unexpected bulk failure replaces progress with an actionable error.
+
+Validation: **356 passed, 1 skipped, 4 subtests passed**. Tests exercise real single/bulk download control flow with mocked transfers, already-cached playlists, status priority and timer ownership, disabled notifications, and the full Textual layout at 100×30 and 60×20. They verify the old badges are absent and progress occupies the existing line. Pyflakes reports no undefined names; only pre-existing unused imports/locals remain. `git diff --check` is clean.
