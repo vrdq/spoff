@@ -286,11 +286,19 @@ def download_track_to_cache(
     Downloads track to local disk cache. If blocking is True, runs synchronously;
     otherwise spawns a daemon background thread.
     """
+    def report_error(exc):
+        if on_error:
+            try:
+                on_error(exc)
+            except Exception:
+                logger.exception("Download error callback failed for %s", track_id)
+        else:
+            logger.error("Download failed for %s: %s", track_id, exc)
+
     try:
         val_id = validate_track_id(track_id)
-    except ValueError as e:
-        if on_error:
-            on_error(e)
+    except ValueError as exc:
+        report_error(exc)
         return None
 
     cached_path = get_cached_track_path(val_id)
@@ -299,12 +307,17 @@ def download_track_to_cache(
         meta_to_save = dict(track_meta) if track_meta else {"title": title, "artist": artist}
         try:
             register_cached_track(val_id, meta_to_save, cached_path)
-        except Exception:
-            pass
-        if on_complete:
-            on_complete(cached_path)
+            if on_complete:
+                try:
+                    on_complete(cached_path)
+                except Exception:
+                    logger.exception("Download completion callback failed for %s", val_id)
+        except Exception as exc:
+            report_error(exc)
         return None
 
+    # Cache inspection and registration use the same worker/error path as a
+    # fresh download, so filesystem failures cannot escape into the UI thread.
     acquired_slot = False
     busy_error = None
     with _download_lock:
@@ -327,19 +340,14 @@ def download_track_to_cache(
                 acquired_slot = True
 
     if busy_error is not None:
-        if on_error:
-            on_error(busy_error)
+        report_error(busy_error)
         return None
 
     def _deliver(fut: Future):
         try:
             res_p = fut.result()
         except Exception as exc:
-            if on_error:
-                try:
-                    on_error(exc)
-                except Exception:
-                    logger.exception("Download error callback failed for %s", val_id)
+            report_error(exc)
             return
         if on_complete:
             try:
@@ -354,8 +362,7 @@ def download_track_to_cache(
                 future.result(timeout=300)
             except TimeoutError as exc:
                 if not future.done():
-                    if on_error:
-                        on_error(exc)
+                    report_error(exc)
                     return None
             except Exception:
                 pass  # _deliver handles the completed failure exactly once.
@@ -409,4 +416,3 @@ def download_track_to_cache(
             future.set_exception(e)
         logger.exception("Could not start download worker for %s", val_id)
         return None
-

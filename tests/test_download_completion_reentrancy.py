@@ -74,3 +74,36 @@ def test_worker_start_failure_reports_once_without_escaping_to_ui():
         assert slots.acquire(blocking=False)
         assert not slots.acquire(blocking=False)
         slots.release()
+
+
+def test_cached_registration_failure_reports_error_not_success(tmp_path):
+    cached = tmp_path / 'song.m4a'
+    cached.write_bytes(b'audio')
+    completed, errors = [], []
+    with patch.object(streamer, 'get_cached_track_path', return_value=cached), \
+         patch.object(streamer, 'register_cached_track', side_effect=OSError('disk full')):
+        streamer.download_track_to_cache('song', 'Song', 'Artist', blocking=True,
+                                         on_complete=completed.append, on_error=errors.append)
+    assert completed == []
+    assert len(errors) == 1
+    assert str(errors[0]) == 'disk full'
+
+
+def test_cached_success_callback_failure_is_contained(tmp_path):
+    cached = tmp_path / 'song.m4a'
+    cached.write_bytes(b'audio')
+    errors = []
+    def broken_callback(_):
+        raise RuntimeError('unmounted')
+    with patch.object(streamer, 'get_cached_track_path', return_value=cached), \
+         patch.object(streamer, 'register_cached_track'):
+        streamer.download_track_to_cache('song', 'Song', 'Artist', blocking=True,
+                                         on_complete=broken_callback, on_error=errors.append)
+    assert not errors
+
+
+def test_invalid_id_error_callback_failure_is_contained():
+    def broken_callback(_):
+        raise RuntimeError('unmounted')
+    assert streamer.download_track_to_cache('../escape', 'Song', 'Artist',
+                                            on_error=broken_callback) is None

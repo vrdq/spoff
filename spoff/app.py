@@ -9279,11 +9279,19 @@ class SpoffTUI(App):
             return
 
         def on_cached(path):
-            self._on_ui(self.notify_user, f"Saved '{title}' to offline library.")
-            if self.active_tab == "offline":
-                def _refresh():
+            def _publish_cached_state():
+                # Playlist/search rows derive their offline marker from the
+                # cache filesystem. Refresh the currently visible source as
+                # soon as background caching completes; switching to Offline
+                # used to be the only thing that rebuilt these rows.
+                self.notify_user(f"Saved '{title}' to offline library.")
+                if self.active_tab == "offline":
                     self.render_tracks(list(load_offline_index().values()))
-                self._on_ui(_refresh)
+                elif self.active_tab == "playlist":
+                    self.render_tracks(self.current_playlist_tracks)
+                elif self.active_tab == "search":
+                    self.render_tracks(self.search_results)
+            self._on_ui(_publish_cached_state)
 
         download_track_to_cache(t_id, title, artist, on_complete=on_cached, direct_url=track_url, track_meta=track)
 
