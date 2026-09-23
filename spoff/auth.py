@@ -27,9 +27,9 @@ except ImportError:
     )
 
 try:
-    from .matching import _normalized_name, _matches_recording
+    from .matching import _normalized_name, _matches_recording, _tracks_match
 except ImportError:
-    from matching import _normalized_name, _matches_recording
+    from matching import _normalized_name, _matches_recording, _tracks_match
 
 logger = logging.getLogger("auth")
 
@@ -380,6 +380,10 @@ def spotify_api_request(
         }
         if payload is not None:
             req_headers["Content-Type"] = "application/json"
+        elif method.upper() in ("PUT", "POST", "PATCH"):
+            payload = b""
+            req_headers["Content-Length"] = "0"
+
         req = urllib.request.Request(
             url,
             data=payload,
@@ -409,7 +413,7 @@ def spotify_api_request(
             if e.code == 429 and attempt < max_retries:
                 retry_header = e.headers.get("retry-after") or e.headers.get("Retry-After") or "2"
                 try:
-                    retry_sec = min(int(retry_header), 6)
+                    retry_sec = min(max(1, int(retry_header)), 30)
                 except ValueError:
                     retry_sec = 2
                 logger.warning(f"Spotify 429 rate limit on {endpoint}, waiting {retry_sec}s (attempt {attempt+1}/{max_retries})")
@@ -615,30 +619,8 @@ def extract_spotify_playlist_id(pl_data: Any) -> Optional[str]:
 
     return None
 
-def _tracks_match(t1: Dict[str, Any], t2: Dict[str, Any]) -> bool:
-    if not isinstance(t1, dict) or not isinstance(t2, dict):
-        return False
-    id1, id2 = str(t1.get("id") or "").strip(), str(t2.get("id") or "").strip()
-    sp1 = str(t1.get("spotify_id") or "").strip()
-    sp2 = str(t2.get("spotify_id") or "").strip()
-    if id1 and id2 and id1 == id2:
-        return True
-    if sp1 and (sp1 == id2 or sp1 == sp2):
-        return True
-    if sp2 and (sp2 == id1 or sp2 == sp1):
-        return True
-    u1, u2 = str(t1.get("uri") or "").strip(), str(t2.get("uri") or "").strip()
-    su1, su2 = str(t1.get("spotify_uri") or "").strip(), str(t2.get("spotify_uri") or "").strip()
-    uris1 = {u for u in (u1, su1) if u.startswith("spotify:track:")}
-    uris2 = {u for u in (u2, su2) if u.startswith("spotify:track:")}
-    if uris1 and uris2 and (uris1 & uris2):
-        return True
-    # Parenthesized version tags are part of a recording's identity.
-    title1 = _normalized_name(t1.get("title"))
-    title2 = _normalized_name(t2.get("title"))
-    artists1 = {_normalized_name(a) for a in str(t1.get("artist") or "").split(",") if a.strip()}
-    artists2 = {_normalized_name(a) for a in str(t2.get("artist") or "").split(",") if a.strip()}
-    return bool(title1 and title1 == title2 and artists1 & artists2)
+# _tracks_match is imported from .matching
+
 
 def merge_spotify_and_client_tracks(
     spotify_tracks: List[Dict[str, Any]],
@@ -904,6 +886,15 @@ def search_spotify_track(title: str, artist: str = "", token: Optional[str] = No
         if ok and data and "tracks" in data:
             items = data["tracks"].get("items", [])
 
+    if not items:
+        norm_title = _normalized_name(clean_title)
+        if norm_title and norm_title != clean_title.lower():
+            norm_q = f"{norm_title} {clean_artist}".strip()
+            url = f"/search?q={urllib.parse.quote(norm_q)}&type=track&limit=10"
+            ok, data, _ = spotify_api_request(url, method="GET", token=token)
+            if ok and data and "tracks" in data:
+                items = data["tracks"].get("items", [])
+
     for item in items:
         candidate = {
             "id": item.get("id"), "uri": item.get("uri"),
@@ -911,7 +902,7 @@ def search_spotify_track(title: str, artist: str = "", token: Optional[str] = No
             "artist": ", ".join(a.get("name", "Unknown") for a in item.get("artists", []) if isinstance(a, dict)),
             "duration_ms": item.get("duration_ms", 0),
         }
-        if _matches_recording(candidate, title, artist, 0):
+        if _matches_recording(candidate, title, artist, 0) or _tracks_match(candidate, {"title": title, "artist": artist}):
             return candidate
     return None
 

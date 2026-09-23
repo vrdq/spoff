@@ -2,7 +2,7 @@ import os
 import sys
 import unittest
 import tempfile
-from unittest.mock import patch, PropertyMock
+from unittest.mock import patch, PropertyMock, Mock
 
 # Ensure spoff can be imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -11,7 +11,7 @@ from spoff import storage
 from spoff.auth import rename_spotify_playlist, clone_spotify_playlist
 from spoff.app import (
     DEFAULT_KEYBINDINGS, ACTION_INFO, SpoffTUI,
-    RenamePlaylistModal, ClonePlaylistModal
+    RenamePlaylistModal, ClonePlaylistModal, DeletePlaylistModal
 )
 
 
@@ -295,6 +295,54 @@ class TestPlaylistAppLogic(unittest.TestCase):
         scr, _cb = self.app.pushed_screens[0]
         self.assertIsInstance(scr, ClonePlaylistModal)
         self.assertEqual(scr.original_name, "Favorites")
+
+    def test_action_delete_pushes_delete_playlist_modal(self):
+        self.app.current_playlist_id = "pl_1"
+        SpoffTUI.action_delete_playlist(self.app)
+        self.assertEqual(len(self.app.pushed_screens), 1)
+        scr, _cb = self.app.pushed_screens[0]
+        self.assertIsInstance(scr, DeletePlaylistModal)
+        self.assertEqual(scr.playlist_name, "Favorites")
+
+    def test_delete_playlist_modal_name_validation(self):
+        modal = DeletePlaylistModal("Mine!", track_count=29)
+        mock_input = Mock()
+        mock_hint = Mock()
+        modal.query_one = lambda sel, *a: mock_input if "input" in sel else mock_hint
+
+        dismiss_results = []
+        modal.dismiss = lambda res=None: dismiss_results.append(res)
+
+        # 1. Empty string does not delete
+        mock_input.value = "   "
+        modal.action_submit_delete()
+        self.assertEqual(dismiss_results, [])
+
+        # 2. Mismatched string does not delete
+        mock_input.value = "Mine"
+        modal.action_submit_delete()
+        self.assertEqual(dismiss_results, [])
+
+        # 3. Random string does not delete
+        mock_input.value = "wrong_name"
+        modal.action_submit_delete()
+        self.assertEqual(dismiss_results, [])
+
+        # 4. Exact name matches and deletes
+        mock_input.value = "Mine!"
+        modal.action_submit_delete()
+        self.assertEqual(dismiss_results, [True])
+
+        # 5. Case-insensitive exact name matches and deletes
+        dismiss_results.clear()
+        mock_input.value = "mine!"
+        modal.action_submit_delete()
+        self.assertEqual(dismiss_results, [True])
+
+        # 6. Escape/Cancel dismisses with False
+        dismiss_results.clear()
+        modal.action_dismiss_cancel()
+        self.assertEqual(dismiss_results, [False])
 
 
 class TestSpotifyPlaylistSync(unittest.TestCase):

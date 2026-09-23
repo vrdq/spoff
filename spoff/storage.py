@@ -15,6 +15,11 @@ from contextlib import contextmanager
 from functools import wraps
 from typing import List, Dict, Optional, Any, Callable, Tuple
 
+try:
+    from .matching import _tracks_match
+except ImportError:
+    from matching import _tracks_match
+
 DATA_DIR = Path.home() / ".local" / "share" / "spoff"
 OLD_DATA_DIR = Path.home() / ".local" / "share" / "spotato-tui"
 
@@ -715,21 +720,24 @@ def save_liked_songs(tracks: List[Dict[str, Any]]) -> None:
     _atomic_json_dump(_get_liked_songs_file(), clean_tracks)
 
 def liked_index(tracks: List[Dict[str, Any]], target: Dict[str, Any]) -> Optional[int]:
-    """Finds index of target in tracks by exact ID first, then title and artist."""
+    """Finds index of target in tracks by exact ID first, then title and artist, and _tracks_match."""
     if not isinstance(target, dict):
         return None
     track_id = target.get("id")
     if track_id:
         for i, item in enumerate(tracks):
-            if item.get("id") == track_id:
+            if isinstance(item, dict) and item.get("id") == track_id:
                 return i
     title = str(target.get("title") or "").strip().casefold()
     artist = str(target.get("artist") or "").strip().casefold()
     if title and artist:
         for i, item in enumerate(tracks):
-            if (str(item.get("title") or "").strip().casefold() == title
+            if isinstance(item, dict) and (str(item.get("title") or "").strip().casefold() == title
                     and str(item.get("artist") or "").strip().casefold() == artist):
                 return i
+    for i, item in enumerate(tracks):
+        if isinstance(item, dict) and _tracks_match(item, target):
+            return i
     return None
 
 @transactional

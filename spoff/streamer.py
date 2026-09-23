@@ -10,11 +10,11 @@ from concurrent.futures import Future
 import yt_dlp
 try:
     from . import storage
-    from .matching import _seconds, _matches_recording
+    from .matching import _seconds, _matches_recording, _duration_seconds
     from .storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS
 except ImportError:
     import storage  # type: ignore
-    from matching import _seconds, _matches_recording
+    from matching import _seconds, _matches_recording, _duration_seconds
     from storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS  # type: ignore
 
 import tempfile
@@ -59,7 +59,7 @@ def get_base_ydl_opts(extra_opts=None):
 
 def cached_audio_matches_duration(path: Path, duration_ms: Any) -> bool:
     """Probe old cache entries; unknown duration is not evidence of a mismatch."""
-    expected = _seconds(duration_ms) / 1000
+    expected = _duration_seconds(duration_ms)
     if not expected:
         return True
     try:
@@ -67,7 +67,7 @@ def cached_audio_matches_duration(path: Path, duration_ms: Any) -> bool:
             ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "json", str(path)],
             capture_output=True, text=True, check=True, timeout=5,
         )
-        actual = _seconds(json.loads(result.stdout).get("format", {}).get("duration"))
+        actual = _duration_seconds(json.loads(result.stdout).get("format", {}).get("duration"))
         return not actual or abs(actual - expected) <= max(8.0, expected * 0.04)
     except (OSError, subprocess.SubprocessError, ValueError, TypeError):
         logger.warning("Could not verify cached audio duration: %s", path)
@@ -85,7 +85,7 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
             urlsplit(direct_url)
         except ValueError:
             return None
-    duration = _seconds(expected_duration_ms) / 1000
+    duration = _duration_seconds(expected_duration_ms)
     cache_key = f"{track_title.lower()}::{artist.lower()}"
     if direct_url:
         cache_key = f"{direct_url}::{cache_key}"
@@ -153,7 +153,7 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
                             continue
                         if not identity_verified and not _matches_recording(candidate, track_title, clean_artist, duration):
                             continue
-                        actual_duration = _seconds(candidate.get("duration"))
+                        actual_duration = _duration_seconds(candidate.get("duration"))
                         if not exact_url and duration and actual_duration and abs(actual_duration - duration) > max(8.0, duration * 0.04):
                             continue
                         if not (candidate.get("url") or candidate.get("formats") or candidate.get("webpage_url")):

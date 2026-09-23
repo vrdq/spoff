@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .storage import DATA_DIR, _atomic_json_dump
-from .matching import _matches_recording, _seconds
+from .matching import _matches_recording, _seconds, _duration_seconds
 
 logger = logging.getLogger("spoff.lyrics")
 
@@ -90,9 +90,9 @@ def parse_lrc(lrc_text: str) -> List[Dict[str, Any]]:
     return lines
 
 
-def _get_cache_path(title: str, artist: str, duration_ms: Optional[int] = None) -> Path:
+def _get_cache_path(title: str, artist: str, duration_sec: Optional[float] = None) -> Path:
     _init_lyrics_storage()
-    dur_tag = f"_{int(duration_ms / 1000)}" if duration_ms and duration_ms > 0 else ""
+    dur_tag = f"_{int(duration_sec)}" if duration_sec and duration_sec > 0 else ""
     safe_key = hashlib.sha256(f"{artist.lower().strip()}_{title.lower().strip()}{dur_tag}".encode("utf-8")).hexdigest()
     return LYRICS_DIR / f"{safe_key}.json"
 
@@ -110,9 +110,9 @@ def fetch_lyrics(title: str, artist: str = "", duration_ms: Optional[int] = None
         "plain": str
     }
     """
-    duration_ms = _seconds(duration_ms)
+    dur_sec = _duration_seconds(duration_ms)
     clean_t, clean_a = clean_track_query(title, artist)
-    cache_file = _get_cache_path(clean_t, clean_a, duration_ms)
+    cache_file = _get_cache_path(clean_t, clean_a, dur_sec)
 
     if cache_file.exists():
         try:
@@ -151,8 +151,8 @@ def fetch_lyrics(title: str, artist: str = "", duration_ms: Optional[int] = None
         "track_name": clean_t,
         "artist_name": clean_a,
     }
-    if duration_ms and duration_ms > 0:
-        params["duration"] = str(int(duration_ms / 1000))
+    if dur_sec and dur_sec > 0:
+        params["duration"] = str(int(dur_sec))
 
     headers = {"User-Agent": "SpoffTUI/0.1.0"}
     raw_json = None
@@ -184,7 +184,7 @@ def fetch_lyrics(title: str, artist: str = "", duration_ms: Optional[int] = None
                                 continue
                             metadata = {"title": candidate.get("trackName"), "artist": candidate.get("artistName"),
                                         "duration": candidate.get("duration")}
-                            if _matches_recording(metadata, clean_t, clean_a, duration_ms / 1000):
+                            if _matches_recording(metadata, clean_t, clean_a, dur_sec):
                                 raw_json = candidate
                                 break
         except Exception as e:

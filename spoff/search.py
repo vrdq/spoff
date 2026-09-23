@@ -199,7 +199,7 @@ def resolve_direct_track_url(query: str) -> Optional[Dict[str, Any]]:
         if parsed.path == "/watch":
             v_id = urllib.parse.parse_qs(parsed.query).get("v", [None])[0]
         else:
-            path_match = re.fullmatch(r"/(?:shorts|embed)/([a-zA-Z0-9_-]{11})/?", parsed.path)
+            path_match = re.fullmatch(r"/(?:shorts|embed|live)/([a-zA-Z0-9_-]{11})/?", parsed.path)
             if path_match:
                 v_id = path_match.group(1)
     elif host == "youtu.be":

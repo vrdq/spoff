@@ -204,6 +204,28 @@ class TestAppLikedTabActions(unittest.TestCase):
         scr, _ = self.app.pushed_screens[0]
         self.assertEqual(scr.original_name, "Liked Songs")
 
+    def test_delete_playlist_blocked_on_liked_tab_even_when_sidebar_focused(self):
+        self.mock_focused.return_value = Mock(id="side-table", cursor_row=0)
+        self.app.action_delete_playlist()
+        self.assertIn("Cannot delete Liked Songs.", self.app.notifications)
+        self.assertEqual(len(self.app.pushed_screens), 0)
+
+    def test_delete_item_on_liked_tab_when_sidebar_focused_never_deletes_playlist(self):
+        self.mock_focused.return_value = Mock(id="side-table", cursor_row=0)
+        initial_playlists = list(self.app.playlists)
+        self.app.action_delete_item()
+        self.assertEqual(self.app.playlists, initial_playlists)
+        # Should not push delete playlist modal
+        for scr, _ in self.app.pushed_screens:
+            self.assertNotEqual(getattr(scr, "title", ""), "DELETE PLAYLIST")
+
+    def test_delete_item_on_liked_tab_targets_liked_track(self):
+        self.mock_focused.return_value = Mock(id="track-table", cursor_row=0)
+        self.app.action_delete_item()
+        self.assertEqual(len(self.app.pushed_screens), 1)
+        scr, _ = self.app.pushed_screens[0]
+        self.assertEqual(getattr(scr, "modal_title", ""), "REMOVE LIKED SONG")
+
 
 class TestEnterKeyPlaybackBehavior(unittest.TestCase):
     def setUp(self):

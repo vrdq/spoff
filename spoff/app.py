@@ -81,6 +81,7 @@ try:
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
         record_deleted_spotify_playlist_id, liked_index, storage_transaction
     )
+    from .matching import _tracks_match
     from .streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from .search import live_search_tracks, resolve_direct_track_url
     from .player import MPVController
@@ -133,6 +134,7 @@ except ImportError:
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
         record_deleted_spotify_playlist_id, liked_index, storage_transaction
     )
+    from matching import _tracks_match
     from streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from search import live_search_tracks, resolve_direct_track_url
     from player import MPVController
@@ -908,28 +910,21 @@ class RebindKeyModal(SafeModalScreen[Optional[str]]):
             event.stop()
             return
 
-        # 2. Backspace -> Reset to default
-        if ek_lower == "backspace":
-            self.dismiss(self.default_key)
-            event.prevent_default()
-            event.stop()
-            return
-
-        # 3. Enter / Return -> Confirm captured key
+        # 2. Enter / Return -> Confirm captured key
         if ek_lower in ("enter", "return", "ctrl+m"):
             self.dismiss(canonicalize_key(self.selected_key) if self.selected_key else "")
             event.prevent_default()
             event.stop()
             return
 
-        # 4. Ctrl+C -> Cancel without changes
+        # 3. Ctrl+C -> Cancel without changes
         if ek_lower == "ctrl+c":
             self.dismiss(None)
             event.prevent_default()
             event.stop()
             return
 
-        # 5. Any other keypress -> capture immediately!
+        # 4. Any other keypress -> capture immediately!
         captured = normalize_captured_key(event.key, getattr(event, "character", None))
         if captured:
             self.selected_key = captured
@@ -949,6 +944,7 @@ class SettingsModal(SafeModalScreen[None]):
         Binding("enter", "select_or_toggle", "Select", show=False),
         Binding("space", "select_or_toggle", "Toggle", show=False),
         Binding("u", "unbind_selected_key", "Unbind Key", show=False),
+        Binding("delete", "unbind_selected_key", "Unbind Key", show=False),
         Binding("backspace", "reset_selected_key", "Reset Key", show=False),
         Binding("r", "reset_selected_key", "Reset Key", show=False),
         Binding("R", "reset_all_keys", "Reset All", show=False),
@@ -984,7 +980,7 @@ class SettingsModal(SafeModalScreen[None]):
             yield Static("KEYBINDINGS", id="settings-table-title")
             yield DataTable(id="settings-table", cursor_type="row", show_header=True)
             yield Static("", id="settings-status-line")
-            yield Static("[dim]Enter / Space: toggle  |  Enter: rebind  |  u: unbind  |  Backspace: reset default[/dim]", id="settings-footer")
+            yield Static("[dim]Enter / Space: toggle  |  Enter: rebind  |  Del / u: unbind  |  Backspace: reset default[/dim]", id="settings-footer")
 
     def on_mount(self) -> None:
         self.update_toggle_ui()
@@ -1023,7 +1019,7 @@ class SettingsModal(SafeModalScreen[None]):
                 self.query_one("#settings-footer", Static).update("")
                 self.query_one("#settings-close-hint", Static).update("")
             else:
-                self.query_one("#settings-footer", Static).update("[dim]Enter / Space: toggle  |  Enter: rebind  |  u: unbind  |  Backspace: reset default[/dim]")
+                self.query_one("#settings-footer", Static).update("[dim]Enter / Space: toggle  |  Enter: rebind  |  Del / u: unbind  |  Backspace: reset default[/dim]")
                 self.query_one("#settings-close-hint", Static).update("[dim]Esc / q to close[/dim]")
 
             trans_toggle = self.query_one("#transparency-toggle", TransparencyToggle)
@@ -1383,7 +1379,7 @@ class SettingsModal(SafeModalScreen[None]):
                 event.prevent_default()
                 event.stop()
                 return
-            elif event.key == "u":
+            elif event.key in ("u", "delete"):
                 self.action_unbind_selected_key()
                 event.prevent_default()
                 event.stop()
@@ -1771,6 +1767,77 @@ class ClonePlaylistModal(SafeModalScreen[Optional[str]]):
 
     def action_dismiss_modal(self) -> None:
         self.dismiss(None)
+
+
+class DeletePlaylistModal(SafeModalScreen[bool]):
+    """Modal requiring explicit typing of the playlist name to permanently delete."""
+    BINDINGS = [
+        Binding("escape", "dismiss_cancel", "Cancel", priority=True),
+        Binding("enter", "submit_delete", "Delete", priority=True),
+    ]
+
+    def __init__(self, playlist_name: str, track_count: int = 0):
+        super().__init__()
+        self.playlist_name = playlist_name.strip() or "Playlist"
+        self.track_count = track_count
+        self.modal_title = "DELETE PLAYLIST"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="delete-playlist-dialog"):
+            yield Static("DELETE PLAYLIST", id="delete-playlist-title")
+            tracks_str = f" ({self.track_count} tracks)" if self.track_count else ""
+            yield Static(
+                f"This will permanently delete '[bold #ff5555]{escape(self.playlist_name)}[/]'{tracks_str} from your library and Spotify.",
+                id="delete-playlist-warning"
+            )
+            yield Static(
+                f"To confirm, type [bold #ffffff]{escape(self.playlist_name)}[/] below:",
+                id="delete-playlist-instruction"
+            )
+            yield Input(placeholder=self.playlist_name, id="delete-playlist-input")
+            hint_text = "" if getattr(self.app, "advanced_mode", False) else "[dim]Enter: confirm deletion  |  Esc: cancel[/dim]"
+            yield Static(hint_text, id="delete-playlist-hint")
+
+    def on_mount(self) -> None:
+        try:
+            inp = self.query_one("#delete-playlist-input", Input)
+            inp.focus()
+            inp.value = ""
+        except Exception:
+            pass
+
+    def action_submit_delete(self) -> None:
+        try:
+            inp = self.query_one("#delete-playlist-input", Input)
+            val = inp.value.strip()
+            target = self.playlist_name.strip()
+            if val and (val == target or val.casefold() == target.casefold()):
+                self.dismiss(True)
+                return
+
+            try:
+                hint = self.query_one("#delete-playlist-hint", Static)
+                if not val:
+                    hint.update(f"[bold #ff5555]Type '[bold #ffffff]{escape(target)}[/]' to confirm, or Esc to cancel.[/]")
+                else:
+                    hint.update(f"[bold #ff5555]Name mismatch! Expected '[bold #ffffff]{escape(target)}[/]', got '[bold #888888]{escape(val)}[/]'.[/]")
+            except Exception:
+                pass
+
+            try:
+                app = getattr(self, "_app", None) or getattr(self, "app", None)
+                if app and hasattr(app, "notify_user"):
+                    app.notify_user(f"Playlist deletion aborted: name mismatch. Type '{target}' to confirm.")
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.action_submit_delete()
+
+    def action_dismiss_cancel(self) -> None:
+        self.dismiss(False)
 
 
 class DuplicateTrackModal(SafeModalScreen[Optional[str]]):
@@ -3954,13 +4021,13 @@ class SpoffTUI(App):
         margin-top: 1;
     }
 
-    /* MODAL: RENAME & CLONE PLAYLIST & DUPLICATE TRACK & FILTER */
-    RenamePlaylistModal, ClonePlaylistModal, DuplicateTrackModal, FilterTracksModal {
+    /* MODAL: RENAME & CLONE PLAYLIST & DUPLICATE TRACK & FILTER & DELETE PLAYLIST */
+    RenamePlaylistModal, ClonePlaylistModal, DuplicateTrackModal, FilterTracksModal, DeletePlaylistModal {
         align: center middle;
         background: rgba(0, 0, 0, 0.75);
     }
 
-    #rename-dialog, #clone-dialog, #duplicate-dialog, #filter-dialog {
+    #rename-dialog, #clone-dialog, #duplicate-dialog, #filter-dialog, #delete-playlist-dialog {
         width: 66;
         height: auto;
         background: #181818;
@@ -3991,6 +4058,22 @@ class SpoffTUI(App):
         margin-bottom: 1;
     }
 
+    #delete-playlist-title {
+        text-style: bold;
+        color: #ff5555;
+        margin-bottom: 1;
+    }
+
+    #delete-playlist-warning {
+        color: #e2e2e2;
+        margin-bottom: 1;
+    }
+
+    #delete-playlist-instruction {
+        color: #888888;
+        margin-bottom: 1;
+    }
+
     #rename-sub, #clone-sub {
         color: #888888;
         margin-bottom: 1;
@@ -4003,11 +4086,22 @@ class SpoffTUI(App):
         color: #ffffff;
     }
 
+    #delete-playlist-input {
+        margin-bottom: 1;
+        background: #121212;
+        border: solid #442222;
+        color: #ffffff;
+    }
+
     #rename-input:focus, #clone-input:focus {
         border: solid #569f68;
     }
 
-    #rename-hint, #clone-hint {
+    #delete-playlist-input:focus {
+        border: solid #ff5555;
+    }
+
+    #rename-hint, #clone-hint, #delete-playlist-hint {
         color: #767676;
     }
 
@@ -5285,6 +5379,7 @@ class SpoffTUI(App):
             bind_secondary("up", "cursor_up")
             bind_secondary("shift+down", "move_item_down")
             bind_secondary("shift+up", "move_item_up")
+            bind_secondary("delete", "delete_item")
             bind_secondary("shift+delete", "delete_playlist")
             bind_secondary("+", "add_to_playlist")
             if self.keybindings.get("open_spotify_auth") in ("L", "shift+l"):
@@ -5738,10 +5833,22 @@ class SpoffTUI(App):
             return
         return super().notify(*args, **kwargs)
 
+    @staticmethod
+    def _is_track_offline(track: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(track, dict):
+            return False
+        if track.get("is_offline") or track.get("filepath"):
+            return True
+        t_id = stable_track_id(track)
+        if t_id and get_cached_track_path(t_id):
+            return True
+        return False
+
     def _render_status_line(self) -> None:
         """Use one quiet status surface; resume background progress after notices."""
         pending = getattr(self, "_pending_track", None)
-        if pending is not None:
+        check_offline = getattr(self, "_is_track_offline", SpoffTUI._is_track_offline)
+        if pending is not None and not check_offline(pending):
             title = pending.get("title") or "song"
             text = f"Loading '{title}'…"
         elif getattr(self, "_search_loading_request_id", None) is not None:
@@ -5763,6 +5870,14 @@ class SpoffTUI(App):
             self._status_message = text
             self._status_notice_until = time.monotonic() + 3 if text else 0.0
             SpoffTUI._render_status_line(self)
+            if text and hasattr(self, "set_timer") and getattr(self, "_is_mounted", False):
+                def _clear_notice():
+                    if time.monotonic() >= getattr(self, "_status_notice_until", 0.0):
+                        SpoffTUI._render_status_line(self)
+                try:
+                    self.set_timer(3.0, _clear_notice)
+                except Exception:
+                    pass
         if threading.get_ident() == getattr(self, "_thread_id", None):
             _update()
         else:
@@ -6132,6 +6247,20 @@ class SpoffTUI(App):
                 and self.keybindings.get("rename_playlist") != ""
             ):
                 matched_action = "rename_playlist"
+            elif (
+                event.key in ("delete",)
+                and not isinstance(self.focused, (Input, ScrubBar))
+                and not any(k.lower() == "delete" for k in self.keybindings.values() if k)
+                and self.keybindings.get("delete_item") != ""
+            ):
+                matched_action = "delete_item"
+            elif (
+                event.key in ("shift+delete",)
+                and not isinstance(self.focused, (Input, ScrubBar))
+                and not any(k.lower() == "shift+delete" for k in self.keybindings.values() if k)
+                and self.keybindings.get("delete_playlist") != ""
+            ):
+                matched_action = "delete_playlist"
             elif event.key == "+" and self.keybindings.get("add_to_playlist") != "":
                 matched_action = "add_to_playlist"
             elif (self.keybindings.get("bulk_download_playlist") != "" and (event.key in ("shift+b", "B") or getattr(event, "character", None) == "B") and not isinstance(self.focused, (Input, ScrubBar))):
@@ -6886,16 +7015,35 @@ class SpoffTUI(App):
             return True
         id1 = str(t1.get("id") or "").strip()
         id2 = str(t2.get("id") or "").strip()
+        sp1 = str(t1.get("spotify_id") or "").strip()
+        sp2 = str(t2.get("spotify_id") or "").strip()
+        u1 = str(t1.get("uri") or "").strip()
+        u2 = str(t2.get("uri") or "").strip()
+        su1 = str(t1.get("spotify_uri") or "").strip()
+        su2 = str(t2.get("spotify_uri") or "").strip()
+
+        # Check explicit ID or cross-provider Spotify ID / URI match
+        if id1 and id2 and id1 == id2:
+            return True
+        if sp1 and (sp1 == id2 or sp1 == sp2):
+            return True
+        if sp2 and (sp2 == id1 or sp2 == sp1):
+            return True
+        uris1 = {u for u in (u1, su1) if u.startswith("spotify:track:")}
+        uris2 = {u for u in (u2, su2) if u.startswith("spotify:track:")}
+        if uris1 and uris2 and (uris1 & uris2):
+            return True
+
+        # If both have IDs and neither matched above, they are distinct recordings
         if id1 and id2:
-            return id1 == id2
-        title1 = str(t1.get("title") or "").strip().lower()
-        title2 = str(t2.get("title") or "").strip().lower()
-        artist1 = str(t1.get("artist") or "").strip().lower()
-        artist2 = str(t2.get("artist") or "").strip().lower()
-        if title1 and title2 and title1 == title2:
-            if not artist1 or not artist2 or artist1 == artist2:
-                return True
-        return False
+            return False
+
+        # Fallback to Title and Artist when ID is missing from either
+        t1_title = str(t1.get("title") or "").strip().casefold()
+        t2_title = str(t2.get("title") or "").strip().casefold()
+        t1_artist = str(t1.get("artist") or "").strip().casefold()
+        t2_artist = str(t2.get("artist") or "").strip().casefold()
+        return bool(t1_title and t1_title == t2_title and t1_artist == t2_artist)
 
     def _start_or_resume_playback(self):
         f = self.focused
@@ -6947,7 +7095,8 @@ class SpoffTUI(App):
                     return
 
         pending_track = getattr(self, "_pending_track", None)
-        if pending_track is not None:
+        check_offline = getattr(self, "_is_track_offline", SpoffTUI._is_track_offline)
+        if pending_track is not None and not check_offline(pending_track):
             track_title = pending_track.get("title", "track") if isinstance(pending_track, dict) else "track"
             self.notify_user(f"Loading '{track_title}'...")
             return
@@ -7418,7 +7567,8 @@ class SpoffTUI(App):
             selected_track = tracks[row_idx]
             active_track = getattr(self, "_pending_track", None) or getattr(getattr(self, "player", None), "current_track", None)
             if self._is_same_track(selected_track, active_track):
-                if getattr(self, "_pending_track", None) is not None:
+                check_offline = getattr(self, "_is_track_offline", SpoffTUI._is_track_offline)
+                if getattr(self, "_pending_track", None) is not None and not check_offline(self._pending_track):
                     track_title = self._pending_track.get("title", "track") if isinstance(self._pending_track, dict) else "track"
                     self.notify_user(f"Loading '{track_title}'...")
                     return
@@ -8243,8 +8393,12 @@ class SpoffTUI(App):
         if isinstance(self.focused, Input):
             return
 
-        if not (self.focused and getattr(self.focused, "id", None) == "side-table") and self.active_tab == "liked":
+        if self.active_tab == "liked":
             self.notify_user("Cannot delete Liked Songs.")
+            return
+
+        if self.active_tab != "playlist":
+            self.notify_user("Switch to Playlists tab to delete playlists.")
             return
 
         target_idx, target_pl = self._get_target_playlist()
@@ -8307,12 +8461,9 @@ class SpoffTUI(App):
             else:
                 self.notify_user(f"Deleted playlist '{pname}'.")
 
+        track_count = len(target_pl.get("tracks", [])) if isinstance(target_pl.get("tracks"), list) else 0
         self.push_screen(
-            ConfirmModal(
-                title="DELETE PLAYLIST",
-                message=f"Permanently delete playlist '[bold #ffffff]{escape(pname)}[/]' from your library?",
-                confirm_label="Delete"
-            ),
+            DeletePlaylistModal(pname, track_count=track_count),
             handle_delete_confirm
         )
 
@@ -8320,8 +8471,12 @@ class SpoffTUI(App):
         if isinstance(self.focused, Input):
             return
 
-        if not (self.focused and getattr(self.focused, "id", None) == "side-table") and self.active_tab == "liked":
+        if self.active_tab == "liked":
             self.notify_user("Cannot rename Liked Songs.")
+            return
+
+        if self.active_tab != "playlist":
+            self.notify_user("Switch to Playlists tab to rename playlists.")
             return
 
         target_idx, target_pl = self._get_target_playlist()
@@ -8380,7 +8535,7 @@ class SpoffTUI(App):
         if isinstance(self.focused, Input):
             return
 
-        if not (self.focused and getattr(self.focused, "id", None) == "side-table") and self.active_tab == "liked":
+        if self.active_tab == "liked":
             target_idx = None
             target_pl = {"id": "liked_songs", "name": "Liked Songs", "tracks": getattr(self, "current_liked_tracks", [])}
         else:
@@ -8444,12 +8599,22 @@ class SpoffTUI(App):
         f = self.focused
         if isinstance(f, Input):
             return
-        if f and getattr(f, "id", None) == "side-table":
+
+        if self.active_tab == "playlist" and f and getattr(f, "id", None) == "side-table":
             self.action_delete_playlist()
             return
 
-        elif f and getattr(f, "id", None) == "track-table":
+        row_idx = None
+        if f and getattr(f, "id", None) == "track-table":
             row_idx = getattr(f, "cursor_row", None)
+        else:
+            try:
+                tt = self.query_one("#track-table", DataTable)
+                row_idx = getattr(tt, "cursor_row", None)
+            except Exception:
+                row_idx = None
+
+        if self.active_tab in ("playlist", "liked", "offline", "search"):
             if self.active_tab == "playlist":
                 if not self.current_playlist_tracks or row_idx is None or row_idx < 0 or row_idx >= len(self.current_playlist_tracks):
                     self.notify_user("No track selected to remove.", force=True)

@@ -109,7 +109,7 @@ def parse_ytmusic_url(url_or_id: str) -> Optional[Tuple[str, str]]:
         if path and len(path) == 11:
             return ("track", path)
 
-    m_watch = re.search(r'(?:embed|v|shorts)/([a-zA-Z0-9_-]{11})', parsed.path)
+    m_watch = re.search(r'(?:embed|v|shorts|live)/([a-zA-Z0-9_-]{11})', parsed.path)
     if m_watch:
         return ("track", m_watch.group(1))
 
