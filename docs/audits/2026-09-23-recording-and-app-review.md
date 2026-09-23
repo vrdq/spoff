@@ -69,3 +69,11 @@ The separate loading and download badges have been removed following user feedba
 Removed duplicate download and copied-link popups and the update modal's duplicate messages in the obscured playback deck. Download wording now consistently uses “Downloading” and “Saved offline” instead of mixing installing, caching, badges and notifications. The status text remains grey with increased contrast. Bulk cache checking has immediate feedback; an unexpected bulk failure replaces progress with an actionable error.
 
 Validation: **356 passed, 1 skipped, 4 subtests passed**. Tests exercise real single/bulk download control flow with mocked transfers, already-cached playlists, status priority and timer ownership, disabled notifications, and the full Textual layout at 100×30 and 60×20. They verify the old badges are absent and progress occupies the existing line. Pyflakes reports no undefined names; only pre-existing unused imports/locals remain. `git diff --check` is clean.
+
+## Follow-up: startup failure and metadata repair
+
+Download thread creation failure now returns through the existing error callback without also raising into the UI action. Regression coverage confirms a single error delivery, removal of active-job state, and exactly one returned semaphore slot.
+
+Bulk repair of an existing offline entry now retains its source URL, resolved recording URL/title, album and other stored fields when refreshing its display metadata. Previously the replacement dictionary discarded those fields. A regression test verifies the persisted entry after the real bulk-worker control flow.
+
+Validation: **358 passed, 1 skipped, 4 subtests passed**; `git diff --check` clean. Further reliability review remains active.

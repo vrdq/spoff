@@ -407,5 +407,6 @@ def download_track_to_cache(
             _download_slots.release()
         if not future.done():
             future.set_exception(e)
-        raise
+        logger.exception("Could not start download worker for %s", val_id)
+        return None
 

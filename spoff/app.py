@@ -8117,6 +8117,7 @@ class SpoffTUI(App):
                                     except (ValueError, TypeError):
                                         dur_ms = 0
                                     idx[tid] = {
+                                        **(entry or {}),
                                         "id": tid,
                                         "title": t.get("title", "Unknown"),
                                         "artist": t.get("artist", "Unknown"),

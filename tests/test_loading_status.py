@@ -188,3 +188,28 @@ def test_bulk_download_runs_and_reports_only_one_status_surface(tmp_path,already
     bar.update.assert_called_with(expected)
     fake.notify.assert_not_called()
     assert all(call.args[0]=='#notification-line' for call in fake.query_one.call_args_list)
+
+
+def test_bulk_metadata_repair_keeps_the_resolved_recording(tmp_path):
+    from types import MethodType
+    fake,bar=fake_app(_thread_id=threading.get_ident(),notify=Mock(),set_timer=Mock())
+    fake.set_download_status=MethodType(app.SpoffTUI.set_download_status,fake)
+    cached=tmp_path/'song.m4a'; cached.write_bytes(b'audio')
+    index={'song':{'id':'song','title':'Old title','artist':'Artist',
+                   'url':'https://open.spotify.com/track/original',
+                   'resolved_url':'https://youtube.com/watch?v=correct0001',
+                   'resolved_title':'Correct recording','source':'spotify','album':'Album'}}
+    with patch.object(app.threading,'Thread',side_effect=lambda *a,**kw:SimpleNamespace(start=kw['target'])), \
+         patch.object(app,'get_cached_track_path',return_value=cached), \
+         patch.object(app,'cached_audio_matches_duration',return_value=True), \
+         patch.object(app,'load_offline_index',return_value=index), \
+         patch.object(app,'save_offline_index') as save:
+        app.SpoffTUI._bulk_download_playlist(fake,{'name':'Favorites','tracks':[{'id':'song','title':'New title','artist':'Artist'}]})
+    save.assert_called_once()
+    updated=save.call_args.args[0]['song']
+    assert updated['title']=='New title'
+    assert updated['resolved_url']=='https://youtube.com/watch?v=correct0001'
+    assert updated['url']=='https://open.spotify.com/track/original'
+    assert updated['resolved_title']=='Correct recording'
+    assert updated['source']=='spotify'
+    assert updated['album']=='Album'

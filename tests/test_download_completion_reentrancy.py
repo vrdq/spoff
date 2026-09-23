@@ -55,3 +55,22 @@ def test_notification_failure_does_not_report_successful_download_as_failed():
         streamer.download_track_to_cache('notification_test', 'Song', 'Artist', blocking=True,
                                          on_complete=broken_notification, on_error=errors.append)
     assert errors == []
+
+
+def test_worker_start_failure_reports_once_without_escaping_to_ui():
+    errors=[]
+    slots=threading.BoundedSemaphore(1)
+    with patch.object(streamer,'get_cached_track_path',return_value=None), \
+         patch.object(streamer,'_active_downloads',set()), \
+         patch.object(streamer,'_active_download_futures',{}), \
+         patch.object(streamer,'_download_slots',slots), \
+         patch.object(streamer.threading,'Thread') as thread:
+        thread.return_value.start.side_effect=RuntimeError('cannot start new thread')
+        assert streamer.download_track_to_cache('song','Song','Artist',on_error=errors.append) is None
+        assert len(errors)==1
+        assert str(errors[0])=='cannot start new thread'
+        assert not streamer._active_downloads
+        assert not streamer._active_download_futures
+        assert slots.acquire(blocking=False)
+        assert not slots.acquire(blocking=False)
+        slots.release()
