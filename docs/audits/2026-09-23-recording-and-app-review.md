@@ -53,3 +53,11 @@ A further lifecycle review found that download futures invoked callbacks before 
 Completion notification exceptions also previously called the download-error callback, incorrectly presenting successfully saved audio as failed. Callback exceptions are now logged separately from transfer errors. The same delivery function handles subscribers waiting on an existing download.
 
 Validation after these fixes: **343 passed, 1 skipped, 4 subtests passed**; `git diff --check` clean. These are additional verified fixes; the broader reliability goal remains active.
+
+## Visible search and playback activity
+
+Added a dedicated status above the seek bar for `Searching…` and `Loading song…`. It remains visible with notifications disabled and can show both operations together. Search completion only clears the status belonging to that request, so stale results cannot hide a newer search. Playback activity follows the existing pending-track state and clears on commit, cancellation, or exhaustion of playable queue items.
+
+Search and playback preparation now route unexpected exceptions through visible error handling and the existing playback recovery path. Tests cover success, exceptions, overlapping activity, stale completion, and actual Textual layout at 100×30 and 60×20 terminal sizes.
+
+Validation: **350 passed, 1 skipped, 4 subtests passed**. The broader reliability goal remains active.

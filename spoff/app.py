@@ -23,6 +23,7 @@ from rich.markup import escape
 from rich.table import Table
 from rich.text import Text
 from textual import events, work
+from textual.css.query import NoMatches
 from textual.app import App, ComposeResult
 from textual.screen import ModalScreen
 from textual.containers import Horizontal, Vertical
@@ -3844,9 +3845,15 @@ class SpoffTUI(App):
         text-style: bold;
     }
 
-    #shuf-pill, #rep-pill, #download-pill {
+    #shuf-pill, #rep-pill, #download-pill, #loading-pill {
         width: auto;
         margin-right: 1;
+    }
+
+    #loading-pill {
+        color: #c4a768;
+        text-style: bold;
+        display: none;
     }
 
     #download-pill {
@@ -5485,6 +5492,7 @@ class SpoffTUI(App):
                 yield Static("[dim]No track playing[/dim]", id="deck-track")
                 yield Static("", id="deck-stats-pill")
                 yield VisualizerWidget(self.visualizer, id="deck-visualizer")
+                yield Static("", id="loading-pill", markup=False)
                 yield Static("", id="download-pill")
                 yield Static("", id="shuf-pill")
                 yield Static("", id="rep-pill")
@@ -5763,6 +5771,24 @@ class SpoffTUI(App):
                 self.call_from_thread(_update)
             except Exception:
                 pass
+
+    def _update_loading_status(self) -> None:
+        """Render request-owned activity separately from transient notifications."""
+        if not getattr(self, "_is_mounted", False):
+            return
+        loading_song = getattr(self, "_pending_track", None) is not None
+        searching = getattr(self, "_search_loading_request_id", None) is not None
+        labels = []
+        if loading_song:
+            labels.append("Loading song…")
+        if searching:
+            labels.append("Searching…")
+        try:
+            pill = self.query_one("#loading-pill", Static)
+            pill.update(" · ".join(labels))
+            pill.display = bool(labels)
+        except NoMatches:
+            pass  # The screen may not have mounted yet.
 
     def set_download_status(self, pill_text: str, notif_text: Optional[str] = None, clear_after: Optional[float] = None) -> None:
         """Updates the download indicator badge directly above the seek bar and the notification line."""
@@ -8740,6 +8766,7 @@ class SpoffTUI(App):
     def update_player_hud(self):
         if not getattr(self, "is_mounted", False):
             return
+        SpoffTUI._update_loading_status(self)
         try:
             pos, dur = self.player.get_progress()
             self.query_one("#time-elapsed", Static).update(format_time(pos))
@@ -8903,10 +8930,36 @@ class SpoffTUI(App):
             self.notify_user("Resolving track from URL...", force=True)
         else:
             self.notify_user(f"Searching {engine_name} for '{query}'...", force=True)
-        self._search_worker(query, req_id, engine, engine_name)
+        self._search_loading_request_id = req_id
+        SpoffTUI._update_loading_status(self)
+        try:
+            self._search_worker(query, req_id, engine, engine_name)
+        except Exception:
+            self._search_loading_request_id = None
+            SpoffTUI._update_loading_status(self)
+            logger.exception("Could not start search worker")
+            self.notify_user("Could not start the search. Please try again.", force=True)
 
     @work(thread=True)
     def _search_worker(self, query: str, req_id: int, engine: str, engine_name: str):
+        if getattr(self, "_closing", False) or req_id != getattr(self, "_search_request_id", None):
+            return
+        try:
+            SpoffTUI._run_search(self, query, req_id, engine, engine_name)
+        except Exception:
+            logger.exception("Search failed for %r", query)
+            def _error():
+                if req_id == getattr(self, "_search_request_id", None):
+                    self.notify_user("Search failed. Please try again.", force=True)
+            self.call_from_thread(_error)
+        finally:
+            def _finished():
+                if req_id == getattr(self, "_search_loading_request_id", None):
+                    self._search_loading_request_id = None
+                    SpoffTUI._update_loading_status(self)
+            self.call_from_thread(_finished)
+
+    def _run_search(self, query: str, req_id: int, engine: str, engine_name: str):
         results = []
         fallback_msg = None
         direct_track = resolve_direct_track_url(query)
@@ -9093,6 +9146,7 @@ class SpoffTUI(App):
         self._failed_indices.discard(index)
         track = self.queue[index]
         self._pending_track = track
+        SpoffTUI._update_loading_status(self)
         self.current_lyrics = None
         self._active_lyric_idx = -1
         if getattr(self, "active_tab", "") == "lyrics":
@@ -9178,6 +9232,13 @@ class SpoffTUI(App):
 
     @work(thread=True)
     def start_playback(self, track: Dict[str, Any], req_id: int):
+        try:
+            SpoffTUI._resolve_playback(self, track, req_id)
+        except Exception:
+            logger.exception("Playback preparation failed for %s", track.get("title"))
+            self.call_from_thread(self._playback_failed, req_id, track)
+
+    def _resolve_playback(self, track: Dict[str, Any], req_id: int):
         def is_current():
             return (not getattr(self, "_closing", False)
                     and req_id == getattr(self, "_play_request_id", None))
