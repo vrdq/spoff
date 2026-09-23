@@ -54,7 +54,7 @@ try:
         load_saved_playlists, add_saved_playlist, remove_saved_playlist,
         rename_saved_playlist, clone_saved_playlist, move_saved_playlist, merge_track_artwork,
         create_local_playlist, add_track_to_playlist,
-        update_playlist_tracks, get_cached_track_path, load_offline_index, register_cached_track, stable_track_id,
+        update_playlist_tracks, get_cached_track_path, load_offline_index, save_offline_index, register_cached_track, stable_track_id,
         delete_cached_track, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
@@ -105,7 +105,7 @@ except ImportError:
         load_saved_playlists, add_saved_playlist, remove_saved_playlist,
         rename_saved_playlist, clone_saved_playlist, move_saved_playlist, merge_track_artwork,
         create_local_playlist, add_track_to_playlist,
-        update_playlist_tracks, get_cached_track_path, load_offline_index,
+        update_playlist_tracks, get_cached_track_path, load_offline_index, save_offline_index, register_cached_track, stable_track_id,
         delete_cached_track, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
@@ -7601,26 +7601,8 @@ class SpoffTUI(App):
             self.notify_user(f"Playlist '{name}' has no tracks to download.")
             return
 
-        needed: List[Dict[str, Any]] = []
-        for t in tracks:
-            tid = stable_track_id(t)
-            c = get_cached_track_path(tid)
-            if not c:
-                needed.append(t)
-
         total = len(tracks)
-        already_cached = total - len(needed)
-        if not needed:
-            self.notify_user(f"All {total} tracks in '{name}' are already cached offline.")
-            return
-
         self._bulk_download_in_progress = True
-        to_dl_count = len(needed)
-        self.notify_user(f"Starting download of {to_dl_count} tracks for '{name}' ({already_cached} already cached)...")
-        try:
-            self.notify(f"Downloading {to_dl_count} songs from '{name}'", title="⬇ Bulk Download Started", timeout=3.5)
-        except Exception:
-            pass
 
         def _worker():
             success_count = 0
@@ -7653,6 +7635,37 @@ class SpoffTUI(App):
                                     idx_changed = True
                         if idx_changed:
                             save_offline_index(idx)
+                except Exception as e:
+                    logger.debug(f"Metadata repair error during bulk download: {e}")
+
+                needed: List[Dict[str, Any]] = []
+                for t in tracks:
+                    tid = stable_track_id(t)
+                    c = get_cached_track_path(tid)
+                    if not c:
+                        needed.append(t)
+
+                if not needed:
+                    self.call_from_thread(self.notify_user, f"All {total} tracks in '{name}' are already cached offline.")
+                    def _refresh_if_offline():
+                        if self.active_tab == "offline":
+                            self.render_tracks(list(load_offline_index().values()))
+                    self.call_from_thread(_refresh_if_offline)
+                    return
+
+                to_dl_count = len(needed)
+                already_cached = total - to_dl_count
+                self.call_from_thread(
+                    self.notify_user,
+                    f"Starting download of {to_dl_count} tracks for '{name}' ({already_cached} already cached)..."
+                )
+                try:
+                    self.call_from_thread(
+                        self.notify,
+                        f"Downloading {to_dl_count} songs from '{name}'",
+                        title="⬇ Bulk Download Started",
+                        timeout=3.5
+                    )
                 except Exception:
                     pass
 

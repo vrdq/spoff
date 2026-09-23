@@ -713,16 +713,33 @@ class ParametricEQEngine:
         if not coeffs_list:
             return preamp, 1000.0
 
-        # Dense logarithmic frequency sweep + band center frequencies
+        # Dense logarithmic sweep from 0.1 Hz to Nyquist, plus DC and shelf/peak critical points
         max_gain_db = -999.0
-        peak_freq = 20.0
+        peak_freq = 0.0
 
         count = max(2, num_points)
-        lower = min(20.0, *(b.frequency for b in self.bands if b.enabled))
+        lower = 0.1
         upper = self.sample_rate / 2.0
         freq_list = [lower * ((upper / lower) ** (i / (count - 1))) for i in range(count)]
-        freq_list.append(upper)
-        freq_list.extend(b.frequency for b in self.bands if b.enabled)
+        freq_list.extend((0.0, upper))
+
+        for b in self.bands:
+            if b.enabled:
+                f0 = b.frequency
+                freq_list.extend((
+                    max(0.0, f0 * 0.01),
+                    max(0.0, f0 * 0.05),
+                    max(0.0, f0 * 0.1),
+                    max(0.0, f0 * 0.25),
+                    max(0.0, f0 * 0.5),
+                    max(0.0, f0 * 0.75),
+                    f0,
+                    min(upper, f0 * 1.1),
+                    min(upper, f0 * 1.25),
+                    min(upper, f0 * 1.5),
+                    min(upper, f0 * 2.0),
+                    min(upper, f0 * 4.0),
+                ))
 
         for f in freq_list:
             w = 2.0 * math.pi * f / self.sample_rate
@@ -739,6 +756,24 @@ class ParametricEQEngine:
             if tot_db > max_gain_db:
                 max_gain_db = tot_db
                 peak_freq = f
+
+        # Refine around sampled maximum
+        if peak_freq > 0.0:
+            for delta in (-0.05, -0.02, -0.01, -0.005, 0.005, 0.01, 0.02, 0.05):
+                f = peak_freq * (1.0 + delta)
+                if 0.0 <= f <= upper:
+                    w = 2.0 * math.pi * f / self.sample_rate
+                    z_inv = cmath.exp(-1j * w)
+                    z_inv2 = z_inv * z_inv
+                    tot_db = preamp
+                    for c in coeffs_list:
+                        num = c.b0 + c.b1 * z_inv + c.b2 * z_inv2
+                        den = 1.0 + c.a1 * z_inv + c.a2 * z_inv2
+                        if abs(den) > 1e-15:
+                            tot_db += 20.0 * math.log10(abs(num / den))
+                    if tot_db > max_gain_db:
+                        max_gain_db = tot_db
+                        peak_freq = f
 
         return max_gain_db, peak_freq
 

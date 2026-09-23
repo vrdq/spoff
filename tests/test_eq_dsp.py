@@ -151,8 +151,8 @@ class TestParametricEQDSP(unittest.TestCase):
 
         # Crucial Requirement: Boosted bands must NEVER exceed 0 dBFS
         self.assertLess(peak_gain_dbfs, 0.0)
-        # For Samsung AKG with -5.0dB preamp, max gain is around -0.89 dBFS at 20Hz
-        self.assertAlmostEqual(peak_gain_dbfs, -0.89, delta=0.2)
+        # For Samsung AKG with -5.0dB preamp, max gain is around -0.50 dBFS at DC (-0.89 dBFS at 20Hz)
+        self.assertAlmostEqual(peak_gain_dbfs, -0.50, delta=0.2)
         self.assertTrue(peak_gain_dbfs < 0.0, "Composite transfer function exceeded 0 dBFS ceiling!")
 
     def test_auto_preamp_headroom_calculation(self):

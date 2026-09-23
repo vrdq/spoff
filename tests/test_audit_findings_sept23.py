@@ -151,6 +151,17 @@ class TestAuditFindingsSept23(unittest.TestCase):
         self.assertLess(peak_gain, 0.0)
         self.assertLess(engine.get_magnitude_at_freq(30000), 0.0)
 
+    def test_05b_auto_headroom_handles_low_shelf_down_to_dc(self):
+        """Finding 4 recheck: 10 Hz low shelf with auto headroom does not exceed 0 dBFS at DC / 1 Hz."""
+        preset = eq.EQPreset("Low rate", "", 0, [eq.EQBand(1, eq.FilterType.LOW_SHELF, 10.0, 12.0, 0.707)])
+        engine = eq.ParametricEQEngine(preset, sample_rate=48000)
+        engine.set_auto_headroom(True)
+
+        peak_gain, peak_freq = engine.calculate_peak_gain()
+        self.assertLess(peak_gain, 0.0)
+        self.assertLess(engine.get_magnitude_at_freq(1.0), 0.0)
+        self.assertLess(engine.get_magnitude_at_freq(0.0), 0.0)
+
     def test_06_missing_files_pruned_from_offline_library(self):
         """Finding 5: Disappeared audio files are pruned from offline index."""
         storage.save_offline_index({
@@ -273,3 +284,48 @@ class TestAuditFindingsSept23(unittest.TestCase):
         # On the UI thread, _reconcile_offline_cache should not be called in a loop
         self.assertEqual(reconcile.call_count, 0)
         mock_thread.assert_called_once()
+
+    def test_14b_bulk_download_all_cached_repairs_stale_metadata(self):
+        """Finding 13 recheck: Bulk download repairs stale metadata even when all tracks are already cached."""
+        track_meta = {"id": "track_cached_1", "title": "Real Title", "artist": "Real Artist", "duration_ms": 180000}
+        file_path = storage.CACHE_DIR / "track_cached_1.m4a"
+        file_path.write_bytes(b"DATA" * 50)
+
+        # Existing stale index record
+        storage.save_offline_index({
+            "track_cached_1": {
+                "id": "track_cached_1",
+                "title": "Offline Track (generic)",
+                "artist": "Offline Library",
+                "duration_ms": 0,
+                "filepath": str(file_path),
+                "size_bytes": file_path.stat().st_size,
+                "is_offline": True,
+            }
+        })
+
+        worker_fn = None
+        def fake_thread(target, **kw):
+            nonlocal worker_fn
+            worker_fn = target
+            return types.SimpleNamespace(start=lambda: None)
+
+        fake = make_fake_app(
+            _bulk_download_in_progress=False,
+            playlists=[{"id": "pl1", "name": "PL", "tracks": [track_meta]}],
+            active_tab="playlists",
+            current_playlist_idx=0,
+        )
+
+        with patch.object(app.threading, "Thread", side_effect=fake_thread):
+            app.SpoffTUI._bulk_download_playlist(fake, fake.playlists[0])
+
+        self.assertIsNotNone(worker_fn)
+        worker_fn()
+
+        # Offline index must now contain the real title and artist
+        idx = storage.load_offline_index()
+        self.assertIn("track_cached_1", idx)
+        self.assertEqual(idx["track_cached_1"]["title"], "Real Title")
+        self.assertEqual(idx["track_cached_1"]["artist"], "Real Artist")
+        self.assertEqual(idx["track_cached_1"]["duration_ms"], 180000)
