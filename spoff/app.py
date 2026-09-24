@@ -1006,8 +1006,10 @@ class SettingsModal(SafeModalScreen[None]):
         cur_key = self.spoff_app.keybindings.get(act_id, "")
         if not cur_key:
             return "[#555555]none[/]", ""
-        marker = "" if cur_key == DEFAULT_KEYBINDINGS.get(act_id) else "[#569f68]•[/]"
-        return format_key_display(cur_key), marker
+        marker = "" if cur_key == DEFAULT_KEYBINDINGS.get(act_id) else "[#6cc483]•[/]"
+        # Drawn as a keycap so keys read as keys, not as more text.
+        # U+2800 pads the cap: DataTable strips a leading plain space.
+        return f"[#e2e2e2 on #2a2a2a]\u2800{escape(format_key_display(cur_key))}\u2800[/]", marker
 
     def on_mount(self) -> None:
         self.update_toggle_ui()
@@ -1039,8 +1041,8 @@ class SettingsModal(SafeModalScreen[None]):
     @staticmethod
     def _row(label: str, value: str, on: Optional[bool] = None) -> str:
         """One settings line: label on the left, plain value on the right; 'off' values are dimmed."""
-        colour = "#666666" if on is False else "#e2e2e2"
-        return f" {label:<24}[{colour}]{escape(value)}[/]"
+        colour = "#5f5f5f" if on is False else ("#6cc483" if on else "#e2e2e2")
+        return f"{label:<24}[{colour}]{escape(value)}[/]"
 
     def update_toggle_ui(self) -> None:
         app = self.spoff_app
@@ -1074,9 +1076,9 @@ class SettingsModal(SafeModalScreen[None]):
             vis_on = bool(getattr(app, "vis_enabled", True)) and getattr(vis, "style", "bars") != "off"
             self.query_one("#vis-toggle", Static).update(self._row("Visualizer", "on" if vis_on else "off", on=vis_on))
             style = vis.get_style_name() if vis else "Bars"
-            self.query_one("#vis-style-toggle", Static).update(self._row("Style", style, on=vis_on))
+            self.query_one("#vis-style-toggle", Static).update(self._row("Style", style, on=None if vis_on else False))
             colour = vis.get_color_name() if vis else "Green"
-            self.query_one("#vis-color-toggle", Static).update(self._row("Colour", colour, on=vis_on))
+            self.query_one("#vis-color-toggle", Static).update(self._row("Colour", colour, on=None if vis_on else False))
 
             eq_eng = getattr(app, "eq_engine", None)
             p_name = eq_eng.preset_name if eq_eng else "AKG Reference"
@@ -2643,7 +2645,7 @@ class EqualizerModal(SafeModalScreen[None]):
             g_str = f"{b.gain_db:+.1f} dB"
             b_bar = format_gain_bar(b.gain_db)
             q_str = f"{b.q:.2f}"
-            s_str = "on" if b.enabled else "[#555555]off[/]"
+            s_str = "[#6cc483]on[/]" if b.enabled else "[#5f5f5f]off[/]"
             table.add_row(
                 f"{b.index}",
                 {"PK": "peak", "LSC": "low shelf", "HSC": "high shelf"}.get(b.filter_type.value, b.filter_type.value),
@@ -2681,7 +2683,7 @@ class EqualizerModal(SafeModalScreen[None]):
                 g_str = f"{b.gain_db:+.1f} dB"
                 b_bar = format_gain_bar(b.gain_db)
                 q_str = f"{b.q:.2f}"
-                s_str = "on" if b.enabled else "[#555555]off[/]"
+                s_str = "[#6cc483]on[/]" if b.enabled else "[#5f5f5f]off[/]"
                 rk = f"row_band_{b.index}"
                 table.update_cell(rk, "type", {"PK": "peak", "LSC": "low shelf", "HSC": "high shelf"}.get(b.filter_type.value, b.filter_type.value))
                 table.update_cell(rk, "freq", f_str)
@@ -3102,9 +3104,9 @@ class EQSettingsModal(SafeModalScreen[None]):
 
     @staticmethod
     def _row(label: str, value: str, note: str = "", on: Optional[bool] = None) -> str:
-        colour = "#666666" if on is False else "#e2e2e2"
-        note_part = f"  [#555555]{escape(note)}[/]" if note else ""
-        return f" {label:<22}[{colour}]{escape(value)}[/]{note_part}"
+        colour = "#5f5f5f" if on is False else ("#6cc483" if on else "#e2e2e2")
+        note_part = f"  [#5a5a5a]{escape(note)}[/]" if note else ""
+        return f"{label:<22}[{colour}]{escape(value)}[/]{note_part}"
 
     def update_ui(self) -> None:
         eng = self.engine
@@ -3132,7 +3134,7 @@ class EQSettingsModal(SafeModalScreen[None]):
                 self._row("Auto preamp", "on" if eng.auto_headroom else "off",
                           "lowers preamp so boosts can't clip", on=eng.auto_headroom))
             self.query_one("#eq-opt-headroom-margin", Static).update(
-                self._row("Safety margin", f"{eng.headroom_margin:.1f} dB", on=eng.auto_headroom))
+                self._row("Safety margin", f"{eng.headroom_margin:.1f} dB", on=None if eng.auto_headroom else False))
             self.query_one("#eq-opt-intersample-guard", Static).update(
                 self._row("True-peak guard", "on" if eng.intersample_guard else "off",
                           "extra 0.2 dB", on=eng.intersample_guard))
@@ -3141,13 +3143,13 @@ class EQSettingsModal(SafeModalScreen[None]):
             self.query_one("#eq-opt-curve-range", Static).update(
                 self._row("Range", f"±{int(eng.curve_range_db)} dB"))
 
-            self.query_one("#eq-act-open-live-editor", Static).update(" Open the editor")
+            self.query_one("#eq-act-open-live-editor", Static).update("Open the editor")
             self.query_one("#eq-act-import-clipboard", Static).update(
-                " Import from clipboard  [#555555]AutoEQ or EqualizerAPO text[/]")
+                "Import from clipboard  [#5a5a5a]AutoEQ or EqualizerAPO text[/]")
             self.query_one("#eq-act-export-clipboard", Static).update(
-                " Copy as EqualizerAPO text")
+                "Copy as EqualizerAPO text")
             self.query_one("#eq-act-reset-defaults", Static).update(
-                f" Reset to {escape(SAMSUNG_AKG_REFERENCE_PRESET.name)}")
+                f"Reset to {escape(SAMSUNG_AKG_REFERENCE_PRESET.name)}")
         except Exception as e:
             logger.error(f"Error updating EQSettingsModal UI: {e}")
 
@@ -4341,22 +4343,9 @@ class SpoffTUI(App):
     .eq-settings-section-title {
         height: 1;
         width: 100%;
-        color: #555555;
+        color: #4f8a5e;
         margin-top: 1;
         text-style: bold;
-    }
-
-    .eq-setting-item {
-        height: 1;
-        width: 100%;
-        background: transparent;
-        color: #888888;
-        padding: 0 1;
-    }
-
-    .eq-setting-item:focus {
-        background: #242424;
-        color: #ffffff;
     }
 
     #eq-settings-status-line {
@@ -4696,7 +4685,7 @@ class SpoffTUI(App):
 
     .settings-section, #settings-table-title {
         height: 1;
-        color: #555555;
+        color: #4f8a5e;
         text-style: bold;
         margin-top: 1;
     }
@@ -4705,18 +4694,21 @@ class SpoffTUI(App):
         margin-top: 0;
     }
 
-    .setting-toggle-item {
+    .setting-toggle-item, .eq-setting-item {
         height: 1;
         width: 100%;
         background: transparent;
-        color: #888888;
+        color: #9a9a9a;
         padding: 0 1;
         margin: 0;
+        border-left: outer transparent;
     }
 
-    .setting-toggle-item:focus {
-        background: #242424;
+    /* The one accent in these lists: a green bar marks the focused row. */
+    .setting-toggle-item:focus, .eq-setting-item:focus {
+        background: #1e1e1e;
         color: #ffffff;
+        border-left: outer #569f68;
     }
 
     #settings-table {
@@ -4731,7 +4723,7 @@ class SpoffTUI(App):
     }
 
     #settings-table:focus > .datatable--cursor {
-        background: #242424;
+        background: #1e1e1e;
         color: #ffffff;
     }
 
