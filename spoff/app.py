@@ -9492,8 +9492,6 @@ class SpoffTUI(App):
         if ready:
             hint = "" if self.advanced_mode else " Press Enter to play."
             summary = fallback_msg or f"Found {len(ready)} tracks on {engine_name} for '{query}'.{hint}"
-            if hidden:
-                summary += f" Left out {hidden} that {'isn’t' if hidden == 1 else 'aren’t'} on YouTube."
         elif hidden:
             summary = "None of these songs are on YouTube, so none can play. Try YouTube Music search (Ctrl+E)."
         else:
