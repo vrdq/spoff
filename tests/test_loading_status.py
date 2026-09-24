@@ -102,11 +102,20 @@ def test_sidebar_browsing_preserves_status_and_marks_open_playlist(size):
             await pilot.press('down')
             await pilot.pause()
             assert application.current_playlist_id == 'one'
-            assert table.get_cell_at(app.Coordinate(0, 0)).plain == '› Evening  1'
-            assert table.get_cell_at(app.Coordinate(1, 0)).plain == '  Weekend  0'
+            assert table.get_cell_at(app.Coordinate(0, 0)).plain == 'Evening  1'
+            assert table.get_cell_at(app.Coordinate(1, 0)).plain == 'Weekend  0'
+            assert table.show_cursor
+            selected_row = table.cursor_row
+            application.query_one('#track-table', app.DataTable).focus()
+            await pilot.pause()
+            assert not table.show_cursor
+            table.focus()
+            await pilot.pause()
+            assert table.show_cursor
+            assert table.cursor_row == selected_row
             assert str(application.query_one('#notification-line', Static).content) == 'Downloading 2/5'
             hint = application.query_one('#sidebar-hint', Static)
-            assert hint.region.height >= 2
+            assert hint.region.height >= 1
             assert hint.region.bottom <= size[1]
     asyncio.run(check())
 

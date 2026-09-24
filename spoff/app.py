@@ -3777,7 +3777,7 @@ class SpoffTUI(App):
     }
 
     #side-table > .datatable--hover {
-        background: #1c1c1c;
+        background: transparent;
         color: #ffffff;
     }
 
@@ -5552,7 +5552,7 @@ class SpoffTUI(App):
             with Vertical(id="sidebar"):
                 yield Static("PLAYLISTS", classes="pane-title")
                 yield Input(placeholder="Create a playlist or paste a link", id="sidebar-import-input", classes="action-input")
-                yield DataTable(id="side-table", cursor_type="row", show_header=False)
+                yield DataTable(id="side-table", cursor_type="row", show_header=False, show_cursor=False)
                 yield Static("" if self.advanced_mode else "[dim]Enter: open  |  Del: delete[/dim]", id="sidebar-hint")
 
             yield SidebarSplitter(id="sidebar-splitter")
@@ -5660,6 +5660,8 @@ class SpoffTUI(App):
         self._is_ready = True
 
     def on_descendant_focus(self, event: events.DescendantFocus) -> None:
+        if isinstance(event.widget, DataTable) and event.widget.id == "side-table":
+            event.widget.show_cursor = True
         try:
             if not isinstance(event.widget, Input):
                 if getattr(self, "_driver", None) and hasattr(self._driver, "write"):
@@ -5679,6 +5681,8 @@ class SpoffTUI(App):
             pass
 
     def on_descendant_blur(self, event: events.DescendantBlur) -> None:
+        if isinstance(event.widget, DataTable) and event.widget.id == "side-table":
+            event.widget.show_cursor = False
         try:
             if isinstance(event.widget, Input):
                 if hasattr(event.widget, "_pause_blink"):
@@ -7603,9 +7607,9 @@ class SpoffTUI(App):
             is_active = bool(self.current_playlist_id and p.get("id") == self.current_playlist_id)
             if is_active:
                 selected_idx = idx
-                styled_text = Text.from_markup(f"[bold #ffffff]› {escape(raw_name)}[/]")
+                styled_text = Text.from_markup(f"[bold #ffffff]{escape(raw_name)}[/]")
             else:
-                styled_text = Text.from_markup(f"[#888888]  {escape(raw_name)}[/]")
+                styled_text = Text.from_markup(f"[#888888]{escape(raw_name)}[/]")
             tracks = p.get("tracks")
             count = len(tracks) if isinstance(tracks, list) else 0
             styled_text.append(f"  {count}", style="#929292")
@@ -7631,7 +7635,7 @@ class SpoffTUI(App):
             else:
                 hint.styles.display = "block"
                 if self.playlists:
-                    hint.update("Enter / →: open\n› Open playlist · number = songs")
+                    hint.update("Enter / →: open")
                 else:
                     hint.update("Create your first playlist above.")
         except Exception:
