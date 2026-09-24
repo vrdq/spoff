@@ -256,52 +256,51 @@ class TestSpotifySyncHardening(unittest.TestCase):
             self.assertGreaterEqual(synced, 1)
 
         final_liked = storage.load_liked_songs()
-    def test_add_track_to_spotify_account_auto_heals_404_by_recreating_playlist(self):
-        """When adding a track to a playlist whose Spotify ID returns 404, Spoff auto-heals by recreating on Spotify."""
-        stale_sp_id = "stale" + "1" * 17
-        new_sp_id = "new_pl" + "2" * 16
-        pl = {
-            "id": "my_playlist_id",
-            "name": "My Mix",
-            "spotify_id": stale_sp_id,
-            "tracks": [{"id": "t1" + "a" * 20, "title": "Track 1", "artist": "A", "uri": f"spotify:track:t1{'a' * 20}"}]
-        }
-        storage.save_saved_playlists([pl])
-
-        new_track = {
-            "id": "t2" + "b" * 20,
-            "title": "Track 2",
-            "artist": "B",
-            "uri": f"spotify:track:t2{'b' * 20}"
-        }
-
-        created_playlists = []
-        posted_tracks = []
+    def test_playlist_deleted_on_spotify_is_never_recreated(self):
+        """A 404 on add, rename, or reorder fails cleanly and never creates a playlist."""
+        sp_track = {"id": "a" * 22, "title": "A", "artist": "B", "source": "spotify",
+                    "uri": "spotify:track:" + "a" * 22}
+        storage.save_saved_playlists([{"id": "local_x", "name": "Gone", "spotify_id": "d" * 22,
+                                       "tracks": [sp_track]}])
+        calls = []
 
         def fake_api(url, method="GET", body=None, token=None):
-            if method == "POST" and f"/playlists/{stale_sp_id}/tracks" in url:
-                return False, None, "Resource not found"
-            if method == "POST" and "/me/playlists" in url:
-                created_playlists.append(body)
-                return True, {"id": new_sp_id, "name": body.get("name")}, ""
-            if method == "POST" and f"/playlists/{new_sp_id}/tracks" in url:
-                posted_tracks.extend(body.get("uris", []))
-                return True, {}, ""
-            return True, {}, ""
+            calls.append((method, url))
+            return False, None, "Resource not found (404)"
 
         with patch.object(auth, "has_modify_scopes", return_value=True), \
              patch.object(auth, "spotify_api_request", side_effect=fake_api):
-            ok, msg = auth.add_track_to_spotify_account("my_playlist_id", "My Mix", new_track, token="tok")
-            self.assertTrue(ok)
-            self.assertIn("recreated", msg.lower())
+            ok1, _ = auth.add_track_to_spotify_account("local_x", "Gone", sp_track, token="t")
+            ok2, _ = auth.rename_spotify_playlist("local_x", "New", token="t")
+            ok3, _ = auth.sync_playlist_tracks_to_spotify("local_x", token="t")
 
-        # Verify local playlist spotify_id was updated to new_sp_id
-        saved_pls = storage.load_saved_playlists()
-        self.assertEqual(saved_pls[0]["spotify_id"], new_sp_id)
-        # Verify tracks were uploaded to the new Spotify playlist
-        self.assertIn(f"spotify:track:t1{'a' * 20}", posted_tracks)
-        self.assertIn(f"spotify:track:t2{'b' * 20}", posted_tracks)
+        self.assertEqual((ok1, ok2, ok3), (False, False, False))
+        self.assertNotIn(("POST", "/me/playlists"), calls)
+        self.assertEqual(storage.load_saved_playlists()[0]["spotify_id"], "d" * 22)
 
+    def test_playlist_deleted_on_spotify_is_removed_from_spoff(self):
+        """Deleted on Spotify -> removed here; imports never in the library stay; failed fetch removes nothing."""
+        storage.save_saved_playlists([
+            {"id": "a" * 22, "name": "Deleted on phone", "in_spotify_library": True, "tracks": []},
+            {"id": "b" * 22, "name": "Still there", "in_spotify_library": True, "tracks": []},
+            {"id": "local_imp", "name": "Imported link", "spotify_id": "c" * 22, "tracks": []},
+        ])
+        base = [patch.object(auth, "has_modify_scopes", return_value=False),
+                patch.object(auth, "fetch_liked_songs", return_value=None),
+                patch.object(auth, "fetch_playlist_tracks", return_value=[])]
+
+        for pt in base: pt.start()
+        try:
+            with patch.object(auth, "fetch_user_playlists", return_value=None):
+                auth.sync_spotify_library("t")
+            self.assertEqual(len(storage.load_saved_playlists()), 3)
+
+            with patch.object(auth, "fetch_user_playlists", return_value=[{"id": "b" * 22, "name": "Still there"}]):
+                auth.sync_spotify_library("t")
+        finally:
+            for pt in base: pt.stop()
+
+        self.assertEqual([p["name"] for p in storage.load_saved_playlists()], ["Still there", "Imported link"])
     def test_sync_playlist_tracks_to_spotify_auto_creates_unlinked_playlist(self):
         """sync_playlist_tracks_to_spotify automatically creates the playlist on Spotify if unlinked."""
         new_sp_id = "created_sp_" + "3" * 11
@@ -330,70 +329,6 @@ class TestSpotifySyncHardening(unittest.TestCase):
         saved = storage.load_saved_playlists()
         self.assertEqual(saved[0]["spotify_id"], new_sp_id)
         self.assertIn(f"spotify:track:t1{'c' * 20}", uploaded_uris)
-
-    def test_sync_playlist_tracks_to_spotify_auto_heals_404(self):
-        """sync_playlist_tracks_to_spotify recreates the playlist when PUT returns 404."""
-        stale_id = "s" * 22
-        new_id = "n" * 22
-        pl = {
-            "id": "local_mix_404",
-            "name": "Road Trip",
-            "spotify_id": stale_id,
-            "tracks": [{"id": "t1" + "d" * 20, "title": "Track 1", "artist": "A", "uri": f"spotify:track:t1{'d' * 20}"}]
-        }
-        storage.save_saved_playlists([pl])
-
-        uploaded_uris = []
-
-        def fake_api(url, method="GET", body=None, token=None):
-            if method == "PUT" and f"/playlists/{stale_id}/tracks" in url:
-                return False, None, "Resource not found (404)"
-            if method == "POST" and "/me/playlists" in url:
-                return True, {"id": new_id}, ""
-            if method == "POST" and f"/playlists/{new_id}/tracks" in url:
-                uploaded_uris.extend(body.get("uris", []))
-                return True, {}, ""
-            return True, {}, ""
-
-        with patch.object(auth, "has_modify_scopes", return_value=True), \
-             patch.object(auth, "spotify_api_request", side_effect=fake_api):
-            ok, msg = auth.sync_playlist_tracks_to_spotify("local_mix_404", token="tok")
-            self.assertTrue(ok)
-            self.assertIn("recreated", msg.lower())
-
-        saved = storage.load_saved_playlists()
-        self.assertEqual(saved[0]["spotify_id"], new_id)
-        self.assertIn(f"spotify:track:t1{'d' * 20}", uploaded_uris)
-
-    def test_rename_spotify_playlist_auto_heals_404(self):
-        """rename_spotify_playlist creates the playlist on Spotify with the new name if remote is 404."""
-        stale_id = "r" * 22
-        new_id = "m" * 22
-        pl = {
-            "id": "local_ren_pl",
-            "name": "Old Name",
-            "spotify_id": stale_id,
-            "tracks": [{"id": "t1" + "e" * 20, "title": "Track 1", "artist": "A", "uri": f"spotify:track:t1{'e' * 20}"}]
-        }
-        storage.save_saved_playlists([pl])
-
-        def fake_api(url, method="GET", body=None, token=None):
-            if method == "PUT" and f"/playlists/{stale_id}" in url:
-                return False, None, "Resource not found (404)"
-            if method == "POST" and "/me/playlists" in url:
-                return True, {"id": new_id}, ""
-            if method == "POST" and f"/playlists/{new_id}/tracks" in url:
-                return True, {}, ""
-            return True, {}, ""
-
-        with patch.object(auth, "has_modify_scopes", return_value=True), \
-             patch.object(auth, "spotify_api_request", side_effect=fake_api):
-            ok, msg = auth.rename_spotify_playlist("local_ren_pl", "New Name", token="tok")
-            self.assertTrue(ok)
-
-        saved = storage.load_saved_playlists()
-        self.assertEqual(saved[0]["spotify_id"], new_id)
-        self.assertEqual(saved[0]["name"], "New Name")
 
     def test_remove_track_from_spotify_account_client_side_and_404_safe(self):
         """Local-only tracks make no Spotify call and report no Spotify removal; 404 playlists are safe."""
@@ -495,7 +430,6 @@ class TestSpotifySyncHardening(unittest.TestCase):
         self.assertEqual(created_playlists[0]["name"], "Empty PreLogin")
         saved_pls = storage.load_saved_playlists()
         self.assertEqual(saved_pls[0]["spotify_id"], new_sp_id)
-
 
     def test_auto_sync_names_each_unlinked_playlist_correctly(self):
         """Each unlinked playlist is created on Spotify under its own name."""
