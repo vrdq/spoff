@@ -10079,11 +10079,12 @@ class SpoffTUI(App):
                 pass
             self.call_from_thread(self._commit_playback, req_id, str(cached), track)
             if is_low_quality_cache(cached):
-                # Saved before the switch to Opus: keep playing it, and quietly
-                # fetch the better version to replace it for next time.
+                # Saved before the switch to Opus, or below the 256 kbps a
+                # signed-in account gets: keep playing it, and quietly fetch
+                # the better version to replace it for next time.
                 download_track_to_cache(
                     t_id, title, artist, direct_url=playback_direct_url(track), track_meta=track,
-                    on_error=lambda err: logger.info("Opus upgrade skipped for %s: %s", t_id, err),
+                    on_error=lambda err: logger.info("Quality upgrade skipped for %s: %s", t_id, err),
                 )
             return
 

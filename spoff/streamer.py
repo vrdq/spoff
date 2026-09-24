@@ -12,11 +12,11 @@ import yt_dlp
 try:
     from . import storage
     from .matching import _seconds, _matches_recording, _normalized_name
-    from .storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS, is_low_quality_cache
+    from .storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS, is_low_quality_cache, set_hq_upgrades, mark_hq_checked
 except ImportError:
     import storage  # type: ignore
     from matching import _seconds, _matches_recording, _normalized_name
-    from storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS, is_low_quality_cache  # type: ignore
+    from storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS, is_low_quality_cache, set_hq_upgrades, mark_hq_checked  # type: ignore
 
 import tempfile
 import subprocess
@@ -58,6 +58,7 @@ COOKIE_REFRESH = 600.0  # re-read the browser's login every 10 minutes
 def set_youtube_login(spec: Optional[Tuple[str, Optional[str], Optional[str]]]) -> None:
     global _youtube_login, _cookie_text
     _youtube_login = tuple(spec) if spec else None  # type: ignore[assignment]
+    set_hq_upgrades(bool(spec))
     with _cookie_lock:
         _cookie_text = None
     with _stream_cache_lock:
@@ -559,6 +560,8 @@ def download_track_to_cache(
             result = _run_download_process(
                 val_id, title, artist, direct_url=direct_url, track_meta=track_meta
             )
+            if result and _youtube_login:
+                mark_hq_checked(result)
         except Exception as exc:
             logger.error("Failed to cache track %s: %s", val_id, exc)
             error = exc

@@ -205,9 +205,92 @@ _init_storage_once()
 CACHE_EXTENSIONS = (".opus", ".webm", ".ogg", ".flac", ".m4a", ".mp3")
 LOW_QUALITY_CACHE_EXTENSIONS = (".m4a", ".mp3")
 
+# YouTube Premium streams are ~256 kbps; normal ones top out around 160.
+HIGH_QUALITY_KBPS = 200
+_hq_upgrades = False
+_hq_lock = threading.Lock()
+_bitrate_cache: Dict[Tuple[str, int], int] = {}
+HQ_CHECKED_FILE = DATA_DIR / "hq_checked.json"
+
+
+def set_hq_upgrades(enabled: bool) -> None:
+    """While signed in to YouTube, songs saved below high quality get re-downloaded."""
+    global _hq_upgrades
+    _hq_upgrades = bool(enabled)
+
+
+def _file_key(path: Path) -> Optional[str]:
+    try:
+        return f"{path.name}:{path.stat().st_size}"
+    except OSError:
+        return None
+
+
+def _load_hq_checked() -> Dict[str, bool]:
+    try:
+        data = json.loads(HQ_CHECKED_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def mark_hq_checked(path: Any) -> None:
+    """This file came from a signed-in download, so it is the best YouTube has.
+
+    Some songs have no Premium stream; without this they'd be re-downloaded
+    on every play.
+    """
+    key = _file_key(Path(str(path)))
+    if not key:
+        return
+    with _hq_lock:
+        checked = _load_hq_checked()
+        checked[key] = True
+        try:
+            _atomic_json_dump(HQ_CHECKED_FILE, checked)
+        except Exception:
+            logger.warning("Could not record high-quality check for %s", path, exc_info=True)
+
+
+def cache_bitrate_kbps(path: Path) -> int:
+    """Audio bitrate of a saved file (0 if unknown)."""
+    try:
+        key = (str(path), path.stat().st_size)
+    except OSError:
+        return 0
+    if key in _bitrate_cache:
+        return _bitrate_cache[key]
+    import subprocess
+    kbps = 0
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=bit_rate", "-of", "json", str(path)],
+            capture_output=True, text=True, check=True, timeout=5,
+        ).stdout
+        kbps = int(float(json.loads(out).get("format", {}).get("bit_rate") or 0)) // 1000
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        logger.debug("Could not read bitrate of %s", path)
+    _bitrate_cache[key] = kbps
+    return kbps
+
+
 def is_low_quality_cache(path: Any) -> bool:
-    """AAC/MP3 files saved before Spoff switched to Opus; they get re-downloaded."""
-    return Path(str(path)).suffix.lower() in LOW_QUALITY_CACHE_EXTENSIONS
+    """Saved audio worth replacing with a better download.
+
+    AAC/MP3 files predate the switch to Opus. While signed in to YouTube,
+    files under ~200 kbps also count, unless a signed-in download already
+    produced them.
+    """
+    path = Path(str(path))
+    if path.suffix.lower() in LOW_QUALITY_CACHE_EXTENSIONS:
+        return True
+    if not _hq_upgrades:
+        return False
+    key = _file_key(path)
+    if not key or _load_hq_checked().get(key):
+        return False
+    kbps = cache_bitrate_kbps(path)
+    return 0 < kbps < HIGH_QUALITY_KBPS
 
 def stable_track_id(track: Dict[str, Any]) -> str:
     """Generates a deterministic persistent identifier for tracks lacking an upstream ID."""
