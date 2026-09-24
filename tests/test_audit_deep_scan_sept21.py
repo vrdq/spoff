@@ -34,7 +34,8 @@ def test_mpv_controller_locking_and_direct_audio():
         assert mock_popen.called
         cmd_args = mock_popen.call_args[0][0]
         assert "--audio-device=alsa_output.pci-0000_00_1f.3.analog-stereo" in cmd_args
-        assert "--af=equalizer=f=1000:t=q:w=1:g=2" in cmd_args
+        # EQ first, then loudness levelling (on by default).
+        assert "--af=equalizer=f=1000:t=q:w=1:g=2,loudnorm=I=-14:TP=-1.5:LRA=11" in cmd_args
 
         # Test synchronized operations
         controller.toggle_pause()

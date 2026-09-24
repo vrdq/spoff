@@ -71,6 +71,7 @@ try:
         get_saved_instant_search, save_instant_search,
         get_saved_auto_update, save_auto_update,
         get_saved_notifications_enabled, save_notifications_enabled,
+        get_saved_loudness_normalization, save_loudness_normalization, migrate_eq_to_native_rate,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
@@ -125,6 +126,7 @@ except ImportError:
         get_saved_instant_search, save_instant_search,
         get_saved_auto_update, save_auto_update,
         get_saved_notifications_enabled, save_notifications_enabled,
+        get_saved_loudness_normalization, save_loudness_normalization, migrate_eq_to_native_rate,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
@@ -816,6 +818,13 @@ class VisualizerColorToggle(Static):
         if isinstance(self.screen, SettingsModal):
             self.screen.cycle_visualizer_color()
 
+class LoudnessToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_loudness()
+
 class EQSettingsNavToggle(Static):
     can_focus = True
 
@@ -996,6 +1005,7 @@ class SettingsModal(SafeModalScreen[None]):
                 yield VisualizerStyleToggle(id="vis-style-toggle", classes="setting-toggle-item")
                 yield VisualizerColorToggle(id="vis-color-toggle", classes="setting-toggle-item")
                 yield Static("AUDIO", classes="settings-section")
+                yield LoudnessToggle(id="loudness-toggle", classes="setting-toggle-item")
                 yield EQSettingsNavToggle(id="eq-settings-nav-toggle", classes="setting-toggle-item")
 
             yield Static("KEYS", id="settings-table-title")
@@ -1086,6 +1096,11 @@ class SettingsModal(SafeModalScreen[None]):
             colour = vis.get_color_name() if vis else "Green"
             self.query_one("#vis-color-toggle", Static).update(self._row("Colour", colour, on=None if vis_on else False))
 
+            player = getattr(app, "player", None)
+            loud = bool(getattr(player, "loudness_normalization", True))
+            self.query_one("#loudness-toggle", Static).update(
+                self._row("Even out loudness", "on" if loud else "off", on=loud))
+
             eq_eng = getattr(app, "eq_engine", None)
             p_name = eq_eng.preset_name if eq_eng else "AKG Reference"
             state = "bypassed" if eq_eng is not None and eq_eng.bypassed else p_name
@@ -1098,6 +1113,12 @@ class SettingsModal(SafeModalScreen[None]):
         self.update_toggle_ui()
         state_text = "enabled" if new_state else "disabled"
         self.query_one("#settings-status-line", Static).update(f"Advanced Mode: {state_text}")
+
+    def toggle_loudness(self) -> None:
+        new_state = self.spoff_app.toggle_loudness_normalization()
+        self.update_toggle_ui()
+        self.query_one("#settings-status-line", Static).update(
+            "Songs play at an even loudness." if new_state else "Songs play at their original loudness.")
 
     def toggle_notifications(self) -> None:
         new_state = self.spoff_app.toggle_notifications()
@@ -1266,6 +1287,7 @@ class SettingsModal(SafeModalScreen[None]):
             "vis-toggle",
             "vis-style-toggle",
             "vis-color-toggle",
+            "loudness-toggle",
             "eq-settings-nav-toggle",
         ]
         focused_id = self.focused.id if self.focused else None
@@ -1298,6 +1320,8 @@ class SettingsModal(SafeModalScreen[None]):
             self.cycle_visualizer_style()
         elif focused_id == "vis-color-toggle":
             self.cycle_visualizer_color()
+        elif focused_id == "loudness-toggle":
+            self.toggle_loudness()
         elif focused_id == "eq-settings-nav-toggle":
             self.open_eq_settings()
         elif self.focused and self.focused.id == "settings-table":
@@ -1319,7 +1343,7 @@ class SettingsModal(SafeModalScreen[None]):
 
     def on_key(self, event: events.Key) -> None:
         table = self.query_one("#settings-table", DataTable)
-        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "eq-settings-nav-toggle"]
+        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "loudness-toggle", "eq-settings-nav-toggle"]
         focused_id = self.focused.id if self.focused else None
 
         if focused_id in toggle_ids:
@@ -1357,6 +1381,8 @@ class SettingsModal(SafeModalScreen[None]):
                     self.cycle_visualizer_style()
                 elif focused_id == "vis-color-toggle":
                     self.cycle_visualizer_color()
+                elif focused_id == "loudness-toggle":
+                    self.toggle_loudness()
                 elif focused_id == "eq-settings-nav-toggle":
                     self.open_eq_settings()
                 event.prevent_default()
@@ -5130,6 +5156,7 @@ class SpoffTUI(App):
         self.advanced_mode: bool = get_saved_advanced_mode()
         self.custom_keybindings: Dict[str, str] = get_custom_keybindings()
         self.keybindings: Dict[str, str] = {**DEFAULT_KEYBINDINGS, **self.custom_keybindings}
+        migrate_eq_to_native_rate()
         eq_data = load_eq_settings()
         default_preset = BUILTIN_PRESETS[0] if BUILTIN_PRESETS else SAMSUNG_AKG_REFERENCE_PRESET
         if eq_data:
@@ -5142,6 +5169,7 @@ class SpoffTUI(App):
             self.eq_engine = ParametricEQEngine(default_preset)
 
         self.player = MPVController(initial_volume=self.volume, eq_engine=self.eq_engine)
+        self.player.loudness_normalization = get_saved_loudness_normalization()
         self.vis_style: str = get_saved_visualizer_style()
         self.vis_color: str = get_saved_visualizer_color()
         if visualizer_enabled is not None:
@@ -5266,6 +5294,12 @@ class SpoffTUI(App):
         save_transparency(self.transparency)
         self.apply_transparency()
         return self.transparency
+
+    def toggle_loudness_normalization(self) -> bool:
+        enabled = not self.player.loudness_normalization
+        self.player.set_loudness_normalization(enabled)
+        save_loudness_normalization(enabled)
+        return enabled
 
     def toggle_instant_search(self) -> bool:
         self.instant_search = not self.instant_search

@@ -474,6 +474,41 @@ def save_auto_update(enabled: bool):
         logger.error(f"Error saving auto update setting: {e}")
         raise
 
+def get_saved_loudness_normalization() -> bool:
+    """Whether songs are levelled to a common loudness, defaulting to True (like Spotify)."""
+    try:
+        return bool(load_config().get("loudness_normalization", True))
+    except Exception as e:
+        logger.error(f"Error reading loudness setting: {e}")
+        return True
+
+@transactional
+def save_loudness_normalization(enabled: bool) -> None:
+    cfg = load_config()
+    cfg["loudness_normalization"] = bool(enabled)
+    save_config(cfg)
+
+@transactional
+def migrate_eq_to_native_rate() -> bool:
+    """One-time move of a saved EQ above 48 kHz down to 48 kHz.
+
+    YouTube audio is 48 kHz; a higher EQ rate only adds a pointless upsampling
+    step. Runs once, so a rate chosen afterwards is left alone.
+    """
+    try:
+        cfg = load_config()
+    except Exception:
+        return False
+    if cfg.get("eq_rate_migrated"):
+        return False
+    cfg["eq_rate_migrated"] = True
+    eq_data = cfg.get("eq")
+    changed = isinstance(eq_data, dict) and float(eq_data.get("sample_rate") or 48000) > 48000
+    if changed:
+        eq_data["sample_rate"] = 48000.0
+    save_config(cfg)
+    return changed
+
 def get_saved_notifications_enabled() -> bool:
     """Retrieves whether in-app notifications are enabled, defaulting to True."""
     try:

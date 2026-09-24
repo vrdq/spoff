@@ -77,6 +77,7 @@ class MPVController:
         self._volume = max(0, min(100, int(initial_volume)))
         self.eq_engine: Optional[Any] = eq_engine
         self._audio_device: Optional[str] = None
+        self.loudness_normalization: bool = True
 
     @property
     def playback_finished_callback(self) -> Optional[Callable]:
@@ -133,7 +134,7 @@ class MPVController:
                 "--force-media-title=spoff",
             ]
             if self.eq_engine:
-                af_str = self.eq_engine.to_ffmpeg_af()
+                af_str = self._audio_filters()
                 if af_str:
                     cmd.append(f"--af={af_str}")
                 direct_dev = get_direct_hardware_audio_device()
@@ -247,8 +248,26 @@ class MPVController:
         """Applies active Parametric EQ filter graph to running MPV stream in real-time."""
         if not self.eq_engine:
             return False
-        af_str = self.eq_engine.to_ffmpeg_af()
-        return self._send_command(["set_property", "af", af_str])
+        return self._send_command(["set_property", "af", self._audio_filters()])
+
+    # Spotify's default level. Keeps quiet uploads from sounding thin and loud
+    # ones from blasting; TP leaves room so the boost can't clip.
+    LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11"
+
+    def _audio_filters(self) -> str:
+        """The mpv filter chain: EQ first, then loudness levelling."""
+        parts = []
+        if self.eq_engine:
+            eq_af = self.eq_engine.to_ffmpeg_af()
+            if eq_af:
+                parts.append(eq_af)
+        if self.loudness_normalization:
+            parts.append(self.LOUDNORM)
+        return ",".join(parts)
+
+    def set_loudness_normalization(self, enabled: bool) -> bool:
+        self.loudness_normalization = bool(enabled)
+        return self._send_command(["set_property", "af", self._audio_filters()])
 
     def toggle_eq_bypass(self) -> bool:
         """Seamlessly toggles EQ bypass without audio interruption (A-B testing)."""
