@@ -6,7 +6,7 @@ import json
 from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Optional, Dict, Any, Tuple, Callable, cast
-from concurrent.futures import Future
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 import yt_dlp
 try:
     from . import storage
@@ -317,6 +317,10 @@ def download_track_to_cache(
     # Duration validation runs in the worker because probing audio may block.
     acquired_slot = False
     busy_error = None
+    # Blocking callers (bulk playlist download) wait for a free slot instead of
+    # failing the track just because four single downloads are running. The
+    # wait happens outside _download_lock, which workers need to release slots.
+    pre_acquired = _download_slots.acquire(timeout=600) if blocking else False
     with _download_lock:
         existing_future = _active_download_futures.get(val_id)
         if existing_future is not None or val_id in _active_downloads:
@@ -326,8 +330,10 @@ def download_track_to_cache(
                 existing_future.set_exception(RuntimeError(f"Track {val_id} is already being downloaded"))
             future = existing_future
             is_new = False
+            if pre_acquired:
+                _download_slots.release()
         else:
-            if not _download_slots.acquire(blocking=False):
+            if not (pre_acquired or _download_slots.acquire(blocking=False)):
                 busy_error = RuntimeError("Four downloads are already active")
             else:
                 future = Future()
@@ -357,7 +363,7 @@ def download_track_to_cache(
         if blocking:
             try:
                 future.result(timeout=300)
-            except TimeoutError as exc:
+            except FutureTimeoutError as exc:
                 if not future.done():
                     report_error(exc)
                     return None

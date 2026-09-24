@@ -156,7 +156,7 @@ def fetch_spotify_track(track_id_or_url: str) -> Optional[Dict[str, Any]]:
     imgs = entity.get("visualIdentity", {}).get("image", [])
     cover_url = None
     if imgs and isinstance(imgs, list):
-        sorted_imgs = sorted(imgs, key=lambda x: int(x.get("maxWidth", 0) or x.get("maxHeight", 0)))
+        sorted_imgs = sorted(imgs, key=lambda x: int(x.get("maxWidth") or x.get("maxHeight") or 0))
         cover_url = sorted_imgs[-1].get("url")
 
     artists = entity.get("artists", [])
@@ -177,7 +177,7 @@ def fetch_spotify_track(track_id_or_url: str) -> Optional[Dict[str, Any]]:
                     a_entity = a_data.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
                     a_imgs = a_entity.get("visualIdentity", {}).get("image", [])
                     if a_imgs and isinstance(a_imgs, list):
-                        sorted_aimgs = sorted(a_imgs, key=lambda x: int(x.get("maxWidth", 0) or x.get("maxHeight", 0)))
+                        sorted_aimgs = sorted(a_imgs, key=lambda x: int(x.get("maxWidth") or x.get("maxHeight") or 0))
                         artist_pic = sorted_aimgs[-1].get("url")
             except Exception:
                 pass

@@ -35,6 +35,7 @@ CONFIG_FILE = DATA_DIR / "config.json"
 PLAYLISTS_FILE = DATA_DIR / "playlists.json"
 LIKED_SONGS_FILE = DATA_DIR / "liked_songs.json"
 DELETED_PLAYLISTS_FILE = DATA_DIR / "deleted_spotify_playlists.json"
+PENDING_UNLIKES_FILE = DATA_DIR / "pending_spotify_unlikes.json"
 INDEX_FILE = DATA_DIR / "offline_index.json"
 LOG_FILE = DATA_DIR / "spoff.log"
 
@@ -766,6 +767,42 @@ def is_track_liked(track: Dict[str, Any]) -> bool:
         return False
     return liked_index(existing, track) is not None
 
+def _spotify_track_id_of(track: Dict[str, Any]) -> Optional[str]:
+    """Spotify track ID of a Spotify-sourced track, or None for YouTube/local tracks."""
+    if str(track.get("source") or "").lower() in ("ytmusic", "youtube", "local", "offline"):
+        return None
+    for key in ("spotify_uri", "uri"):
+        value = str(track.get(key) or "")
+        if value.startswith("spotify:track:"):
+            return value.split(":")[-1]
+    for key in ("spotify_id", "id"):
+        value = str(track.get(key) or "")
+        if len(value) == 22 and value.isalnum():
+            return value
+    return None
+
+def get_pending_spotify_unlikes() -> set:
+    """Spotify track IDs unliked locally whose removal has not reached Spotify yet."""
+    try:
+        f = DATA_DIR / PENDING_UNLIKES_FILE.name
+        if f.exists() and f.stat().st_size > 0:
+            with open(f, "r", encoding="utf-8") as stream:
+                data = json.load(stream)
+            if isinstance(data, list):
+                return {str(x) for x in data if x}
+    except Exception as e:
+        logger.error(f"Error loading pending Spotify unlikes: {e}")
+    return set()
+
+@transactional
+def set_pending_spotify_unlike(spotify_id: str, pending: bool) -> None:
+    ids = get_pending_spotify_unlikes()
+    if pending:
+        ids.add(spotify_id)
+    else:
+        ids.discard(spotify_id)
+    _atomic_json_dump(DATA_DIR / PENDING_UNLIKES_FILE.name, sorted(ids))
+
 @transactional
 def remove_liked_track(track: Dict[str, Any]) -> bool:
     """Removes a track from Liked Songs using consistent ID/metadata matching. Returns True if removed."""
@@ -775,8 +812,12 @@ def remove_liked_track(track: Dict[str, Any]) -> bool:
     index = liked_index(tracks, track)
     if index is None:
         return False
-    tracks.pop(index)
+    removed = tracks.pop(index)
     save_liked_songs(tracks)
+    # Remembered until Spotify confirms, so a sync cannot bring the song back.
+    sp_id = _spotify_track_id_of(removed) or _spotify_track_id_of(track)
+    if sp_id and not removed.get("spotify_sync_pending"):
+        set_pending_spotify_unlike(sp_id, True)
     return True
 
 @transactional

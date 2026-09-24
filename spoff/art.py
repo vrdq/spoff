@@ -25,7 +25,21 @@ except ImportError:
                 json.dump(data, f, indent=2)
             tmp.replace(filepath)
 
+try:
+    from .matching import _normalized_name, _split_artists, _clean_artist_name
+except ImportError:
+    from matching import _normalized_name, _split_artists, _clean_artist_name
+
 logger = logging.getLogger("art")
+
+
+def _artist_matches(candidate: Any, wanted: str) -> bool:
+    """Search APIs return near-misses first; only accept the requested artist."""
+    if not wanted:
+        return True
+    wanted = _clean_artist_name(wanted) or wanted
+    names = {_normalized_name(a) for a in [wanted] + _split_artists(wanted)}
+    return _normalized_name(_clean_artist_name(str(candidate or ""))) in names
 
 USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 ART_CACHE_FILE = DATA_DIR / "cache" / "art_cache.json"
@@ -200,7 +214,7 @@ def fetch_spotify_embed_art(spotify_id: str, timeout: float = 3.5) -> Tuple[Opti
             imgs = entity.get("visualIdentity", {}).get("image", [])
             if imgs and isinstance(imgs, list):
                 # Pick the highest resolution image
-                sorted_imgs = sorted(imgs, key=lambda x: int(x.get("maxWidth", 0) or x.get("maxHeight", 0)))
+                sorted_imgs = sorted(imgs, key=lambda x: int(x.get("maxWidth") or x.get("maxHeight") or 0))
                 cover_url = sorted_imgs[-1].get("url")
 
             artists = entity.get("artists", [])
@@ -225,7 +239,7 @@ def fetch_spotify_embed_art(spotify_id: str, timeout: float = 3.5) -> Tuple[Opti
                 entity_a = data_a.get("props", {}).get("pageProps", {}).get("state", {}).get("data", {}).get("entity", {})
                 aimgs = entity_a.get("visualIdentity", {}).get("image", [])
                 if aimgs and isinstance(aimgs, list):
-                    sorted_aimgs = sorted(aimgs, key=lambda x: int(x.get("maxWidth", 0) or x.get("maxHeight", 0)))
+                    sorted_aimgs = sorted(aimgs, key=lambda x: int(x.get("maxWidth") or x.get("maxHeight") or 0))
                     artist_url = sorted_aimgs[-1].get("url")
         except Exception as e2:
             logger.debug(f"Spotify artist embed fetch failed for {artist_id}: {e2}")
@@ -248,13 +262,14 @@ def fetch_deezer_art(title: str, artist: str, timeout: float = 3.5) -> Tuple[Opt
     if query:
         try:
             encoded = urllib.parse.quote(query)
-            url = f"https://api.deezer.com/search?q={encoded}&limit=3"
+            url = f"https://api.deezer.com/search?q={encoded}&limit=5"
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8", errors="ignore"))
             items = data.get("data", [])
-            if items and isinstance(items, list):
-                item = items[0]
+            item = next((i for i in items or [] if isinstance(i, dict)
+                         and _artist_matches((i.get("artist") or {}).get("name"), clean_artist)), None)
+            if item:
                 alb = item.get("album", {})
                 if alb:
                     cover_url = alb.get("cover_xl") or alb.get("cover_big") or alb.get("cover_medium")
@@ -268,13 +283,14 @@ def fetch_deezer_art(title: str, artist: str, timeout: float = 3.5) -> Tuple[Opt
     if not artist_url and clean_artist:
         try:
             encoded_art = urllib.parse.quote(clean_artist)
-            url = f"https://api.deezer.com/search/artist?q={encoded_art}&limit=1"
+            url = f"https://api.deezer.com/search/artist?q={encoded_art}&limit=3"
             req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 data = json.loads(resp.read().decode("utf-8", errors="ignore"))
             items = data.get("data", [])
-            if items and isinstance(items, list):
-                art_item = items[0]
+            art_item = next((i for i in items or [] if isinstance(i, dict)
+                             and _artist_matches(i.get("name"), clean_artist)), None)
+            if art_item:
                 artist_url = art_item.get("picture_xl") or art_item.get("picture_big") or art_item.get("picture_medium")
         except Exception as e:
             logger.debug(f"Deezer artist search failed for '{clean_artist}': {e}")
@@ -293,13 +309,15 @@ def fetch_itunes_art(title: str, artist: str, timeout: float = 3.5) -> Optional[
 
     try:
         encoded = urllib.parse.quote(query)
-        url = f"https://itunes.apple.com/search?term={encoded}&entity=song&limit=1"
+        url = f"https://itunes.apple.com/search?term={encoded}&entity=song&limit=5"
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             data = json.loads(resp.read().decode("utf-8", errors="ignore"))
         results = data.get("results", [])
-        if results and isinstance(results, list):
-            raw_art = results[0].get("artworkUrl100", "")
+        match = next((r for r in results or [] if isinstance(r, dict)
+                      and _artist_matches(r.get("artistName"), clean_artist)), None)
+        if match:
+            raw_art = match.get("artworkUrl100", "")
             if raw_art:
                 return raw_art.replace("100x100bb", "600x600bb")
     except Exception as e:

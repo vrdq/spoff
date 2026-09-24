@@ -17,13 +17,15 @@ try:
     from .storage import (
         DATA_DIR, load_saved_playlists, save_saved_playlists, storage_transaction, mutate_playlist,
         get_deleted_spotify_playlist_ids, record_deleted_spotify_playlist_id,
-        load_liked_songs, save_liked_songs, stable_track_id, liked_index
+        load_liked_songs, save_liked_songs, stable_track_id, liked_index,
+        get_pending_spotify_unlikes, set_pending_spotify_unlike
     )
 except ImportError:
     from storage import (
         DATA_DIR, load_saved_playlists, save_saved_playlists, storage_transaction, mutate_playlist,
         get_deleted_spotify_playlist_ids, record_deleted_spotify_playlist_id,
-        load_liked_songs, save_liked_songs, stable_track_id, liked_index
+        load_liked_songs, save_liked_songs, stable_track_id, liked_index,
+        get_pending_spotify_unlikes, set_pending_spotify_unlike
     )
 
 try:
@@ -354,6 +356,28 @@ def get_valid_token() -> Optional[str]:
 
     return access_token
 
+def _force_refresh_token(stale_token: str) -> Optional[str]:
+    """Refreshes after a 401 even if the stored expiry says the token is valid."""
+    with _token_refresh_lock:
+        current = load_spotify_auth()
+        if not current:
+            return None
+        if current.get("access_token") and current.get("access_token") != stale_token:
+            return current.get("access_token")  # another worker already refreshed
+        refresh_token = current.get("refresh_token")
+        if not refresh_token:
+            return None
+        new_tokens = refresh_spotify_token(refresh_token)
+        if not new_tokens or not new_tokens.get("access_token"):
+            return None
+        with storage_transaction():
+            latest = load_spotify_auth() or {}
+            if latest.get("refresh_token") != refresh_token:
+                return latest.get("access_token")
+            latest.update(new_tokens)
+            save_spotify_auth(latest)
+        return new_tokens["access_token"]
+
 def spotify_api_request(
     endpoint: str,
     method: str = "GET",
@@ -409,6 +433,13 @@ def spotify_api_request(
                     msg = f"HTTP {e.code}: {e.reason}"
             except Exception:
                 msg = f"HTTP {e.code}: {e.reason}"
+
+            if e.code == 401 and attempt < max_retries:
+                # The token can expire mid-sync (large libraries take a while).
+                fresh = _force_refresh_token(token)
+                if fresh and fresh != token:
+                    token = fresh
+                    continue
 
             if e.code == 429 and attempt < max_retries:
                 retry_header = e.headers.get("retry-after") or e.headers.get("Retry-After") or "2"
@@ -622,6 +653,22 @@ def extract_spotify_playlist_id(pl_data: Any) -> Optional[str]:
 # _tracks_match is imported from .matching
 
 
+def apply_pending_unlikes(remote_liked: List[Dict[str, Any]], token: str) -> List[Dict[str, Any]]:
+    """Retries unlikes that never reached Spotify and hides them from remote_liked."""
+    pending = get_pending_spotify_unlikes()
+    if not pending:
+        return remote_liked
+    if has_modify_scopes():
+        for sp_id in list(pending):
+            ok, _, _ = spotify_api_request(f"/me/tracks?ids={sp_id}", method="DELETE", token=token)
+            if ok:
+                set_pending_spotify_unlike(sp_id, False)
+    return [
+        t for t in remote_liked
+        if str(t.get("id") or "") not in pending
+        and str(t.get("uri") or "").split(":")[-1] not in pending
+    ]
+
 def merge_spotify_and_client_tracks(
     spotify_tracks: List[Dict[str, Any]],
     existing_tracks: Optional[List[Dict[str, Any]]]
@@ -718,6 +765,8 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
     initial_by_id = {p["id"]: p for p in initial_local if p.get("id")}
 
     liked = fetch_liked_songs(token, max_tracks=None)
+    if liked is not None:
+        liked = apply_pending_unlikes(liked, token)
 
     if progress_callback:
         progress_callback("Fetching user playlists from Spotify...")
@@ -1307,6 +1356,7 @@ def remove_track_from_spotify_account(
     if playlist_id in ("spotify_liked_songs", "liked", "liked_songs"):
         ok, _, err = spotify_api_request(f"/me/tracks?ids={spotify_track_id}", method="DELETE", token=token)
         if ok:
+            set_pending_spotify_unlike(spotify_track_id, False)
             return True, "Removed from Spotify Liked Songs"
         return False, err
 

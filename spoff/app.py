@@ -15,6 +15,7 @@ import logging
 import threading
 import atexit
 import secrets
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional, Tuple, TypeVar
 import random
@@ -97,7 +98,8 @@ try:
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
         reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track, extract_spotify_playlist_id,
-        fetch_liked_songs, merge_spotify_and_client_tracks, sync_playlist_tracks_to_spotify
+        fetch_liked_songs, merge_spotify_and_client_tracks, sync_playlist_tracks_to_spotify,
+        apply_pending_unlikes
     )
     from .lyrics import fetch_lyrics, get_active_lyric_index
     from .mpris import MPRISService
@@ -149,7 +151,8 @@ except ImportError:
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
         reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track, extract_spotify_playlist_id,
-        fetch_liked_songs, merge_spotify_and_client_tracks, sync_playlist_tracks_to_spotify
+        fetch_liked_songs, merge_spotify_and_client_tracks, sync_playlist_tracks_to_spotify,
+        apply_pending_unlikes
     )
     from lyrics import fetch_lyrics, get_active_lyric_index
     from mpris import MPRISService
@@ -354,7 +357,11 @@ def copy_to_clipboard(text: str, app: Optional[Any] = None) -> bool:
         except Exception:
             pass
 
-    # 5. OSC 52 escape sequence (Terminal emulator clipboard sync)
+    # 5. OSC 52 escape sequence (Terminal emulator clipboard sync). Textual's
+    # copy_to_clipboard already sends it through the driver; writing raw bytes
+    # to stdout while the app owns the terminal can corrupt the display.
+    if app is not None and hasattr(app, "copy_to_clipboard"):
+        return copied
     try:
         b64 = base64.b64encode(text.encode("utf-8")).decode("ascii")
         osc52 = f"\033]52;c;{b64}\a"
@@ -1223,10 +1230,19 @@ class SettingsModal(SafeModalScreen[None]):
             )
 
     def action_reset_all_keys(self) -> None:
-        self.spoff_app.reset_all_keybindings()
-        for act_id in ACTION_INFO.keys():
-            self._refresh_row(act_id)
-        self.query_one("#settings-status-line", Static).update("All keybindings reset to factory defaults.")
+        # One stray Shift+R used to wipe every custom binding with no way back.
+        def _on_confirm(confirmed: Optional[bool]) -> None:
+            if not confirmed:
+                return
+            self.spoff_app.reset_all_keybindings()
+            for act_id in ACTION_INFO.keys():
+                self._refresh_row(act_id)
+            self.query_one("#settings-status-line", Static).update("All keybindings reset to factory defaults.")
+
+        self.app.push_screen(
+            ConfirmModal("RESET ALL KEYBINDINGS", "Reset every shortcut to its default? Your custom bindings will be lost.", confirm_label="Reset"),
+            _on_confirm,
+        )
 
     def open_eq_settings(self) -> None:
         if hasattr(self.spoff_app, "eq_engine") and self.spoff_app.eq_engine:
@@ -2136,11 +2152,21 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
         self.start_browser_login()
 
     def action_logout_account(self) -> None:
-        self._login_attempt = None
-        if self.auth_session:
+        if not self.auth_session:
+            return
+
+        def _on_confirm(confirmed: Optional[bool]) -> None:
+            if not confirmed:
+                return
+            self._login_attempt = None
             logout_spotify()
             self.auth_session = None
             self.dismiss("logged_out")
+
+        self.app.push_screen(
+            ConfirmModal("LOG OUT OF SPOTIFY", "Log out? Your library stays in Spoff; sync stops until you log in again.", confirm_label="Log Out"),
+            _on_confirm,
+        )
 
     def on_key(self, event: events.Key) -> None:
         if isinstance(self.focused, Input):
@@ -3565,7 +3591,8 @@ class ScrubBar(ProgressBar):
         app.update_player_hud()
 
     def on_key(self, event: events.Key) -> None:
-        if event.key in "0123456789":
+        # A substring test would accept "" and multi-digit names; require one digit.
+        if len(event.key) == 1 and event.key.isdigit():
             pct = int(event.key) / 10.0
             app: Any = self.app
             app.seek_to_percent(pct)
@@ -7311,6 +7338,7 @@ class SpoffTUI(App):
                 remote_liked = fetch_liked_songs(token, max_tracks=None)
                 if remote_liked is None:
                     return
+                remote_liked = apply_pending_unlikes(remote_liked, token)
                 with storage_transaction():
                     current_liked = load_liked_songs()
                     initial_keys = {
@@ -9203,14 +9231,14 @@ class SpoffTUI(App):
                 if pl:
                     tracks = [pl]
                     name = pl.get("title", "YouTube Track")
-                    pid = pl.get("id", str(hash(url)))
+                    pid = pl.get("id", "pl_" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:12])
             else:
                 pl = fetch_ytmusic_playlist(url)
 
             if pl and not tracks:
                 tracks = pl.get("tracks", [])
                 name = pl.get("name", "YouTube Music Playlist")
-                pid = pl.get("id", str(hash(url)))
+                pid = pl.get("id", "pl_" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:12])
             elif not pl and not tracks:
                 self.notify_user("Could not load YouTube Music playlist. Please check that the link is valid and public.")
                 return
@@ -9222,7 +9250,7 @@ class SpoffTUI(App):
             if pl:
                 tracks = pl.get("tracks", [])
                 name = pl.get("name", "Music Playlist")
-                pid = pl.get("id", str(hash(url)))
+                pid = pl.get("id", "pl_" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:12])
             else:
                 self.notify_user("Could not recognize or load playlist link.")
                 return

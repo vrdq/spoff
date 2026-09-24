@@ -76,6 +76,7 @@ class MPVController:
         self._duration = 0.0
         self._volume = max(0, min(100, int(initial_volume)))
         self.eq_engine: Optional[Any] = eq_engine
+        self._audio_device: Optional[str] = None
 
     @property
     def playback_finished_callback(self) -> Optional[Callable]:
@@ -138,6 +139,7 @@ class MPVController:
                 direct_dev = get_direct_hardware_audio_device()
                 if direct_dev:
                     cmd.append(f"--audio-device={direct_dev}")
+                self._audio_device = direct_dev or "auto"
 
             self.process = subprocess.Popen(
                 cmd,
@@ -281,6 +283,7 @@ class MPVController:
                 self.start_mpv()
                 if self.eq_engine:
                     self.apply_eq()
+                    self._follow_output_device()
                 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             except (OSError, RuntimeError):
                 logger.exception("Could not start mpv or open its IPC socket")
@@ -347,6 +350,12 @@ class MPVController:
                     stream.close()
                 sock.close()
                 return False
+
+    def _follow_output_device(self) -> None:
+        """Re-picks the output per track so hotplugged headphones/Bluetooth are used."""
+        device = get_direct_hardware_audio_device() or "auto"
+        if device != self._audio_device and self._send_command(["set_property", "audio-device", device]):
+            self._audio_device = device
 
     def _close_playback_socket(self):
         sock, self._playback_socket = self._playback_socket, None

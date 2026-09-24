@@ -20,8 +20,11 @@ _SAFE_SUBPROCESS_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
 def get_local_commit() -> Optional[str]:
     """Retrieves the local git commit SHA if running in a git clone or PEP 610 direct_url metadata."""
     repo_root = Path(__file__).resolve().parent.parent
-    # 1. Direct git repository check
+    # 1. Direct git repository check. Only trust git when Spoff's own folder is
+    # the repo root; an install under some other repo would report its HEAD.
     try:
+        if not is_git_checkout():
+            raise LookupError("not a Spoff git checkout")
         out = subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
             cwd=str(repo_root),
@@ -56,6 +59,8 @@ def get_remote_commit_sha() -> Optional[str]:
 
     # 1. Try git ls-remote using local git config (fast, zero rate limits)
     try:
+        if not is_git_checkout():
+            raise LookupError("not a Spoff git checkout")
         out = subprocess.check_output(
             ["git", "ls-remote", "origin", "refs/heads/main"],
             cwd=str(repo_root),

@@ -158,7 +158,7 @@ def _extract_best_thumbnail(item: Dict[str, Any], default_vid: Optional[str] = N
     if isinstance(thumbs, dict):
         thumbs = thumbs.get("thumbnails")
     if thumbs and isinstance(thumbs, list):
-        sorted_thumbs = sorted(thumbs, key=lambda x: int(x.get("width", 0) or x.get("height", 0)))
+        sorted_thumbs = sorted(thumbs, key=lambda x: int(x.get("width") or x.get("height") or 0))
         raw_url = sorted_thumbs[-1].get("url")
         if raw_url:
             if "=w" in raw_url:
