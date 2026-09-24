@@ -18,43 +18,19 @@ def _seconds(value: Any) -> float:
         return 0.0
 
 
-def _duration_seconds(value: Any) -> float:
-    """Safely converts duration to seconds.
-    Handles None, numeric seconds (e.g. 214.5), numeric ms (e.g. 214000),
-    and strings formatted as 'MM:SS' or 'HH:MM:SS'.
-    """
-    if value is None:
-        return 0.0
-    if isinstance(value, str) and ":" in value:
-        return _seconds(value)
-    try:
-        val = float(value)
-        if not math.isfinite(val) or val <= 0:
-            return 0.0
-        if val > 1000:
-            return val / 1000.0
-        return val
-    except (ValueError, TypeError, OverflowError):
-        return 0.0
-
-
 def _split_artists(value: str) -> List[str]:
     """Splits multi-artist strings while preserving primary artist names."""
     if not value or not isinstance(value, str):
         return []
-    parts = re.split(r"(?i)\s*(?:[,;/]|\b(?:featuring|with|feat|ft)\b\.?)\s*", value)
+    # Slashes, ampersands, and words such as "and" belong to real band names.
+    # Treating their components as artists can accept unrelated recordings.
+    parts = re.split(r"(?i)\s*(?:,|\b(?:featuring|feat|ft)\b\.?)\s*", value)
     results: List[str] = []
     for part in parts:
         part = part.strip()
         if not part:
             continue
         results.append(part)
-        subparts = re.split(r"(?i)\s*(?:[&]|\b(?:and|x|vs)\b\.?)\s*", part)
-        if len(subparts) > 1:
-            for sp in subparts:
-                sp = sp.strip()
-                if sp and sp not in results:
-                    results.append(sp)
     return results
 
 
@@ -150,8 +126,8 @@ def _matches_recording(item: Dict[str, Any], title: str, artist: str, duration: 
         for a in candidate_artists if a
     ):
         return False
-    duration_s = _duration_seconds(duration)
-    candidate_duration = _duration_seconds(item.get("duration_seconds") or item.get("duration"))
+    duration_s = _seconds(duration)
+    candidate_duration = _seconds(item.get("duration_seconds") or item.get("duration"))
     if duration_s and (not candidate_duration or abs(candidate_duration - duration_s) > max(8.0, duration_s * 0.04)):
         return False
     return True
@@ -195,4 +171,3 @@ def _tracks_match(t1: Dict[str, Any], t2: Dict[str, Any]) -> bool:
                 for sa in _split_artists(name):
                     artists2.add(_normalized_name(sa))
     return bool(title1 and title1 == title2 and (artists1 & artists2))
-

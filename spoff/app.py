@@ -7096,9 +7096,10 @@ class SpoffTUI(App):
 
         pending_track = getattr(self, "_pending_track", None)
         check_offline = getattr(self, "_is_track_offline", SpoffTUI._is_track_offline)
-        if pending_track is not None and not check_offline(pending_track):
-            track_title = pending_track.get("title", "track") if isinstance(pending_track, dict) else "track"
-            self.notify_user(f"Loading '{track_title}'...")
+        if pending_track is not None:
+            if not check_offline(pending_track):
+                track_title = pending_track.get("title", "track") if isinstance(pending_track, dict) else "track"
+                self.notify_user(f"Loading '{track_title}'...")
             return
 
         if self.player.current_track is not None:
@@ -7568,9 +7569,10 @@ class SpoffTUI(App):
             active_track = getattr(self, "_pending_track", None) or getattr(getattr(self, "player", None), "current_track", None)
             if self._is_same_track(selected_track, active_track):
                 check_offline = getattr(self, "_is_track_offline", SpoffTUI._is_track_offline)
-                if getattr(self, "_pending_track", None) is not None and not check_offline(self._pending_track):
-                    track_title = self._pending_track.get("title", "track") if isinstance(self._pending_track, dict) else "track"
-                    self.notify_user(f"Loading '{track_title}'...")
+                if getattr(self, "_pending_track", None) is not None:
+                    if not check_offline(self._pending_track):
+                        track_title = self._pending_track.get("title", "track") if isinstance(self._pending_track, dict) else "track"
+                        self.notify_user(f"Loading '{track_title}'...")
                     return
                 if getattr(self, "player", None) and self.player.current_track is not None:
                     self.player.toggle_pause()

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .storage import DATA_DIR, _atomic_json_dump
-from .matching import _matches_recording, _duration_seconds
+from .matching import _matches_recording, _seconds
 
 logger = logging.getLogger("spoff.lyrics")
 
@@ -110,7 +110,7 @@ def fetch_lyrics(title: str, artist: str = "", duration_ms: Optional[int] = None
         "plain": str
     }
     """
-    dur_sec = _duration_seconds(duration_ms)
+    dur_sec = _seconds(duration_ms) / 1000
     clean_t, clean_a = clean_track_query(title, artist)
     cache_file = _get_cache_path(clean_t, clean_a, dur_sec)
 
@@ -246,4 +246,3 @@ def get_active_lyric_index(lines: List[Dict[str, Any]], current_seconds: float) 
     if pos < 0:
         return -1
     return timed_entries[pos][1]
-
