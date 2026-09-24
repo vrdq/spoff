@@ -77,7 +77,7 @@ def test_worker_start_failure_reports_once_without_escaping_to_ui():
 
 
 def test_cached_registration_failure_reports_error_not_success(tmp_path):
-    cached = tmp_path / 'song.m4a'
+    cached = tmp_path / 'song.opus'
     cached.write_bytes(b'audio')
     completed, errors = [], []
     with patch.object(streamer, 'get_cached_track_path', return_value=cached), \
@@ -90,7 +90,7 @@ def test_cached_registration_failure_reports_error_not_success(tmp_path):
 
 
 def test_cached_success_callback_failure_is_contained(tmp_path):
-    cached = tmp_path / 'song.m4a'
+    cached = tmp_path / 'song.opus'
     cached.write_bytes(b'audio')
     errors = []
     def broken_callback(_):

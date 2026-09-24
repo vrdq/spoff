@@ -118,7 +118,7 @@ class TestOfflineCacheReconciliation(unittest.TestCase):
         self.assertNotIn(".stage", offline_tracks)
 
     def test_download_track_to_cache_registers_existing_file(self):
-        cached_file = storage.CACHE_DIR / "existing_track.m4a"
+        cached_file = storage.CACHE_DIR / "existing_track.opus"
         cached_file.write_bytes(b"E" * 16000)
 
         done_called = False

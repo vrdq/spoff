@@ -199,7 +199,14 @@ def _init_storage_once():
 _init_storage_once()
 
 # Cache extensions supported by downloader and local playback
-CACHE_EXTENSIONS = (".m4a", ".opus", ".mp3", ".webm", ".ogg", ".flac")
+# Opus first: YouTube's Opus stream sounds better than its AAC one at the same
+# bitrate, so when both exist the Opus file wins.
+CACHE_EXTENSIONS = (".opus", ".webm", ".ogg", ".flac", ".m4a", ".mp3")
+LOW_QUALITY_CACHE_EXTENSIONS = (".m4a", ".mp3")
+
+def is_low_quality_cache(path: Any) -> bool:
+    """AAC/MP3 files saved before Spoff switched to Opus; they get re-downloaded."""
+    return Path(str(path)).suffix.lower() in LOW_QUALITY_CACHE_EXTENSIONS
 
 def stable_track_id(track: Dict[str, Any]) -> str:
     """Generates a deterministic persistent identifier for tracks lacking an upstream ID."""

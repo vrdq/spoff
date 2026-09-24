@@ -218,7 +218,7 @@ def test_single_download_emits_no_duplicate_toast(tab):
     with patch.object(app,'get_cached_track_path',return_value=None),patch.object(app,'download_track_to_cache') as download:
         app.SpoffTUI._download_single_track(fake,{'id':'song','title':'Song','artist':'Artist'})
         bar.update.assert_called_with("Downloading 'Song'…")
-        download.call_args.kwargs['on_complete']('song.m4a')
+        download.call_args.kwargs['on_complete']('song.opus')
     bar.update.assert_called_with("Saved 'Song' offline.")
     fake.notify.assert_not_called()
     fake.render_tracks.assert_called_once_with([])
@@ -231,7 +231,7 @@ def test_bulk_download_runs_and_reports_only_one_status_surface(tmp_path,already
     from types import MethodType
     fake,bar=fake_app(_thread_id=threading.get_ident(),notify=Mock(),set_timer=Mock(),active_tab=tab)
     fake.set_download_status=MethodType(app.SpoffTUI.set_download_status,fake)
-    cached=tmp_path/'song.m4a'
+    cached=tmp_path/'song.opus'
     cached.write_bytes(b'audio')
     tracks=[{'id':'song','title':'Song','artist':'Artist'}]
     def complete_download(*args,**kwargs):
@@ -258,7 +258,7 @@ def test_bulk_metadata_repair_keeps_the_resolved_recording(tmp_path):
     from types import MethodType
     fake,bar=fake_app(_thread_id=threading.get_ident(),notify=Mock(),set_timer=Mock())
     fake.set_download_status=MethodType(app.SpoffTUI.set_download_status,fake)
-    cached=tmp_path/'song.m4a'; cached.write_bytes(b'audio')
+    cached=tmp_path/'song.opus'; cached.write_bytes(b'audio')
     index={'song':{'id':'song','title':'Old title','artist':'Artist',
                    'url':'https://open.spotify.com/track/original',
                    'resolved_url':'https://youtube.com/watch?v=correct0001',

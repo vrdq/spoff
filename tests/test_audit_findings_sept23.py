@@ -288,7 +288,7 @@ class TestAuditFindingsSept23(unittest.TestCase):
     def test_14b_bulk_download_all_cached_repairs_stale_metadata(self):
         """Finding 13 recheck: Bulk download repairs stale metadata even when all tracks are already cached."""
         track_meta = {"id": "track_cached_1", "title": "Real Title", "artist": "Real Artist", "duration_ms": 180000}
-        file_path = storage.CACHE_DIR / "track_cached_1.m4a"
+        file_path = storage.CACHE_DIR / "track_cached_1.opus"
         file_path.write_bytes(b"DATA" * 50)
 
         # Existing stale index record

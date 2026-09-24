@@ -81,7 +81,7 @@ try:
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
         record_deleted_spotify_playlist_id, liked_index, storage_transaction,
-        update_playlist_details
+        update_playlist_details, is_low_quality_cache
     )
     from .streamer import is_on_youtube, search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from .search import live_search_tracks, resolve_direct_track_url
@@ -135,7 +135,7 @@ except ImportError:
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
         record_deleted_spotify_playlist_id, liked_index, storage_transaction,
-        update_playlist_details
+        update_playlist_details, is_low_quality_cache
     )
     from streamer import is_on_youtube, search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from search import live_search_tracks, resolve_direct_track_url
@@ -8528,7 +8528,7 @@ class SpoffTUI(App):
                 for t in tracks:
                     tid = stable_track_id(t)
                     c = get_cached_track_path(tid)
-                    if not c or not cached_audio_matches_duration(c, t.get("duration_ms")):
+                    if not c or is_low_quality_cache(c) or not cached_audio_matches_duration(c, t.get("duration_ms")):
                         needed.append(t)
 
                 if not needed:
@@ -9823,6 +9823,13 @@ class SpoffTUI(App):
             except Exception:
                 pass
             self.call_from_thread(self._commit_playback, req_id, str(cached), track)
+            if is_low_quality_cache(cached):
+                # Saved before the switch to Opus: keep playing it, and quietly
+                # fetch the better version to replace it for next time.
+                download_track_to_cache(
+                    t_id, title, artist, direct_url=playback_direct_url(track), track_meta=track,
+                    on_error=lambda err: logger.info("Opus upgrade skipped for %s: %s", t_id, err),
+                )
             return
 
         if not is_current():

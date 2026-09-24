@@ -11,11 +11,11 @@ import yt_dlp
 try:
     from . import storage
     from .matching import _seconds, _matches_recording, _normalized_name
-    from .storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS
+    from .storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS, is_low_quality_cache
 except ImportError:
     import storage  # type: ignore
     from matching import _seconds, _matches_recording, _normalized_name
-    from storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS  # type: ignore
+    from storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS, is_low_quality_cache  # type: ignore
 
 import tempfile
 import subprocess
@@ -40,11 +40,16 @@ def invalidate_stream_cache(track_title: str, artist: str, direct_url: Optional[
 
 _download_slots = threading.BoundedSemaphore(4)
 
+# Opus (YouTube format 251) sounds better than the AAC stream (140) at the same
+# bitrate; fall back to whatever is best if a video has no Opus track.
+BEST_AUDIO = "bestaudio[acodec=opus]/bestaudio/best"
+
 def get_base_ydl_opts(extra_opts=None):
     opts = {
-        "format": "bestaudio/best",
+        "format": BEST_AUDIO,
         "quiet": True,
         "no_warnings": True,
+        "noprogress": True,
         "noplaylist": True,
         "default_search": "ytsearch1:",
         "extract_flat": False,
@@ -281,7 +286,7 @@ def _run_download_process(
     track_meta: Optional[Dict[str, Any]] = None,
 ) -> Path:
     cached = get_cached_track_path(val_id)
-    if cached and cached_audio_matches_duration(cached, (track_meta or {}).get("duration_ms")):
+    if cached and not is_low_quality_cache(cached) and cached_audio_matches_duration(cached, (track_meta or {}).get("duration_ms")):
         register_cached_track(val_id, track_meta or {"title": title, "artist": artist}, cached)
         return cached
     resolved = search_and_resolve_stream(
@@ -295,7 +300,7 @@ def _run_download_process(
     cache_dir = getattr(storage, "_get_cache_dir", lambda: storage.CACHE_DIR)()
     with tempfile.TemporaryDirectory(prefix=f".{val_id}-", dir=cache_dir) as stage:
         opts = get_base_ydl_opts({
-            "format": "bestaudio[ext=m4a]/bestaudio/best",
+            "format": BEST_AUDIO,
             "outtmpl": str(Path(stage) / "audio.%(ext)s"),
             "overwrites": True,
         })
@@ -373,7 +378,7 @@ def download_track_to_cache(
         return None
 
     cached_path = get_cached_track_path(val_id)
-    if cached_path and not _seconds((track_meta or {}).get("duration_ms")):
+    if cached_path and not is_low_quality_cache(cached_path) and not _seconds((track_meta or {}).get("duration_ms")):
         meta_to_save = dict(track_meta) if track_meta else {"title": title, "artist": artist}
         try:
             register_cached_track(val_id, meta_to_save, cached_path)
