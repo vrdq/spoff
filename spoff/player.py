@@ -78,6 +78,9 @@ class MPVController:
         self.eq_engine: Optional[Any] = eq_engine
         self._audio_device: Optional[str] = None
         self.loudness_normalization: bool = True
+        # Set when Spotify audio (librespot) is on; spotify:track: sources go there.
+        self.spotify: Optional[Any] = None
+        self._on_spotify = False
 
     @property
     def playback_finished_callback(self) -> Optional[Callable]:
@@ -246,6 +249,8 @@ class MPVController:
 
     def apply_eq(self) -> bool:
         """Applies active Parametric EQ filter graph to running MPV stream in real-time."""
+        if self.spotify is not None:
+            self.spotify.apply_filters()
         if not self.eq_engine:
             return False
         return self._send_command(["set_property", "af", self._audio_filters()])
@@ -267,6 +272,8 @@ class MPVController:
 
     def set_loudness_normalization(self, enabled: bool) -> bool:
         self.loudness_normalization = bool(enabled)
+        if self.spotify is not None:
+            self.spotify.apply_filters()
         return self._send_command(["set_property", "af", self._audio_filters()])
 
     def toggle_eq_bypass(self) -> bool:
@@ -290,7 +297,41 @@ class MPVController:
         self.eq_engine = engine
         self.apply_eq()
 
+    def _play_on_spotify(self, uri: str, track_meta: Dict[str, Any]) -> bool:
+        """Plays a Spotify track through librespot; mpv's own playback is stopped."""
+        with self._load_lock:
+            with self._lock:
+                callback = self._next_callback
+                self._next_callback = None
+                self._close_playback_socket()  # retire any mpv song without its end callback
+            self._send_command(["stop"])
+            try:
+                duration = float(track_meta.get("duration_ms") or 0) / 1000.0
+            except (TypeError, ValueError):
+                duration = 0.0
+
+            def _ended(reason: str) -> None:
+                if callback is not None:
+                    callback(reason)
+
+            if not self.spotify.play(uri, duration, _ended):
+                return False
+            with self._lock:
+                self._on_spotify = True
+                self.current_track = track_meta
+                self.is_paused = False
+                self._last_pos = 0.0
+                self._duration = duration
+            return True
+
     def load_and_play(self, source_path_or_url: str, track_meta: Dict[str, Any]) -> bool:
+        if source_path_or_url.startswith("spotify:track:"):
+            if self.spotify is None:
+                return False
+            return self._play_on_spotify(source_path_or_url, track_meta)
+        if self._on_spotify and self.spotify is not None:
+            self.spotify.stop_playback()
+            self._on_spotify = False
         # A load owns its IPC connection from command submission through EOF.
         # This subscribes before loading and avoids guessing ownership from a
         # different listener's delayed/missed start-file events.
@@ -425,32 +466,51 @@ class MPVController:
                 logger.exception("Playback completion callback failed")
 
     def pause(self):
+        if self._on_spotify:
+            self.spotify.pause()
+            self.is_paused = True
+            return
         with self._lock:
             self.is_paused = True
             self._send_command(["set_property", "pause", True])
 
     def resume(self):
+        if self._on_spotify:
+            self.spotify.resume()
+            self.is_paused = False
+            return
         with self._lock:
             self.is_paused = False
             self._send_command(["set_property", "pause", False])
 
     def toggle_pause(self):
+        if self._on_spotify:
+            (self.resume if self.spotify.is_paused else self.pause)()
+            return
         with self._lock:
             self.is_paused = not self.is_paused
             self._send_command(["set_property", "pause", self.is_paused])
 
     def seek(self, seconds_relative: float):
+        if self._on_spotify:
+            self.spotify.seek(self.spotify.position() + seconds_relative)
+            return
         with self._lock:
             self._send_command(["seek", seconds_relative, "relative"])
             self._last_pos = max(0.0, self._last_pos + seconds_relative)
 
     def seek_absolute(self, seconds_absolute: float):
+        if self._on_spotify:
+            self.spotify.seek(seconds_absolute)
+            return
         with self._lock:
             seconds_absolute = max(0.0, float(seconds_absolute))
             self._send_command(["seek", seconds_absolute, "absolute"])
             self._last_pos = seconds_absolute
 
     def set_volume(self, volume: int):
+        if self.spotify is not None:
+            self.spotify.set_volume(volume)
         with self._lock:
             self._volume = max(0, min(100, volume))
             self._send_command(["set_property", "volume", self._volume])
@@ -460,19 +520,30 @@ class MPVController:
             return int(self._volume)
 
     def get_progress(self) -> tuple[float, float]:
+        if self._on_spotify and self.current_track:
+            # Pauses can come from another device (e.g. the phone app).
+            self.is_paused = self.spotify.is_paused
+            return self.spotify.position(), self.spotify.duration or self._duration
         if not self.current_track:
             return 0.0, 0.0
         return self._last_pos, self._duration
 
     def get_position(self) -> float:
+        if self._on_spotify:
+            return self.spotify.position()
         """Returns the current playback position in seconds."""
         return float(self._last_pos)
 
     def get_duration(self) -> float:
+        if self._on_spotify:
+            return float(self.spotify.duration or self._duration)
         """Returns the current track duration in seconds."""
         return float(self._duration)
 
     def stop(self):
+        if self.spotify is not None:
+            self.spotify.stop_playback()
+        self._on_spotify = False
         listener_to_join = None
         playback_to_join = None
         with self._lock:

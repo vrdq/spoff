@@ -72,6 +72,7 @@ try:
         get_saved_auto_update, save_auto_update,
         get_saved_notifications_enabled, save_notifications_enabled,
         get_saved_loudness_normalization, save_loudness_normalization, migrate_eq_to_native_rate,
+        get_saved_spotify_audio, save_spotify_audio, _spotify_track_id_of,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
@@ -108,6 +109,7 @@ try:
     from .visualizer import VisualizerWidget, CavaVisualizer
     from .updater import check_for_updates, perform_update, run_cli_update, is_git_checkout
     from .art import resolve_track_artwork, get_cached_artwork
+    from .spotify_audio import SpotifyAudio, librespot_path
 except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url
     from ytmusic import (
@@ -127,6 +129,7 @@ except ImportError:
         get_saved_auto_update, save_auto_update,
         get_saved_notifications_enabled, save_notifications_enabled,
         get_saved_loudness_normalization, save_loudness_normalization, migrate_eq_to_native_rate,
+        get_saved_spotify_audio, save_spotify_audio, _spotify_track_id_of,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
@@ -163,6 +166,7 @@ except ImportError:
     from visualizer import VisualizerWidget, CavaVisualizer
     from updater import check_for_updates, perform_update, run_cli_update, is_git_checkout
     from art import resolve_track_artwork, get_cached_artwork
+    from spotify_audio import SpotifyAudio, librespot_path
 
 logger = logging.getLogger("spoff")
 
@@ -825,6 +829,13 @@ class LoudnessToggle(Static):
         if isinstance(self.screen, SettingsModal):
             self.screen.toggle_loudness()
 
+class SpotifyAudioToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_spotify_audio()
+
 class EQSettingsNavToggle(Static):
     can_focus = True
 
@@ -1005,6 +1016,7 @@ class SettingsModal(SafeModalScreen[None]):
                 yield VisualizerStyleToggle(id="vis-style-toggle", classes="setting-toggle-item")
                 yield VisualizerColorToggle(id="vis-color-toggle", classes="setting-toggle-item")
                 yield Static("AUDIO", classes="settings-section")
+                yield SpotifyAudioToggle(id="spotify-audio-toggle", classes="setting-toggle-item")
                 yield LoudnessToggle(id="loudness-toggle", classes="setting-toggle-item")
                 yield EQSettingsNavToggle(id="eq-settings-nav-toggle", classes="setting-toggle-item")
 
@@ -1096,6 +1108,10 @@ class SettingsModal(SafeModalScreen[None]):
             colour = vis.get_color_name() if vis else "Green"
             self.query_one("#vis-color-toggle", Static).update(self._row("Colour", colour, on=None if vis_on else False))
 
+            from_spotify = get_saved_spotify_audio()
+            self.query_one("#spotify-audio-toggle", Static).update(
+                self._row("Spotify songs from", "Spotify" if from_spotify else "YouTube", on=from_spotify or None))
+
             player = getattr(app, "player", None)
             loud = bool(getattr(player, "loudness_normalization", True))
             self.query_one("#loudness-toggle", Static).update(
@@ -1113,6 +1129,12 @@ class SettingsModal(SafeModalScreen[None]):
         self.update_toggle_ui()
         state_text = "enabled" if new_state else "disabled"
         self.query_one("#settings-status-line", Static).update(f"Advanced Mode: {state_text}")
+
+    def toggle_spotify_audio(self) -> None:
+        enabled = self.spoff_app.toggle_spotify_audio()
+        self.update_toggle_ui()
+        self.query_one("#settings-status-line", Static).update(
+            "Starting Spotify audio (needs Premium)…" if enabled else "Spotify songs play from YouTube.")
 
     def toggle_loudness(self) -> None:
         new_state = self.spoff_app.toggle_loudness_normalization()
@@ -1287,6 +1309,7 @@ class SettingsModal(SafeModalScreen[None]):
             "vis-toggle",
             "vis-style-toggle",
             "vis-color-toggle",
+            "spotify-audio-toggle",
             "loudness-toggle",
             "eq-settings-nav-toggle",
         ]
@@ -1320,6 +1343,8 @@ class SettingsModal(SafeModalScreen[None]):
             self.cycle_visualizer_style()
         elif focused_id == "vis-color-toggle":
             self.cycle_visualizer_color()
+        elif focused_id == "spotify-audio-toggle":
+            self.toggle_spotify_audio()
         elif focused_id == "loudness-toggle":
             self.toggle_loudness()
         elif focused_id == "eq-settings-nav-toggle":
@@ -1343,7 +1368,7 @@ class SettingsModal(SafeModalScreen[None]):
 
     def on_key(self, event: events.Key) -> None:
         table = self.query_one("#settings-table", DataTable)
-        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "loudness-toggle", "eq-settings-nav-toggle"]
+        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "spotify-audio-toggle", "loudness-toggle", "eq-settings-nav-toggle"]
         focused_id = self.focused.id if self.focused else None
 
         if focused_id in toggle_ids:
@@ -1381,6 +1406,8 @@ class SettingsModal(SafeModalScreen[None]):
                     self.cycle_visualizer_style()
                 elif focused_id == "vis-color-toggle":
                     self.cycle_visualizer_color()
+                elif focused_id == "spotify-audio-toggle":
+                    self.toggle_spotify_audio()
                 elif focused_id == "loudness-toggle":
                     self.toggle_loudness()
                 elif focused_id == "eq-settings-nav-toggle":
@@ -2250,35 +2277,38 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
                 self.query_one("#btn-sync", Button).focus()
             except Exception:
                 pass
-            # Auto-refresh user profile in background if missing
-            user = self.auth_session.get("user", {})
-            if not user or not user.get("display_name"):
-                def _fetch_bg():
-                    tok = get_valid_token()
-                    if tok and self.auth_session is not None:
-                        prof = fetch_current_user_profile(tok)
-                        if prof:
-                            with storage_transaction():
-                                current = load_spotify_auth()
-                                if not current or current.get("access_token") != tok:
-                                    return
-                                current["user"] = prof
-                                save_spotify_auth(current)
-                            name = prof.get("display_name") or prof.get("id") or "Spotify User"
-                            email = prof.get("email") or ""
-                            line = f"User    [#e2e2e2]{escape(str(name))}[/]"
-                            if email:
-                                line += f"  [#555555]({escape(str(email))})[/]"
-                            def _update():
-                                if not self.is_mounted:
-                                    return
-                                self.auth_session = current
-                                try:
-                                    self.query_one("#spotify-user-info", Static).update(line)
-                                except Exception:
-                                    pass
-                            self.app.call_from_thread(_update)
-                threading.Thread(target=_fetch_bg, daemon=True).start()
+            # Always refresh the profile: the saved one goes stale (e.g. after
+            # upgrading to Premium it kept showing "Free").
+            def _fetch_bg():
+                tok = get_valid_token()
+                if tok and self.auth_session is not None:
+                    prof = fetch_current_user_profile(tok)
+                    if prof:
+                        with storage_transaction():
+                            current = load_spotify_auth()
+                            if not current or current.get("access_token") != tok:
+                                return
+                            current["user"] = prof
+                            save_spotify_auth(current)
+                        name = prof.get("display_name") or prof.get("id") or "Spotify User"
+                        email = prof.get("email") or ""
+                        line = f"User    [#e2e2e2]{escape(str(name))}[/]"
+                        if email:
+                            line += f"  [#555555]({escape(str(email))})[/]"
+                        plan = str(prof.get("product") or "free").capitalize()
+
+                        def _update():
+                            if not self.is_mounted:
+                                return
+                            self.auth_session = current
+                            try:
+                                self.query_one("#spotify-user-info", Static).update(line)
+                                self.query_one("#spotify-desc", Static).update(
+                                    f"Plan    [#e2e2e2]Spotify {escape(plan)}[/]")
+                            except Exception:
+                                pass
+                        self.app.call_from_thread(_update)
+            threading.Thread(target=_fetch_bg, daemon=True).start()
         else:
             try:
                 self.query_one("#btn-login", Button).focus()
@@ -5686,6 +5716,11 @@ class SpoffTUI(App):
         except Exception:
             pass
         try:
+            if getattr(self, "spotify_audio", None):
+                self.spotify_audio.shutdown()
+        except Exception:
+            pass
+        try:
             _set_kitty_opacity("default")
         except Exception:
             pass
@@ -5762,6 +5797,9 @@ class SpoffTUI(App):
             self.visualizer.start()
         self._apply_visualizer_visibility()
         self.check_github_updates_bg()
+        self.spotify_audio: Optional[SpotifyAudio] = None
+        if get_saved_spotify_audio():
+            self.enable_spotify_audio(quiet=True)
         self.backfill_playlists_art_bg()
 
         st = self.query_one("#side-table", DataTable)
@@ -5807,6 +5845,70 @@ class SpoffTUI(App):
 
         self._mount_time = time.monotonic()
         self.set_timer(0.45, self._mark_ready)
+
+    def spotify_audio_ready(self) -> bool:
+        return bool(getattr(self, "spotify_audio", None) and self.spotify_audio.running()
+                    and getattr(self.player, "spotify", None) is self.spotify_audio)
+
+    def enable_spotify_audio(self, quiet: bool = False) -> None:
+        """Starts librespot in the background; Spotify songs then play from Spotify.
+
+        Needs librespot and Premium. The first time, librespot's browser login
+        opens. Any failure leaves playback on YouTube and says why.
+        """
+        def _say(text: str) -> None:
+            self._on_ui(self.notify_user, text, force=True)
+
+        def _worker() -> None:
+            if not librespot_path():
+                _say("Spotify audio needs librespot: sudo pacman -S librespot")
+                return
+            token = get_valid_token()
+            profile = fetch_current_user_profile(token) if token else None
+            if not profile:
+                _say("Log in to Spotify first (L) to use Spotify audio.")
+                return
+            if profile.get("product") != "premium":
+                _say("Spotify audio needs Spotify Premium. Songs keep playing from YouTube.")
+                return
+            audio = SpotifyAudio(self.player._audio_filters, volume=self.volume)
+            if not audio.is_logged_in():
+                _say("Finish logging in to Spotify in your browser to turn on Spotify audio.")
+
+            def _open_login(url: str) -> None:
+                import webbrowser
+                try:
+                    webbrowser.open(url)
+                except Exception:
+                    logger.exception("Could not open the librespot login page")
+
+            if audio.start(on_login_url=_open_login):
+                self.spotify_audio = audio
+                self.player.spotify = audio
+                if not quiet:
+                    _say("Spotify songs now play from Spotify.")
+            else:
+                audio.shutdown()
+                _say(f"Couldn't start Spotify audio ({audio.last_error or 'unknown error'}). Using YouTube.")
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def disable_spotify_audio(self) -> None:
+        audio = getattr(self, "spotify_audio", None)
+        self.player.stop() if getattr(self.player, "_on_spotify", False) else None
+        self.player.spotify = None
+        self.spotify_audio = None
+        if audio is not None:
+            threading.Thread(target=audio.shutdown, daemon=True).start()
+
+    def toggle_spotify_audio(self) -> bool:
+        enabled = not get_saved_spotify_audio()
+        save_spotify_audio(enabled)
+        if enabled:
+            self.enable_spotify_audio()
+        else:
+            self.disable_spotify_audio()
+        return enabled
 
     def _mark_ready(self) -> None:
         self._is_ready = True
@@ -9163,6 +9265,10 @@ class SpoffTUI(App):
             return
         if request_id != getattr(self, "_play_request_id", None):
             return
+        if reason == "error" and source and str(source).startswith("spotify:track:") and track:
+            track["_spotify_unavailable"] = True
+            self.play_index(getattr(self, "current_index", 0))
+            return
         if reason == "error":
             t = track or getattr(getattr(self, "player", None), "current_track", None)
             if t:
@@ -9454,7 +9560,11 @@ class SpoffTUI(App):
         """
         order = {id(t): i for i, t in enumerate(results)}
         ready = [t for t in results if is_client_side_track(t)]
-        to_check = [t for t in results if not is_client_side_track(t)]
+        # With Spotify audio on, every Spotify result plays; nothing to check.
+        spotify_plays = bool(getattr(self, "spotify_audio_ready", None) and SpoffTUI.spotify_audio_ready(self))
+        to_check = [] if spotify_plays else [t for t in results if not is_client_side_track(t)]
+        if spotify_plays:
+            ready = list(results)
         lock = threading.Lock()
 
         def current() -> bool:
@@ -9705,6 +9815,16 @@ class SpoffTUI(App):
             self.player.playback_finished_callback = cb
 
         if not self.player.load_and_play(source, track):
+            if source.startswith("spotify:track:"):
+                # Spotify couldn't play it (region, removed, Premium ended): try YouTube.
+                audio = getattr(self, "spotify_audio", None)
+                if audio is not None and audio.keys_refused and not getattr(self, "_told_keys_refused", False):
+                    self._told_keys_refused = True
+                    self.notify_user("Spotify is refusing audio to Spoff right now, so songs play from YouTube. "
+                                     "It tries again next time Spoff starts.", force=True)
+                track["_spotify_unavailable"] = True
+                self.start_playback(track, req_id)
+                return False
             self.notify_user(f"Could not start playback: {track.get('title', 'Track')}")
             self._playback_failed(req_id, track)
             return False
@@ -9850,6 +9970,14 @@ class SpoffTUI(App):
                         self.mpris.update_track(track, dur_s)
                 self._on_ui(_publish_art)
         threading.Thread(target=_fetch_art_bg, daemon=True).start()
+
+        # Premium + librespot: Spotify songs play from Spotify itself.
+        sp_id = _spotify_track_id_of(track)
+        if sp_id and not track.get("_spotify_unavailable") and self.spotify_audio_ready():
+            if not is_current():
+                return
+            self.call_from_thread(self._commit_playback, req_id, f"spotify:track:{sp_id}", track)
+            return
 
         cached = get_cached_track_path(t_id)
         if cached and not cached_audio_matches_duration(cached, track.get("duration_ms")):

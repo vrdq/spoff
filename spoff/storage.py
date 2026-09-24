@@ -115,7 +115,8 @@ def normalize_track(value: Any) -> Optional[Dict[str, Any]]:
     """Normalizes and validates a track dictionary to conform to the Spoff schema."""
     if not isinstance(value, dict):
         return None
-    result = dict(value)
+    # Session-only flags (e.g. "_spotify_unavailable") never reach storage.
+    result = {k: v for k, v in value.items() if not str(k).startswith("_")}
     raw_id = result.get("id")
     if raw_id is not None:
         result["id"] = str(raw_id)
@@ -508,6 +509,19 @@ def migrate_eq_to_native_rate() -> bool:
         eq_data["sample_rate"] = 48000.0
     save_config(cfg)
     return changed
+
+def get_saved_spotify_audio() -> bool:
+    """Whether Spotify songs play from Spotify (librespot, Premium) instead of YouTube."""
+    try:
+        return bool(load_config().get("spotify_audio", False))
+    except Exception:
+        return False
+
+@transactional
+def save_spotify_audio(enabled: bool) -> None:
+    cfg = load_config()
+    cfg["spotify_audio"] = bool(enabled)
+    save_config(cfg)
 
 def get_saved_notifications_enabled() -> bool:
     """Retrieves whether in-app notifications are enabled, defaulting to True."""
