@@ -1660,6 +1660,8 @@ class ConfirmModal(SafeModalScreen[bool]):
         Binding("n", "cancel", "No", show=False),
         Binding("enter", "confirm", "Confirm"),
         Binding("y", "confirm", "Yes", show=False),
+        Binding("d", "confirm", "Delete", show=False),
+        Binding("delete", "confirm", "Delete", show=False),
     ]
 
     def __init__(self, title: str, message: str, confirm_label: str = "Delete"):
@@ -1674,6 +1676,20 @@ class ConfirmModal(SafeModalScreen[bool]):
             yield Static(self.modal_message, id="confirm-message")
             c_hint = f"[bold #ffffff]{self.confirm_label}[/]    [#767676]Cancel[/]" if getattr(self.app, "advanced_mode", False) else f"[bold #ffffff][Y / Enter][/] {self.confirm_label}    [#767676][N / Esc] Cancel[/]"
             yield Static(c_hint, id="confirm-hint")
+
+    def on_click(self, event: events.Click) -> None:
+        try:
+            target = event.target
+            target_id = getattr(target, "id", "")
+            if target_id == "confirm-hint":
+                w = getattr(target, "size", None)
+                width = w.width if w else 20
+                if event.x > width // 2:
+                    self.dismiss(False)
+                else:
+                    self.dismiss(True)
+        except Exception:
+            pass
 
     def action_confirm(self) -> None:
         self.dismiss(True)
@@ -8681,7 +8697,10 @@ class SpoffTUI(App):
                     def _sync_remove_bg():
                         ok, msg = remove_track_from_spotify_account(pl_id, pl_name, removed_track)
                         if ok:
-                            self._on_ui(self.notify_user, f"Removed '{t_title}' from Spotify playlist '{pl_name}'.")
+                            if "client-side" not in msg.lower() and "not found" not in msg.lower():
+                                self._on_ui(self.notify_user, f"Removed '{t_title}' from Spotify playlist '{pl_name}'.")
+                        elif msg and not msg.startswith("Not logged in"):
+                            logger.info(f"Failed to remove '{t_title}' from Spotify: {msg}")
                     self._submit_spotify_job(_sync_remove_bg)
 
                     if self.queue:
