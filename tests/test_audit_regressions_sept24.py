@@ -65,3 +65,125 @@ def test_select_pending_cached_row_does_not_restart_request():
     SpoffTUI.play_current_table_row(fake, 0)
     fake.player.toggle_pause.assert_not_called()
     fake.play_index.assert_not_called()
+
+
+def test_matches_recording_featured_artist_asymmetry():
+    # Spotify search returns title with feat and artists containing both
+    req_title = "Are You Bored Yet? (feat. Clairo)"
+    req_artist = "Wallows, Clairo"
+    # YouTube Music returns official track with feat in title, but only primary artist in metadata
+    candidate = {
+        "title": "Are You Bored Yet? (feat. Clairo)",
+        "artists": [{"name": "Wallows"}],
+        "duration": 178,
+    }
+    assert _matches_recording(candidate, req_title, req_artist, 178)
+
+
+def test_matches_recording_featured_artist_in_requested_title_only():
+    req_title = "Are You Bored Yet? (feat. Clairo)"
+    req_artist = "Wallows"
+    candidate = {
+        "title": "Are You Bored Yet? (feat. Clairo)",
+        "artists": [{"name": "Wallows"}],
+        "duration": 178,
+    }
+    assert _matches_recording(candidate, req_title, req_artist, 178)
+
+
+def test_matches_recording_rejects_unrequested_feature_substitution():
+    req_title = "Levitating"
+    req_artist = "Dua Lipa"
+    candidate = {
+        "title": "Levitating (feat. DaBaby)",
+        "artists": [{"name": "Dua Lipa"}],
+        "duration": 203,
+    }
+    assert not _matches_recording(candidate, req_title, req_artist, 203)
+
+
+def test_matches_recording_multi_separator_and_dot():
+    # Middle dot separator
+    cand_dot = {
+        "title": "Song Title · Famous Artist",
+        "duration": 210,
+    }
+    assert _matches_recording(cand_dot, "Song Title", "Famous Artist", 210)
+
+    # Bullet separator
+    cand_bullet = {
+        "title": "Famous Artist • Song Title",
+        "duration": 210,
+    }
+    assert _matches_recording(cand_bullet, "Song Title", "Famous Artist", 210)
+
+    # Multi-dash separator
+    cand_multi = {
+        "title": "Song - Subtitle - Famous Artist",
+        "duration": 210,
+    }
+    assert _matches_recording(cand_multi, "Song - Subtitle", "Famous Artist", 210)
+
+
+def test_tracks_match_featured_artist_normalization():
+    t1 = {"title": "Somebody That I Used to Know (feat. Kimbra)", "artist": "Gotye"}
+    t2 = {"title": "Somebody That I Used to Know", "artist": "Gotye, Kimbra"}
+    assert _tracks_match(t1, t2)
+
+
+def test_playback_failed_search_origin_halts_without_cascading():
+    fake = SimpleNamespace(
+        _closing=False,
+        _play_request_id=1,
+        _pending_track="track1",
+        _failed_indices=set(),
+        current_index=0,
+        queue=[{"title": "Track 1"}, {"title": "Track 2"}, {"title": "Track 3"}],
+        _queue_origin={"tab": "search", "playlist_id": None},
+        player=Mock(),
+        mpris=Mock(),
+        update_player_hud=Mock(),
+        notify_user=Mock(),
+        play_index=Mock(),
+    )
+    SpoffTUI._playback_failed(fake, 1, {"title": "Track 1", "artist": "Artist 1"})
+    # Should stop player and reset state, not call play_index on Track 2
+    fake.player.stop.assert_called_once()
+    assert fake.current_index == -1
+    fake.play_index.assert_not_called()
+
+
+def test_search_and_resolve_stream_video_fallback(monkeypatch):
+    mock_ytm = Mock()
+    # First search (filter="songs") returns empty
+    # Second search (filter="videos") returns verified video
+    def fake_search(query, filter, limit):
+        if filter == "songs":
+            return []
+        if filter == "videos":
+            return [{"videoId": "vid123", "title": "Slowed Song", "artists": [{"name": "Artist"}], "duration": 200}]
+        return []
+
+    mock_ytm.search = fake_search
+    from spoff import ytmusic
+    monkeypatch.setattr(ytmusic, "get_ytmusic_client", lambda: mock_ytm)
+
+    # Mock YoutubeDL extraction for vid123
+    class FakeYDL:
+        def __init__(self, opts):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def extract_info(self, query, download=False):
+            if "vid123" in query:
+                return {"url": "https://stream.url/audio.m4a", "duration": 200}
+            return None
+
+    monkeypatch.setattr(streamer.yt_dlp, "YoutubeDL", FakeYDL)
+
+    res = streamer.search_and_resolve_stream("Slowed Song", "Artist", expected_duration_ms=200000)
+    assert res is not None
+    assert res.get("stream_url") == "https://stream.url/audio.m4a"
+

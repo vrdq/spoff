@@ -133,6 +133,16 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
                                 queries.append(query)
                     if queries:
                         break
+                if not queries:
+                    for performer in dict.fromkeys((clean_artist, clean_artist.split(",")[0].strip())):
+                        matches = ytm.search(f"{performer} {track_title}", filter="videos", limit=10)
+                        for match in matches or []:
+                            if match.get("videoId") and _matches_recording(match, track_title, clean_artist, duration):
+                                query = (f"https://www.youtube.com/watch?v={match['videoId']}", True)
+                                if query not in queries:
+                                    queries.append(query)
+                        if queries:
+                            break
         except Exception:
             logger.debug("YTMusic song match lookup failed", exc_info=True)
         primary_artist = clean_artist.split(",")[0].strip()

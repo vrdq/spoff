@@ -9498,7 +9498,9 @@ class SpoffTUI(App):
         self._pending_track = None
         invalidate_stream_cache(track.get("title", ""), track.get("artist", ""), playback_direct_url(track))
         self._failed_indices.add(self.current_index)
-        if not self.queue:
+        origin = getattr(self, "_queue_origin", None)
+        is_search = bool(origin and origin.get("tab") == "search")
+        if is_search or not self.queue:
             self._play_request_id += 1
             self.player.stop()
             self.current_index = -1
@@ -9507,7 +9509,8 @@ class SpoffTUI(App):
                 self.mpris.update_status(False, False)
                 self.mpris.update_track(None)
             self.update_player_hud()
-            self.notify_user("No playable tracks remain in this queue.", force=True)
+            if not is_search and not self.queue:
+                self.notify_user("No playable tracks remain in this queue.", force=True)
             return
         for offset in range(1, len(self.queue) + 1):
             candidate = (self.current_index + offset) % len(self.queue)

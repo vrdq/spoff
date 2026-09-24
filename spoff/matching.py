@@ -71,6 +71,51 @@ def _normalized_name(value: str) -> str:
     return " ".join(re.findall(r"[^\W_]+", value))
 
 
+def _extract_featured_artists(text: str) -> List[str]:
+    """Extracts artist names credited in (feat. ...), [ft. ...], featuring ... clauses."""
+    found: List[str] = []
+    if not text or not isinstance(text, str):
+        return found
+    for m in re.finditer(r"[\[(](?:feat\.?|ft\.?|featuring)\s+([^\[\]()]+)[\])]", text, flags=re.I):
+        for name in re.split(r"(?i)\s*(?:,|&|\band\b|\bx\b)\s*", m.group(1)):
+            n = name.strip()
+            if n:
+                found.append(n)
+    for m in re.finditer(r"\b(?:feat\.?|ft\.?|featuring)\s+([^\[\]()\-–—:•·|]+)", text, flags=re.I):
+        for name in re.split(r"(?i)\s*(?:,|&|\band\b|\bx\b)\s*", m.group(1)):
+            n = name.strip()
+            if n:
+                found.append(n)
+    return found
+
+
+def _title_without_known_credits(value: str, credits: Any) -> str:
+    """Removes featured performer clauses whose artists are in the known credits set."""
+    if not value or not isinstance(value, str):
+        return ""
+
+    def replace(match):
+        names = re.split(r"(?i)\s*(?:,|&|\band\b|\bx\b)\s*", match.group(1))
+        valid_names = [n.strip() for n in names if n.strip()]
+        if valid_names and all(_normalized_name(n) in credits for n in valid_names):
+            return " "
+        return match.group(0)
+
+    cleaned = re.sub(
+        r"[\[(](?:feat\.?|ft\.?|featuring)\s+([^\[\]()]+)[\])]",
+        replace,
+        value,
+        flags=re.I,
+    )
+    cleaned = re.sub(
+        r"\b(?:feat\.?|ft\.?|featuring)\s+([^\[\]()\-–—:•·|]+)",
+        replace,
+        cleaned,
+        flags=re.I,
+    )
+    return cleaned
+
+
 def _matches_recording(item: Dict[str, Any], title: str, artist: str, duration: float) -> bool:
     """Reject substitutions; metadata similarity is not proof of audio identity."""
     candidate_title = str(item.get("track") or item.get("title") or "")
@@ -103,48 +148,67 @@ def _matches_recording(item: Dict[str, Any], title: str, artist: str, duration: 
         ca = _clean_artist_name(a)
         if ca and ca != a:
             requested_artist_parts.append(ca)
+    # Extract any featured artists credited directly in the requested title
+    for fa in _extract_featured_artists(title):
+        requested_artist_parts.append(fa)
+        requested_artist_parts.extend(_split_artists(fa))
+        cfa = _clean_artist_name(fa)
+        if cfa and cfa != fa:
+            requested_artist_parts.append(cfa)
     requested_artists = {_normalized_name(a) for a in requested_artist_parts if a and _normalized_name(a)}
 
-    # Video uploads often put the performer in the title rather than artist tags (e.g. "Artist - Title" or "Title - Artist").
-    dash_match = re.search(r"\s+[-–—:]\s+", candidate_title)
-    if dash_match:
-        prefix = candidate_title[:dash_match.start()]
-        rest = candidate_title[dash_match.end():]
-        if _normalized_name(prefix) in requested_artists:
+    def _artist_in_requested(name: str) -> bool:
+        if not name:
+            return False
+        norm = _normalized_name(name)
+        if norm and norm in requested_artists:
+            return True
+        cleaned = _normalized_name(_clean_artist_name(name))
+        if cleaned and cleaned in requested_artists:
+            return True
+        for part in _split_artists(name):
+            pnorm = _normalized_name(part)
+            if pnorm and pnorm in requested_artists:
+                return True
+            pc = _normalized_name(_clean_artist_name(part))
+            if pc and pc in requested_artists:
+                return True
+        return False
+
+    # Video uploads often put the performer in the title rather than artist tags (e.g. "Artist - Title", "Title - Artist", "Artist • Title").
+    sep_pattern = r"\s+[-–—:|]\s+|\s*[·•]\s*"
+    all_seps = list(re.finditer(sep_pattern, candidate_title))
+    if all_seps:
+        first_sep = all_seps[0]
+        prefix = candidate_title[:first_sep.start()].strip()
+        rest = candidate_title[first_sep.end():].strip()
+        if _artist_in_requested(prefix):
             candidate_artists.append(prefix)
+            candidate_artists.extend(_split_artists(prefix))
             candidate_title = rest
-        elif _normalized_name(rest) in requested_artists:
+        elif _artist_in_requested(rest):
             candidate_artists.append(rest)
+            candidate_artists.extend(_split_artists(rest))
             candidate_title = prefix
-
-    def title_without_known_credits(value, credits):
-        # Providers move featured performers between title and artist fields.
-        # Remove only explicitly credited names; keep every version qualifier.
-        def replace(match):
-            names = re.split(r"(?i)\s*(?:,|&|\band\b|\bx\b)\s*", match.group(1))
-            if names and all(_normalized_name(name) in credits for name in names if name.strip()):
-                return " "
-            return match.group(0)
-
-        cleaned = re.sub(
-            r"[\[(](?:feat\.?|ft\.?|featuring)\s+([^\[\]()]+)[\])]",
-            replace,
-            value,
-            flags=re.I,
-        )
-        cleaned = re.sub(
-            r"\b(?:feat\.?|ft\.?|featuring)\s+([^\[\]()\-–—:]+)",
-            replace,
-            cleaned,
-            flags=re.I,
-        )
-        return cleaned
+        elif len(all_seps) > 1:
+            last_sep = all_seps[-1]
+            last_prefix = candidate_title[:last_sep.start()].strip()
+            last_suffix = candidate_title[last_sep.end():].strip()
+            if _artist_in_requested(last_suffix):
+                candidate_artists.append(last_suffix)
+                candidate_artists.extend(_split_artists(last_suffix))
+                candidate_title = last_prefix
+            elif _artist_in_requested(last_prefix):
+                candidate_artists.append(last_prefix)
+                candidate_artists.extend(_split_artists(last_prefix))
+                candidate_title = last_suffix
 
     cand_credit_set = {
         _normalized_name(a) for a in candidate_artists if a and _normalized_name(a)
     }
-    normalized_title = title_without_known_credits(title, cand_credit_set)
-    candidate_title = title_without_known_credits(candidate_title, requested_artists)
+    all_known_credits = requested_artists | cand_credit_set
+    normalized_title = _title_without_known_credits(title, all_known_credits)
+    candidate_title = _title_without_known_credits(candidate_title, all_known_credits)
 
     if _normalized_name(candidate_title) != _normalized_name(normalized_title):
         return False
@@ -184,8 +248,6 @@ def _tracks_match(t1: Dict[str, Any], t2: Dict[str, Any]) -> bool:
     uris2 = {u for u in (u2, su2) if u.startswith("spotify:track:")}
     if uris1 and uris2 and (uris1 & uris2):
         return True
-    title1 = _normalized_name(t1.get("title"))
-    title2 = _normalized_name(t2.get("title"))
     raw_artists1 = [str(t1.get("artist") or "")] + _split_artists(str(t1.get("artist") or ""))
     for a in list(raw_artists1):
         ca = _clean_artist_name(a)
@@ -226,4 +288,31 @@ def _tracks_match(t1: Dict[str, Any], t2: Dict[str, Any]) -> bool:
                     csa = _clean_artist_name(sa)
                     if csa:
                         artists2.add(_normalized_name(csa))
+    raw_title1 = str(t1.get("title") or "")
+    raw_title2 = str(t2.get("title") or "")
+    for fa in _extract_featured_artists(raw_title1):
+        artists1.add(_normalized_name(fa))
+        cfa = _clean_artist_name(fa)
+        if cfa:
+            artists1.add(_normalized_name(cfa))
+        for sa in _split_artists(fa):
+            artists1.add(_normalized_name(sa))
+            csa = _clean_artist_name(sa)
+            if csa:
+                artists1.add(_normalized_name(csa))
+    for fa in _extract_featured_artists(raw_title2):
+        artists2.add(_normalized_name(fa))
+        cfa = _clean_artist_name(fa)
+        if cfa:
+            artists2.add(_normalized_name(cfa))
+        for sa in _split_artists(fa):
+            artists2.add(_normalized_name(sa))
+            csa = _clean_artist_name(sa)
+            if csa:
+                artists2.add(_normalized_name(csa))
+    all_credits = artists1 | artists2
+    clean_title1 = _title_without_known_credits(raw_title1, all_credits)
+    clean_title2 = _title_without_known_credits(raw_title2, all_credits)
+    title1 = _normalized_name(clean_title1)
+    title2 = _normalized_name(clean_title2)
     return bool(title1 and title1 == title2 and (artists1 & artists2))
