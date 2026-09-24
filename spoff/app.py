@@ -16,7 +16,7 @@ import threading
 import atexit
 import secrets
 import hashlib
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Tuple, TypeVar
 import random
 
@@ -9441,78 +9441,86 @@ class SpoffTUI(App):
         else:
             results = live_search_tracks(query, limit=25)
 
-        def _update_ui():
-            if req_id != getattr(self, "_search_request_id", None):
-                return
-            self.search_results = results
-            if self.active_tab == "search":
-                self.render_tracks(results, select_row=0 if results else None)
-                if results:
-                    self.query_one("#track-table", DataTable).focus()
-                else:
-                    self.query_one("#search-box", Input).focus()
-            if results:
-                hint_str = "" if self.advanced_mode else " Press Enter to play."
-                msg = fallback_msg or f"Found {len(results)} tracks on {engine_name} for '{query}'.{hint_str}"
-                self.notify_user(msg, force=True)
-            else:
-                self.notify_user(fallback_msg or f"No tracks found on {engine_name} for '{query}'. Try different keywords.", force=True)
+        SpoffTUI._reveal_playable_results(self, req_id, results, query, engine_name, fallback_msg)
 
-        self.call_from_thread(_update_ui)
-        # Own thread, so "Searching…" clears as soon as the results are shown.
-        threading.Thread(target=self._hide_unplayable_results, args=(req_id, results), daemon=True).start()
+    def _reveal_playable_results(self, req_id: int, results: List[Dict[str, Any]], query: str,
+                                 engine_name: str, fallback_msg: Optional[str]) -> None:
+        """Shows only songs that can play, in their original order.
 
-    def _hide_unplayable_results(self, req_id: int, results: List[Dict[str, Any]]) -> None:
-        """Checks Spotify results against YouTube and removes the ones with no audio.
-
-        YouTube results are playable by definition and are not checked. Runs on
-        the search worker thread; each removal is applied on the UI thread.
+        YouTube results always play and appear at once. Spotify results appear
+        as soon as a YouTube recording is confirmed; ones with none never show,
+        so there is never a dead row to skip. Runs on the search worker thread,
+        which keeps the "Checking…" status up until every result is settled.
         """
+        order = {id(t): i for i, t in enumerate(results)}
+        ready = [t for t in results if is_client_side_track(t)]
         to_check = [t for t in results if not is_client_side_track(t)]
-        if not to_check:
+        lock = threading.Lock()
+
+        def current() -> bool:
+            return req_id == getattr(self, "_search_request_id", None) and not getattr(self, "_closing", False)
+
+        if to_check:
+            self._search_status_text = "Checking which songs play…"
+        self.call_from_thread(SpoffTUI._publish_search_results, self, req_id, list(ready), None)
+
+        hidden = 0
+        if to_check:
+            def check(track: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+                if not current():
+                    return None
+                if is_on_youtube(track.get("title"), track.get("artist"), track.get("duration_ms")):
+                    return track
+                return None
+
+            with ThreadPoolExecutor(max_workers=8, thread_name_prefix="spoff-check") as pool:
+                for future in as_completed([pool.submit(check, t) for t in to_check]):
+                    if not current():
+                        return
+                    track = future.result()
+                    if track is None:
+                        hidden += 1
+                        continue
+                    with lock:
+                        ready.append(track)
+                        ready.sort(key=lambda t: order[id(t)])
+                        snapshot = list(ready)
+                    self.call_from_thread(SpoffTUI._publish_search_results, self, req_id, snapshot, None)
+
+        if not current():
             return
-        hidden = [0]
+        if ready:
+            hint = "" if self.advanced_mode else " Press Enter to play."
+            summary = fallback_msg or f"Found {len(ready)} tracks on {engine_name} for '{query}'.{hint}"
+            if hidden:
+                summary += f" Left out {hidden} that {'isn’t' if hidden == 1 else 'aren’t'} on YouTube."
+        elif hidden:
+            summary = "None of these songs are on YouTube, so none can play. Try YouTube Music search (Ctrl+E)."
+        else:
+            summary = fallback_msg or f"No tracks found on {engine_name} for '{query}'. Try different keywords."
+        self.call_from_thread(SpoffTUI._publish_search_results, self, req_id, list(ready), summary)
 
-        def check(track: Dict[str, Any]) -> None:
-            if req_id != getattr(self, "_search_request_id", None) or getattr(self, "_closing", False):
-                return
-            if not is_on_youtube(track.get("title"), track.get("artist"), track.get("duration_ms")):
-                self.call_from_thread(self._drop_search_result, req_id, track, hidden)
-
-        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="spoff-check") as pool:
-            list(pool.map(check, to_check))
-
-        def _report():
-            if req_id != getattr(self, "_search_request_id", None) or not hidden[0]:
-                return
-            n = hidden[0]
-            if not self.search_results:
-                self.notify_user("None of these songs are on YouTube, so none can play. Try YouTube Music search (Ctrl+E).", force=True)
-            else:
-                self.notify_user(f"Hid {n} {'song' if n == 1 else 'songs'} that {'isn’t' if n == 1 else 'aren’t'} on YouTube.", force=True)
-        self.call_from_thread(_report)
-
-    def _drop_search_result(self, req_id: int, track: Dict[str, Any], hidden: List[int]) -> None:
+    def _publish_search_results(self, req_id: int, tracks: List[Dict[str, Any]], summary: Optional[str]) -> None:
+        """UI-thread update for the growing results list. summary is set on the last call."""
         if req_id != getattr(self, "_search_request_id", None):
             return
-        results = self.search_results
-        idx = next((i for i, t in enumerate(results) if t is track), None)
-        if idx is None:
-            return
-        # Keep the cursor on the same song while rows above it disappear.
-        cursor = None
-        table = self.query_one("#track-table", DataTable)
-        if self.active_tab == "search" and table.cursor_row is not None and 0 <= table.cursor_row < len(results):
-            cursor = results[table.cursor_row]
-        results.pop(idx)
-        hidden[0] += 1
+        was_empty = not getattr(self, "search_results", None)
+        cursor_track = None
+        if self.active_tab == "search" and not was_empty:
+            table = self.query_one("#track-table", DataTable)
+            if table.cursor_row is not None and 0 <= table.cursor_row < len(self.search_results):
+                cursor_track = self.search_results[table.cursor_row]
+        self.search_results = tracks
         if self.active_tab == "search":
-            if cursor is track or cursor is None:
-                row = min(idx, len(results) - 1) if results else None
-            else:
-                row = next((i for i, t in enumerate(results) if t is cursor), None)
-            self.render_tracks(results, select_row=row)
-
+            # New rows can land above the cursor; keep it on the same song.
+            row = next((i for i, t in enumerate(tracks) if t is cursor_track), 0) if tracks else None
+            self.render_tracks(tracks, select_row=row)
+            if tracks and was_empty:
+                self.query_one("#track-table", DataTable).focus()
+            elif not tracks and summary is not None:
+                self.query_one("#search-box", Input).focus()
+        if summary is not None:
+            self.notify_user(summary, force=True)
 
     @work(thread=True)
     def import_playlist_url(self, url: str):

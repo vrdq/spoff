@@ -8,11 +8,11 @@ def _track(i, source="spotify"):
     return {"id": f"{i:022d}", "title": f"Song {i}", "artist": "A", "duration_ms": 200000, "source": source}
 
 
-def test_unplayable_spotify_results_are_hidden_and_the_cursor_stays_put():
+def test_songs_that_cannot_play_never_appear_and_order_is_kept():
     from spoff.app import SpoffTUI
-    results = [_track(0), _track(1), _track(2, "ytmusic"), _track(3)]
+    results = [_track(0), _track(1), _track(2, "ytmusic"), _track(3), _track(4)]
     missing = {"Song 0", "Song 3"}          # not on YouTube
-    checked = []
+    checked, shown = [], []
 
     def fake_check(title, artist, duration_ms):
         checked.append(title)
@@ -20,26 +20,30 @@ def test_unplayable_spotify_results_are_hidden_and_the_cursor_stays_put():
 
     async def run():
         app = SpoffTUI(visualizer_enabled=False, notifications_enabled=False)
+        real_publish = SpoffTUI._publish_search_results
+
+        def spy(self, req_id, tracks, summary):
+            shown.append([t["title"] for t in tracks])
+            real_publish(self, req_id, tracks, summary)
         with patch.object(app, "check_github_updates_bg"), \
              patch.object(app, "backfill_playlists_art_bg"), \
              patch.object(app.player, "start_mpv"), \
              patch("spoff.app.is_first_launch", return_value=False), \
-             patch("spoff.app.is_on_youtube", side_effect=fake_check):
+             patch("spoff.app.is_on_youtube", side_effect=fake_check), \
+             patch.object(SpoffTUI, "_publish_search_results", spy):
             async with app.run_test() as pilot:
                 await pilot.pause(0.8)
                 app._search_request_id = 5
-                app.search_results = results
                 app.switch_view("search")
-                app.render_tracks(results, select_row=1)        # cursor on "Song 1"
-                await asyncio.to_thread(app._hide_unplayable_results, 5, list(results))
+                await asyncio.to_thread(app._reveal_playable_results, 5, list(results), "song", "Spotify", None)
                 await pilot.pause(0.2)
-                table = app.query_one("#track-table")
-                return [t["title"] for t in app.search_results], app.search_results[table.cursor_row]["title"]
+                return [t["title"] for t in app.search_results]
 
-    titles, under_cursor = asyncio.run(run())
-    assert titles == ["Song 1", "Song 2"]
-    assert under_cursor == "Song 1"
-    assert "Song 2" not in checked            # YouTube results are playable by definition
+    final = asyncio.run(run())
+    assert final == ["Song 1", "Song 2", "Song 4"]                 # original order, dead songs gone
+    assert shown[0] == ["Song 2"]                                  # YouTube result shows at once
+    assert all(not missing & set(snapshot) for snapshot in shown)  # a dead song is never shown
+    assert "Song 2" not in checked                                 # YouTube results aren't checked
 
 
 def test_a_network_error_never_hides_a_song():

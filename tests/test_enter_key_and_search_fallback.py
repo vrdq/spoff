@@ -67,7 +67,7 @@ class TestEnterKeyAndSearchFallback(unittest.IsolatedAsyncioTestCase):
         ]
 
         # Call worker synchronously using the underlying __wrapped__ function
-        with patch.object(fake_app, "call_from_thread", side_effect=lambda fn: fn()):
+        with patch.object(fake_app, "call_from_thread", side_effect=lambda fn, *a: fn(*a)):
             fake_app._search_worker.__wrapped__(fake_app, "bohemian rhapsody", 42, "spotify", "Spotify")
 
         mock_sp.assert_called_once_with("bohemian rhapsody", limit=25)

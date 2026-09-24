@@ -161,7 +161,7 @@ def test_failed_direct_link_does_not_become_name_search():
     from types import SimpleNamespace
     from spoff import app
     fake=SimpleNamespace(_search_request_id=1, active_tab='search', advanced_mode=False,
-                         call_from_thread=lambda fn:fn(), render_tracks=Mock(), query_one=Mock(), notify_user=Mock())
+                         call_from_thread=lambda fn, *a: fn(*a), render_tracks=Mock(), query_one=Mock(), notify_user=Mock())
     with patch.object(app,'resolve_direct_track_url',return_value=None), \
          patch.object(app,'live_search_tracks') as ytm, patch.object(app,'search_spotify_tracks') as spotify:
         app.SpoffTUI._search_worker.__wrapped__(fake,'https://music.youtube.com/watch?v=correct0001',1,'spotify','Spotify')
