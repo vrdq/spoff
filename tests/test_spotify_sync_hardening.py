@@ -3,14 +3,46 @@ from unittest.mock import patch, Mock
 from typing import Dict, Any, List
 import json
 
+import tempfile
+from pathlib import Path
+
 from spoff import auth, storage
 from spoff.matching import _matches_recording, _tracks_match, _clean_artist_name, _split_artists
 
 
 class TestSpotifySyncHardening(unittest.TestCase):
     def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.old_data_dir = storage.DATA_DIR
+        self.old_cache_dir = storage.CACHE_DIR
+        self.old_playlists_file = storage.PLAYLISTS_FILE
+        self.old_liked_file = storage.LIKED_SONGS_FILE
+        self.old_config_file = storage.CONFIG_FILE
+        self.old_deleted_file = storage.DELETED_PLAYLISTS_FILE
+        self.old_auth_file = auth.AUTH_FILE
+
+        storage.DATA_DIR = Path(self.temp_dir.name)
+        storage.CACHE_DIR = storage.DATA_DIR / "cache"
+        storage.DATA_DIR.mkdir(parents=True, exist_ok=True)
+        storage.CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        storage.PLAYLISTS_FILE = storage.DATA_DIR / "playlists.json"
+        storage.LIKED_SONGS_FILE = storage.DATA_DIR / "liked_songs.json"
+        storage.CONFIG_FILE = storage.DATA_DIR / "config.json"
+        storage.DELETED_PLAYLISTS_FILE = storage.DATA_DIR / "deleted_spotify_playlists.json"
+        auth.AUTH_FILE = storage.DATA_DIR / "spotify_auth.json"
+
         storage.save_saved_playlists([])
         storage.save_liked_songs([])
+
+    def tearDown(self):
+        storage.DATA_DIR = self.old_data_dir
+        storage.CACHE_DIR = self.old_cache_dir
+        storage.PLAYLISTS_FILE = self.old_playlists_file
+        storage.LIKED_SONGS_FILE = self.old_liked_file
+        storage.CONFIG_FILE = self.old_config_file
+        storage.DELETED_PLAYLISTS_FILE = self.old_deleted_file
+        auth.AUTH_FILE = self.old_auth_file
+        self.temp_dir.cleanup()
 
     def test_clean_artist_name_channel_suffixes(self):
         """Channel suffixes like - Topic, VEVO, Official are cleaned while preserving band names."""
