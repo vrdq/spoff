@@ -83,6 +83,34 @@ class LoadingHarness(app.SpoffTUI):
         self.mpris=None
 
 
+@pytest.mark.parametrize('size', [(100, 30), (60, 20)])
+def test_sidebar_browsing_preserves_status_and_marks_open_playlist(size):
+    async def check():
+        application = LoadingHarness(visualizer_enabled=False)
+        async with application.run_test(size=size) as pilot:
+            table = application.query_one('#side-table', app.DataTable)
+            table.add_column('Playlist')
+            application.playlists = [
+                {'id': 'one', 'name': 'Evening', 'tracks': [{'id': 'song'}]},
+                {'id': 'two', 'name': 'Weekend', 'tracks': []},
+            ]
+            application.current_playlist_id = 'one'
+            application.advanced_mode = False
+            application.refresh_side_table()
+            application.set_download_status('Downloading 2/5', channel='bulk')
+            table.focus()
+            await pilot.press('down')
+            await pilot.pause()
+            assert application.current_playlist_id == 'one'
+            assert table.get_cell_at(app.Coordinate(0, 0)).plain == '› Evening  1'
+            assert table.get_cell_at(app.Coordinate(1, 0)).plain == '  Weekend  0'
+            assert str(application.query_one('#notification-line', Static).content) == 'Downloading 2/5'
+            hint = application.query_one('#sidebar-hint', Static)
+            assert hint.region.height >= 2
+            assert hint.region.bottom <= size[1]
+    asyncio.run(check())
+
+
 @pytest.mark.parametrize('size',[(100,30),(60,20)])
 def test_loading_is_visible_above_seek_bar_in_real_layout(size):
     async def check_layout():

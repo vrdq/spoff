@@ -3802,8 +3802,8 @@ class SpoffTUI(App):
     }
 
     #sidebar-hint {
-        height: 1;
-        color: #767676;
+        height: auto;
+        color: #929292;
         margin-top: 1;
     }
 
@@ -5551,7 +5551,7 @@ class SpoffTUI(App):
         with Horizontal(id="main-layout"):
             with Vertical(id="sidebar"):
                 yield Static("PLAYLISTS", classes="pane-title")
-                yield Input(placeholder="New playlist name or Spotify / YTM link", id="sidebar-import-input", classes="action-input")
+                yield Input(placeholder="Create a playlist or paste a link", id="sidebar-import-input", classes="action-input")
                 yield DataTable(id="side-table", cursor_type="row", show_header=False)
                 yield Static("" if self.advanced_mode else "[dim]Enter: open  |  Del: delete[/dim]", id="sidebar-hint")
 
@@ -6654,7 +6654,7 @@ class SpoffTUI(App):
                 idx = st.cursor_row
                 if idx is not None and 0 <= idx < len(self.playlists):
                     pl = self.playlists[idx]
-                    if self.current_playlist_id != pl.get("id") or not self.current_playlist_tracks:
+                    if self.active_tab != "playlist" or self.current_playlist_id != pl.get("id") or not self.current_playlist_tracks:
                         self.load_playlist_by_index(idx, focus_tracks=True)
                         return
                     else:
@@ -7603,9 +7603,12 @@ class SpoffTUI(App):
             is_active = bool(self.current_playlist_id and p.get("id") == self.current_playlist_id)
             if is_active:
                 selected_idx = idx
-                styled_text = Text.from_markup(f"[bold #ffffff]{escape(raw_name)}[/]")
+                styled_text = Text.from_markup(f"[bold #ffffff]› {escape(raw_name)}[/]")
             else:
-                styled_text = Text.from_markup(f"[#888888]{escape(raw_name)}[/]")
+                styled_text = Text.from_markup(f"[#888888]  {escape(raw_name)}[/]")
+            tracks = p.get("tracks")
+            count = len(tracks) if isinstance(tracks, list) else 0
+            styled_text.append(f"  {count}", style="#929292")
             st.add_row(styled_text, key=str(idx))
 
         if target_row is not None and 0 <= target_row < len(self.playlists):
@@ -7628,9 +7631,9 @@ class SpoffTUI(App):
             else:
                 hint.styles.display = "block"
                 if self.playlists:
-                    hint.update("[dim]Enter: open  |  R: rename  |  Y: copy  |  Del: delete[/dim]")
+                    hint.update("Enter / →: open\n› Open playlist · number = songs")
                 else:
-                    hint.update("[dim]Enter name or link above to create[/dim]")
+                    hint.update("Create your first playlist above.")
         except Exception:
             pass
 
@@ -9197,14 +9200,9 @@ class SpoffTUI(App):
                 self._on_sidebar_playlist_highlighted(idx)
 
     def _on_sidebar_playlist_highlighted(self, idx: int) -> None:
-        if not (0 <= idx < len(self.playlists)):
-            return
-        pl = self.playlists[idx]
-        name = pl.get("name", "Playlist")
-        tracks = pl.get("tracks")
-        count = len(tracks) if isinstance(tracks, list) else 0
-        if not self.advanced_mode:
-            self.notify_user(f"'{name}' ({count} tracks). Press Enter or 'l' to open.")
+        # Browsing the sidebar must not replace playback/download feedback.
+        # The row contains the count; opening remains an explicit action.
+        return
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         table_id = event.data_table.id

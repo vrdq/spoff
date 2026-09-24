@@ -208,12 +208,12 @@ class TestPlaylistSelectorAndLikedTabAppLogic(unittest.TestCase):
         self.assertEqual(len(side_rows), 2)
         # pl_1 is the active playlist -> MUST have bold #ffffff style
         pl_1_text = side_rows[0][0]
-        self.assertEqual(pl_1_text.plain, "Chill Beats")
+        self.assertTrue(pl_1_text.plain.startswith("› Chill Beats  "))
         self.assertTrue(any(span.style == "bold #ffffff" for span in pl_1_text.spans))
 
         # pl_2 is unselected -> MUST NOT have bold, must have #888888 style
         pl_2_text = side_rows[1][0]
-        self.assertEqual(pl_2_text.plain, "Vaporwave")
+        self.assertTrue(pl_2_text.plain.startswith("  Vaporwave  "))
         self.assertFalse(any(span.style == "bold #ffffff" for span in pl_2_text.spans))
         self.assertTrue(any(span.style == "#888888" for span in pl_2_text.spans))
 
@@ -756,6 +756,7 @@ class TestDeckTrackFormatting(unittest.TestCase):
         self.app.current_playlist_id = "pl_1"
         self.app.current_playlist_tracks = [{"id": "t1", "title": "Track 1"}]
         self.app.load_playlist_by_index = Mock()
+        self.app.active_tab = "playlist"
 
         with patch.object(self.app, "query_one", side_effect=mock_query), \
              patch.object(type(self.app), "focused", new_callable=PropertyMock, return_value=side_table):
@@ -764,6 +765,13 @@ class TestDeckTrackFormatting(unittest.TestCase):
         # Should NOT reload playlist (which would reset tracks and cursor)
         self.app.load_playlist_by_index.assert_not_called()
         track_table.focus.assert_called_once()
+
+        # Opening that same playlist from Search must actually change views.
+        self.app.active_tab = "search"
+        with patch.object(self.app, "query_one", side_effect=mock_query), \
+             patch.object(type(self.app), "focused", new_callable=PropertyMock, return_value=side_table):
+            self.app.action_focus_tracks()
+        self.app.load_playlist_by_index.assert_called_once_with(0, focus_tracks=True)
 
     def test_render_tracks_select_row_overrides_old_cursor(self):
         mock_table = Mock(spec=DataTable)
