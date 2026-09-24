@@ -34,6 +34,18 @@ def _split_artists(value: str) -> List[str]:
     return results
 
 
+def _clean_artist_name(name: str) -> str:
+    """Removes platform channel suffixes like '- Topic', 'VEVO', 'Official', 'Channel'."""
+    if not name or not isinstance(name, str):
+        return ""
+    cleaned = str(name).strip()
+    cleaned = re.sub(r"(?i)\s*(?:[-_–—:]\s*|\b)topic$", "", cleaned)
+    cleaned = re.sub(r"(?i)(?<=[a-zA-Z0-9])vevo$", "", cleaned)
+    cleaned = re.sub(r"(?i)\s*[-_–—:]?\s*official(?:\s+channel)?$", "", cleaned)
+    cleaned = re.sub(r"(?i)\s*[-_–—:]?\s*channel$", "", cleaned)
+    return cleaned.strip()
+
+
 def _normalized_name(value: str) -> str:
     value = unicodedata.normalize("NFKC", str(value or "")).casefold()
     # Strip video/audio descriptors in brackets or parentheses
@@ -66,16 +78,31 @@ def _matches_recording(item: Dict[str, Any], title: str, artist: str, duration: 
     candidate_artists = [a.get("name", "") if isinstance(a, dict) else str(a) for a in artists]
     candidate_artists.extend(str(item.get(k) or "") for k in ("artist", "uploader", "channel"))
 
-    # Expand candidate artists with split artists
+    # Expand candidate artists with split artists and cleaned names
     expanded_candidate_artists: List[str] = []
     for ca in candidate_artists:
         if ca:
             expanded_candidate_artists.append(ca)
-            expanded_candidate_artists.extend(_split_artists(ca))
+            cca = _clean_artist_name(ca)
+            if cca and cca != ca:
+                expanded_candidate_artists.append(cca)
+            for sa in _split_artists(ca):
+                expanded_candidate_artists.append(sa)
+                csa = _clean_artist_name(sa)
+                if csa and csa != sa:
+                    expanded_candidate_artists.append(csa)
     candidate_artists = expanded_candidate_artists
 
-    # Requested artists: include both full artist string and split parts
+    # Requested artists: include full artist string, split parts, and cleaned names
     requested_artist_parts = [artist] + _split_artists(artist)
+    cra = _clean_artist_name(artist)
+    if cra and cra != artist:
+        requested_artist_parts.append(cra)
+        requested_artist_parts.extend(_split_artists(cra))
+    for a in list(requested_artist_parts):
+        ca = _clean_artist_name(a)
+        if ca and ca != a:
+            requested_artist_parts.append(ca)
     requested_artists = {_normalized_name(a) for a in requested_artist_parts if a and _normalized_name(a)}
 
     # Video uploads often put the performer in the title rather than artist tags (e.g. "Artist - Title" or "Title - Artist").
@@ -122,12 +149,17 @@ def _matches_recording(item: Dict[str, Any], title: str, artist: str, duration: 
     if _normalized_name(candidate_title) != _normalized_name(normalized_title):
         return False
     if not requested_artists or not any(
-        _normalized_name(re.sub(r"(?i)\s*-\s*topic$", "", a)) in requested_artists
+        _normalized_name(_clean_artist_name(a)) in requested_artists
         for a in candidate_artists if a
     ):
         return False
     duration_s = _seconds(duration)
-    candidate_duration = _seconds(item.get("duration_seconds") or item.get("duration"))
+    cand_dur = item.get("duration_seconds")
+    if cand_dur is None and "duration_ms" in item:
+        cand_dur = float(item["duration_ms"] or 0) / 1000.0
+    elif cand_dur is None:
+        cand_dur = item.get("duration")
+    candidate_duration = _seconds(cand_dur)
     if duration_s and (not candidate_duration or abs(candidate_duration - duration_s) > max(8.0, duration_s * 0.04)):
         return False
     return True
@@ -154,20 +186,44 @@ def _tracks_match(t1: Dict[str, Any], t2: Dict[str, Any]) -> bool:
         return True
     title1 = _normalized_name(t1.get("title"))
     title2 = _normalized_name(t2.get("title"))
-    artists1 = {_normalized_name(a) for a in [str(t1.get("artist") or "")] + _split_artists(str(t1.get("artist") or "")) if a and _normalized_name(a)}
-    artists2 = {_normalized_name(a) for a in [str(t2.get("artist") or "")] + _split_artists(str(t2.get("artist") or "")) if a and _normalized_name(a)}
+    raw_artists1 = [str(t1.get("artist") or "")] + _split_artists(str(t1.get("artist") or ""))
+    for a in list(raw_artists1):
+        ca = _clean_artist_name(a)
+        if ca and ca != a:
+            raw_artists1.append(ca)
+            raw_artists1.extend(_split_artists(ca))
+    raw_artists2 = [str(t2.get("artist") or "")] + _split_artists(str(t2.get("artist") or ""))
+    for a in list(raw_artists2):
+        ca = _clean_artist_name(a)
+        if ca and ca != a:
+            raw_artists2.append(ca)
+            raw_artists2.extend(_split_artists(ca))
+    artists1 = {_normalized_name(a) for a in raw_artists1 if a and _normalized_name(a)}
+    artists2 = {_normalized_name(a) for a in raw_artists2 if a and _normalized_name(a)}
     if t1.get("artists") and isinstance(t1["artists"], list):
         for a in t1["artists"]:
             name = a.get("name") if isinstance(a, dict) else str(a)
             if name:
                 artists1.add(_normalized_name(name))
+                cname = _clean_artist_name(name)
+                if cname:
+                    artists1.add(_normalized_name(cname))
                 for sa in _split_artists(name):
                     artists1.add(_normalized_name(sa))
+                    csa = _clean_artist_name(sa)
+                    if csa:
+                        artists1.add(_normalized_name(csa))
     if t2.get("artists") and isinstance(t2["artists"], list):
         for a in t2["artists"]:
             name = a.get("name") if isinstance(a, dict) else str(a)
             if name:
                 artists2.add(_normalized_name(name))
+                cname = _clean_artist_name(name)
+                if cname:
+                    artists2.add(_normalized_name(cname))
                 for sa in _split_artists(name):
                     artists2.add(_normalized_name(sa))
+                    csa = _clean_artist_name(sa)
+                    if csa:
+                        artists2.add(_normalized_name(csa))
     return bool(title1 and title1 == title2 and (artists1 & artists2))

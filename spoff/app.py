@@ -7288,12 +7288,29 @@ class SpoffTUI(App):
                 if remote_liked is None:
                     return
                 with storage_transaction():
-                    if load_liked_songs() != initial_liked:
-                        return  # A local edit while fetching takes precedence over the snapshot.
-                    merged = merge_spotify_and_client_tracks(remote_liked, initial_liked)
-                    if merged != initial_liked:
+                    current_liked = load_liked_songs()
+                    initial_keys = {
+                        str(x.get("id") or x.get("spotify_id") or x.get("uri") or "")
+                        for x in initial_liked if isinstance(x, dict)
+                    }
+                    current_keys = {
+                        str(x.get("id") or x.get("spotify_id") or x.get("uri") or "")
+                        for x in current_liked if isinstance(x, dict)
+                    }
+                    removed_during_fetch = {k for k in (initial_keys - current_keys) if k}
+
+                    filtered_remote = [
+                        rt for rt in remote_liked
+                        if not (
+                            (str(rt.get("id") or "") in removed_during_fetch)
+                            or (str(rt.get("spotify_id") or "") in removed_during_fetch)
+                            or (str(rt.get("uri") or "") in removed_during_fetch)
+                        )
+                    ]
+                    merged = merge_spotify_and_client_tracks(filtered_remote, current_liked)
+                    if merged != current_liked:
                         save_liked_songs(merged)
-                if merged != initial_liked:
+                if merged != current_liked:
                     def _update_ui():
                         self.current_liked_tracks = load_liked_songs()
                         if self.active_tab == "liked":

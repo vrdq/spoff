@@ -17,19 +17,19 @@ try:
     from .storage import (
         DATA_DIR, load_saved_playlists, save_saved_playlists, storage_transaction, mutate_playlist,
         get_deleted_spotify_playlist_ids, record_deleted_spotify_playlist_id,
-        load_liked_songs, save_liked_songs, stable_track_id
+        load_liked_songs, save_liked_songs, stable_track_id, liked_index
     )
 except ImportError:
     from storage import (
         DATA_DIR, load_saved_playlists, save_saved_playlists, storage_transaction, mutate_playlist,
         get_deleted_spotify_playlist_ids, record_deleted_spotify_playlist_id,
-        load_liked_songs, save_liked_songs, stable_track_id
+        load_liked_songs, save_liked_songs, stable_track_id, liked_index
     )
 
 try:
-    from .matching import _normalized_name, _matches_recording, _tracks_match
+    from .matching import _normalized_name, _matches_recording, _tracks_match, _clean_artist_name, _split_artists, _seconds
 except ImportError:
-    from matching import _normalized_name, _matches_recording, _tracks_match
+    from matching import _normalized_name, _matches_recording, _tracks_match, _clean_artist_name, _split_artists, _seconds
 
 logger = logging.getLogger("auth")
 
@@ -637,17 +637,18 @@ def merge_spotify_and_client_tracks(
     matched_ct_indices = set()
     for st in spotify_tracks:
         for idx, ct in enumerate(existing_tracks):
-            if idx not in matched_ct_indices and is_client_side_track(ct):
+            if idx not in matched_ct_indices:
                 if _tracks_match(ct, st):
                     matched_ct_indices.add(idx)
-                    if ct.get("url") and not st.get("url") and ct.get("spotify_id") == st.get("id"):
+                    if ct.get("url") and (not st.get("url") or str(st.get("url", "")).startswith("https://open.spotify.com/")):
                         st["url"] = ct["url"]
-                    if ct.get("art_url") and not st.get("art_url"):
-                        st["art_url"] = ct["art_url"]
-                    if ct.get("thumbnail") and not st.get("thumbnail"):
-                        st["thumbnail"] = ct["thumbnail"]
-                    if not st.get("spotify_id") and st.get("id"):
-                        st["spotify_id"] = st["id"]
+                    for k in ("art_url", "artist_art_url", "album_art_url", "thumbnail"):
+                        if ct.get(k) and not st.get(k):
+                            st[k] = ct[k]
+                    if not st.get("spotify_id") and (st.get("id") or ct.get("spotify_id")):
+                        st["spotify_id"] = st.get("id") or ct.get("spotify_id")
+                    if not st.get("spotify_uri") and (st.get("uri") or ct.get("spotify_uri")):
+                        st["spotify_uri"] = st.get("uri") or ct.get("spotify_uri")
                     break
 
     client_buckets: Dict[Optional[str], List[Dict[str, Any]]] = {None: []}
@@ -746,12 +747,27 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
         # Sync Liked Songs if successfully fetched
         if liked is not None:
             current_liked = load_liked_songs()
-            if current_liked == initial_liked:
-                merged_liked = merge_spotify_and_client_tracks(liked, current_liked)
-                save_liked_songs(merged_liked)
-                synced_count += 1
-            else:
-                logger.info("Local liked songs modified during sync fetch; preserving local edits.")
+            initial_keys = {
+                str(x.get("id") or x.get("spotify_id") or x.get("uri") or "")
+                for x in initial_liked if isinstance(x, dict)
+            }
+            current_keys = {
+                str(x.get("id") or x.get("spotify_id") or x.get("uri") or "")
+                for x in current_liked if isinstance(x, dict)
+            }
+            removed_during_fetch = {k for k in (initial_keys - current_keys) if k}
+
+            filtered_liked = [
+                rt for rt in liked
+                if not (
+                    (str(rt.get("id") or "") in removed_during_fetch)
+                    or (str(rt.get("spotify_id") or "") in removed_during_fetch)
+                    or (str(rt.get("uri") or "") in removed_during_fetch)
+                )
+            ]
+            merged_liked = merge_spotify_and_client_tracks(filtered_liked, current_liked)
+            save_liked_songs(merged_liked)
+            synced_count += 1
 
         for pl, tracks in fetched_remote:
             p_id = pl.get("id")
@@ -766,15 +782,30 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
                 )
                 if matches:
                     original = initial_by_id.get(p.get("id"))
-                    if original is not None and (
-                        original.get("name") != p.get("name")
-                        or original.get("tracks", []) != p.get("tracks", [])
-                    ):
-                        found = True
-                        break
-                    p["name"] = p_name
                     existing_tracks = p.get("tracks", [])
-                    p["tracks"] = merge_spotify_and_client_tracks(tracks, existing_tracks)
+                    original_tracks = original.get("tracks", []) if original else []
+
+                    orig_keys = {
+                        str(x.get("id") or x.get("spotify_id") or x.get("uri") or "")
+                        for x in original_tracks if isinstance(x, dict)
+                    }
+                    curr_keys = {
+                        str(x.get("id") or x.get("spotify_id") or x.get("uri") or "")
+                        for x in existing_tracks if isinstance(x, dict)
+                    }
+                    removed_during_fetch = {k for k in (orig_keys - curr_keys) if k}
+
+                    filtered_tracks = [
+                        rt for rt in tracks
+                        if not (
+                            (str(rt.get("id") or "") in removed_during_fetch)
+                            or (str(rt.get("spotify_id") or "") in removed_during_fetch)
+                            or (str(rt.get("uri") or "") in removed_during_fetch)
+                        )
+                    ]
+                    if not (original and original.get("name") != p.get("name")):
+                        p["name"] = p_name
+                    p["tracks"] = merge_spotify_and_client_tracks(filtered_tracks, existing_tracks)
                     if not p.get("url"):
                         p["url"] = pl.get("url", "")
                     if p.get("id") != p_id and not p.get("spotify_id"):
@@ -852,7 +883,12 @@ def search_spotify_tracks(query: str, limit: int = 25, token: Optional[str] = No
 
     return True, tracks, ""
 
-def search_spotify_track(title: str, artist: str = "", token: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def search_spotify_track(
+    title: str,
+    artist: str = "",
+    token: Optional[str] = None,
+    duration: float = 0.0,
+) -> Optional[Dict[str, Any]]:
     """
     Searches Spotify for a track by title and artist.
     Returns the track info dict with 'id' and 'uri', or None.
@@ -864,46 +900,49 @@ def search_spotify_track(title: str, artist: str = "", token: Optional[str] = No
 
     clean_title = str(title or "").strip()
     clean_artist = str(artist or "").strip()
+    cleaned_artist = _clean_artist_name(clean_artist)
+    primary_artist = _split_artists(cleaned_artist)[0] if cleaned_artist else ""
 
-    query_parts = []
-    if clean_title:
-        query_parts.append(f'track:"{clean_title}"')
-    if clean_artist and clean_artist.lower() != "unknown":
-        query_parts.append(f'artist:"{clean_artist}"')
+    queries: List[str] = []
+    if clean_title and primary_artist and primary_artist.lower() != "unknown":
+        queries.append(f'track:"{clean_title}" artist:"{primary_artist}"')
+    if clean_title and cleaned_artist and cleaned_artist != primary_artist and cleaned_artist.lower() != "unknown":
+        queries.append(f'track:"{clean_title}" artist:"{cleaned_artist}"')
+    if clean_title and cleaned_artist and cleaned_artist.lower() != "unknown":
+        queries.append(f"{clean_title} {cleaned_artist}")
+    elif clean_title:
+        queries.append(clean_title)
 
-    q_str = " ".join(query_parts) if query_parts else title
-    url = f"/search?q={urllib.parse.quote(q_str)}&type=track&limit=10"
-    ok, data, _ = spotify_api_request(url, method="GET", token=token)
+    norm_title = _normalized_name(clean_title)
+    if norm_title and norm_title != clean_title.lower() and primary_artist:
+        queries.append(f"{norm_title} {primary_artist}")
+    if clean_title and len(clean_title) >= 3:
+        queries.append(f'track:"{clean_title}"')
 
-    items = []
-    if ok and data and "tracks" in data:
-        items = data["tracks"].get("items", [])
+    seen_queries = set()
 
-    if not items:
-        plain_q = f"{clean_title} {clean_artist}".strip()
-        url = f"/search?q={urllib.parse.quote(plain_q)}&type=track&limit=10"
+    for q in queries:
+        q_strip = q.strip()
+        if not q_strip or q_strip in seen_queries:
+            continue
+        seen_queries.add(q_strip)
+        url = f"/search?q={urllib.parse.quote(q_strip)}&type=track&limit=10"
         ok, data, _ = spotify_api_request(url, method="GET", token=token)
         if ok and data and "tracks" in data:
             items = data["tracks"].get("items", [])
-
-    if not items:
-        norm_title = _normalized_name(clean_title)
-        if norm_title and norm_title != clean_title.lower():
-            norm_q = f"{norm_title} {clean_artist}".strip()
-            url = f"/search?q={urllib.parse.quote(norm_q)}&type=track&limit=10"
-            ok, data, _ = spotify_api_request(url, method="GET", token=token)
-            if ok and data and "tracks" in data:
-                items = data["tracks"].get("items", [])
-
-    for item in items:
-        candidate = {
-            "id": item.get("id"), "uri": item.get("uri"),
-            "title": item.get("name"), "artists": item.get("artists") or [],
-            "artist": ", ".join(a.get("name", "Unknown") for a in item.get("artists", []) if isinstance(a, dict)),
-            "duration_ms": item.get("duration_ms", 0),
-        }
-        if _matches_recording(candidate, title, artist, 0) or _tracks_match(candidate, {"title": title, "artist": artist}):
-            return candidate
+            for item in items:
+                dur_ms = item.get("duration_ms", 0)
+                candidate = {
+                    "id": item.get("id"),
+                    "uri": item.get("uri"),
+                    "title": item.get("name"),
+                    "artists": item.get("artists") or [],
+                    "artist": ", ".join(a.get("name", "Unknown") for a in item.get("artists", []) if isinstance(a, dict)),
+                    "duration_ms": dur_ms,
+                    "duration_seconds": (dur_ms / 1000.0) if dur_ms else 0.0,
+                }
+                if _matches_recording(candidate, title, artist, duration) or _tracks_match(candidate, {"title": title, "artist": artist}):
+                    return candidate
     return None
 
 def resolve_spotify_track_info(track: Dict[str, Any], token: Optional[str] = None) -> Optional[Tuple[str, str]]:
@@ -936,7 +975,25 @@ def resolve_spotify_track_info(track: Dict[str, Any], token: Optional[str] = Non
     if len(t_id) == 22 and t_id.isalnum() and not t_id.startswith("local_"):
         return t_id, f"spotify:track:{t_id}"
 
-    found = search_spotify_track(track.get("title", ""), track.get("artist", ""), token=token)
+    dur = 0.0
+    if "duration_seconds" in track and track["duration_seconds"]:
+        try:
+            dur = float(track["duration_seconds"])
+        except (ValueError, TypeError):
+            dur = 0.0
+    elif "duration_ms" in track and track["duration_ms"]:
+        try:
+            dur = float(track["duration_ms"]) / 1000.0
+        except (ValueError, TypeError):
+            dur = 0.0
+    elif "duration" in track and track["duration"]:
+        dur = _seconds(track["duration"])
+
+    search_kwargs: Dict[str, Any] = {"token": token}
+    if dur > 0:
+        search_kwargs["duration"] = dur
+
+    found = search_spotify_track(track.get("title", ""), track.get("artist", ""), **search_kwargs)
     if found and found.get("id") and found.get("uri"):
         track["spotify_id"] = found["id"]
         track["spotify_uri"] = found["uri"]
@@ -977,6 +1034,18 @@ def add_track_to_spotify_account(
     if playlist_id in ("spotify_liked_songs", "liked", "liked_songs"):
         ok, _, err = spotify_api_request(f"/me/tracks?ids={spotify_track_id}", method="PUT", token=token)
         if ok:
+            try:
+                with storage_transaction():
+                    current = load_liked_songs()
+                    idx = liked_index(current, track)
+                    if idx is not None:
+                        if not current[idx].get("spotify_id"):
+                            current[idx]["spotify_id"] = spotify_track_id
+                        if not current[idx].get("spotify_uri"):
+                            current[idx]["spotify_uri"] = spotify_track_uri
+                        save_liked_songs(current)
+            except Exception as e:
+                logger.debug(f"Failed to persist resolved spotify track info to liked songs: {e}")
             return True, "Synced to Spotify Liked Songs"
         return False, err
 
@@ -1015,6 +1084,17 @@ def add_track_to_spotify_account(
     }
     ok_add, _, err = spotify_api_request(f"/playlists/{target_spotify_pl_id}/tracks", method="POST", body=add_body, token=token)
     if ok_add:
+        try:
+            def update_sp_meta(p: Dict[str, Any]) -> None:
+                for t in p.get("tracks", []):
+                    if _tracks_match(t, track):
+                        if not t.get("spotify_id"):
+                            t["spotify_id"] = spotify_track_id
+                        if not t.get("spotify_uri"):
+                            t["spotify_uri"] = spotify_track_uri
+            mutate_playlist(playlist_id, update_sp_meta)
+        except Exception as e:
+            logger.debug(f"Failed to persist resolved spotify track info to playlist: {e}")
         return True, f"Synced to Spotify playlist '{playlist_name}'"
     return False, f"Failed to add track to Spotify: {err}"
 
@@ -1156,13 +1236,22 @@ def sync_playlist_tracks_to_spotify(
     # Filter down to Spotify tracks and resolve URIs
     uris: List[str] = []
     for t in tracks:
-        if is_client_side_track(t):
+        sp_uri = str(t.get("spotify_uri") or "").strip()
+        if sp_uri.startswith("spotify:track:"):
+            uris.append(sp_uri)
             continue
-        uri = t.get("uri")
-        if uri and str(uri).startswith("spotify:track:"):
-            uris.append(str(uri))
-        elif t.get("id") and len(str(t["id"])) == 22 and str(t["id"]).isalnum() and not str(t["id"]).startswith("local_"):
-            uris.append(f"spotify:track:{t['id']}")
+        sp_id = str(t.get("spotify_id") or "").strip()
+        if len(sp_id) == 22 and sp_id.isalnum() and not sp_id.startswith("local_"):
+            uris.append(f"spotify:track:{sp_id}")
+            continue
+        uri = str(t.get("uri") or "").strip()
+        if uri.startswith("spotify:track:"):
+            uris.append(uri)
+            continue
+        tid = str(t.get("id") or "").strip()
+        if len(tid) == 22 and tid.isalnum() and not tid.startswith("local_") and not is_client_side_track(t):
+            uris.append(f"spotify:track:{tid}")
+            continue
 
     if not uris:
         return True, "No Spotify tracks to sync"
