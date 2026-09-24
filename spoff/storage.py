@@ -523,6 +523,26 @@ def save_spotify_audio(enabled: bool) -> None:
     cfg["spotify_audio"] = bool(enabled)
     save_config(cfg)
 
+def get_saved_youtube_login() -> Optional[Tuple[str, Optional[str], Optional[str]]]:
+    """Browser whose YouTube login Spoff uses: (yt-dlp browser, profile path, keyring)."""
+    try:
+        value = load_config().get("youtube_login")
+    except Exception:
+        return None
+    if isinstance(value, list) and len(value) in (2, 3) and isinstance(value[0], str):
+        extra = (list(value) + [None, None])[1:3]
+        return value[0], *(v if isinstance(v, str) else None for v in extra)
+    return None
+
+@transactional
+def save_youtube_login(spec: Optional[Tuple[str, Optional[str], Optional[str]]]) -> None:
+    cfg = load_config()
+    if spec:
+        cfg["youtube_login"] = list(spec)
+    else:
+        cfg.pop("youtube_login", None)
+    save_config(cfg)
+
 def get_saved_notifications_enabled() -> bool:
     """Retrieves whether in-app notifications are enabled, defaulting to True."""
     try:

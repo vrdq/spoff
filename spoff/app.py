@@ -73,6 +73,7 @@ try:
         get_saved_notifications_enabled, save_notifications_enabled,
         get_saved_loudness_normalization, save_loudness_normalization, migrate_eq_to_native_rate,
         get_saved_spotify_audio, save_spotify_audio, _spotify_track_id_of,
+        get_saved_youtube_login, save_youtube_login,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
@@ -85,7 +86,7 @@ try:
         record_deleted_spotify_playlist_id, liked_index, storage_transaction,
         update_playlist_details, is_low_quality_cache
     )
-    from .streamer import is_on_youtube, search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
+    from .streamer import set_youtube_login, is_on_youtube, search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from .search import live_search_tracks, resolve_direct_track_url
     from .player import MPVController
     from .eq import (
@@ -110,6 +111,7 @@ try:
     from .updater import check_for_updates, perform_update, run_cli_update, is_git_checkout
     from .art import resolve_track_artwork, get_cached_artwork
     from .spotify_audio import SpotifyAudio, librespot_path
+    from . import youtube_account
 except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url
     from ytmusic import (
@@ -130,6 +132,7 @@ except ImportError:
         get_saved_notifications_enabled, save_notifications_enabled,
         get_saved_loudness_normalization, save_loudness_normalization, migrate_eq_to_native_rate,
         get_saved_spotify_audio, save_spotify_audio, _spotify_track_id_of,
+        get_saved_youtube_login, save_youtube_login,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
@@ -142,7 +145,7 @@ except ImportError:
         record_deleted_spotify_playlist_id, liked_index, storage_transaction,
         update_playlist_details, is_low_quality_cache
     )
-    from streamer import is_on_youtube, search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
+    from streamer import set_youtube_login, is_on_youtube, search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from search import live_search_tracks, resolve_direct_track_url
     from player import MPVController
     from eq import (
@@ -167,6 +170,7 @@ except ImportError:
     from updater import check_for_updates, perform_update, run_cli_update, is_git_checkout
     from art import resolve_track_artwork, get_cached_artwork
     from spotify_audio import SpotifyAudio, librespot_path
+    import youtube_account
 
 logger = logging.getLogger("spoff")
 
@@ -829,6 +833,13 @@ class LoudnessToggle(Static):
         if isinstance(self.screen, SettingsModal):
             self.screen.toggle_loudness()
 
+class YouTubeAccountToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_youtube_account()
+
 class SpotifyAudioToggle(Static):
     can_focus = True
 
@@ -1016,6 +1027,7 @@ class SettingsModal(SafeModalScreen[None]):
                 yield VisualizerStyleToggle(id="vis-style-toggle", classes="setting-toggle-item")
                 yield VisualizerColorToggle(id="vis-color-toggle", classes="setting-toggle-item")
                 yield Static("AUDIO", classes="settings-section")
+                yield YouTubeAccountToggle(id="youtube-account-toggle", classes="setting-toggle-item")
                 yield SpotifyAudioToggle(id="spotify-audio-toggle", classes="setting-toggle-item")
                 yield LoudnessToggle(id="loudness-toggle", classes="setting-toggle-item")
                 yield EQSettingsNavToggle(id="eq-settings-nav-toggle", classes="setting-toggle-item")
@@ -1108,6 +1120,11 @@ class SettingsModal(SafeModalScreen[None]):
             colour = vis.get_color_name() if vis else "Green"
             self.query_one("#vis-color-toggle", Static).update(self._row("Colour", colour, on=None if vis_on else False))
 
+            yt_login = get_saved_youtube_login()
+            self.query_one("#youtube-account-toggle", Static).update(
+                self._row("YouTube account", youtube_account.browser_label(yt_login) if yt_login else "sign in with Google",
+                          on=True if yt_login else None))
+
             from_spotify = get_saved_spotify_audio()
             self.query_one("#spotify-audio-toggle", Static).update(
                 self._row("Spotify songs from", "Spotify" if from_spotify else "YouTube", on=from_spotify or None))
@@ -1129,6 +1146,15 @@ class SettingsModal(SafeModalScreen[None]):
         self.update_toggle_ui()
         state_text = "enabled" if new_state else "disabled"
         self.query_one("#settings-status-line", Static).update(f"Advanced Mode: {state_text}")
+
+    def toggle_youtube_account(self) -> None:
+        if self.spoff_app.youtube_signed_in():
+            self.spoff_app.youtube_logout()
+            self.query_one("#settings-status-line", Static).update("Signed out of YouTube in Spoff.")
+        else:
+            self.spoff_app.start_youtube_login()
+            self.query_one("#settings-status-line", Static).update("Waiting for you to sign in with Google…")
+        self.update_toggle_ui()
 
     def toggle_spotify_audio(self) -> None:
         enabled = self.spoff_app.toggle_spotify_audio()
@@ -1309,6 +1335,7 @@ class SettingsModal(SafeModalScreen[None]):
             "vis-toggle",
             "vis-style-toggle",
             "vis-color-toggle",
+            "youtube-account-toggle",
             "spotify-audio-toggle",
             "loudness-toggle",
             "eq-settings-nav-toggle",
@@ -1343,6 +1370,8 @@ class SettingsModal(SafeModalScreen[None]):
             self.cycle_visualizer_style()
         elif focused_id == "vis-color-toggle":
             self.cycle_visualizer_color()
+        elif focused_id == "youtube-account-toggle":
+            self.toggle_youtube_account()
         elif focused_id == "spotify-audio-toggle":
             self.toggle_spotify_audio()
         elif focused_id == "loudness-toggle":
@@ -1368,7 +1397,7 @@ class SettingsModal(SafeModalScreen[None]):
 
     def on_key(self, event: events.Key) -> None:
         table = self.query_one("#settings-table", DataTable)
-        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "spotify-audio-toggle", "loudness-toggle", "eq-settings-nav-toggle"]
+        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "youtube-account-toggle", "spotify-audio-toggle", "loudness-toggle", "eq-settings-nav-toggle"]
         focused_id = self.focused.id if self.focused else None
 
         if focused_id in toggle_ids:
@@ -1406,6 +1435,8 @@ class SettingsModal(SafeModalScreen[None]):
                     self.cycle_visualizer_style()
                 elif focused_id == "vis-color-toggle":
                     self.cycle_visualizer_color()
+                elif focused_id == "youtube-account-toggle":
+                    self.toggle_youtube_account()
                 elif focused_id == "spotify-audio-toggle":
                     self.toggle_spotify_audio()
                 elif focused_id == "loudness-toggle":
@@ -5798,6 +5829,7 @@ class SpoffTUI(App):
         self._apply_visualizer_visibility()
         self.check_github_updates_bg()
         self.spotify_audio: Optional[SpotifyAudio] = None
+        set_youtube_login(get_saved_youtube_login())
         if get_saved_spotify_audio():
             self.enable_spotify_audio(quiet=True)
         self.backfill_playlists_art_bg()
@@ -5909,6 +5941,51 @@ class SpoffTUI(App):
         else:
             self.disable_spotify_audio()
         return enabled
+
+    def youtube_signed_in(self) -> bool:
+        return get_saved_youtube_login() is not None
+
+    def start_youtube_login(self) -> None:
+        """Opens Google's sign-in for YouTube Music and waits for the browser to have it."""
+        import webbrowser
+
+        def _say(text: str) -> None:
+            self._on_ui(self.notify_user, text, force=True)
+
+        existing = youtube_account.find_logged_in_browser()
+        if existing is None:
+            try:
+                webbrowser.open(youtube_account.LOGIN_URL)
+            except Exception:
+                logger.exception("Could not open the Google sign-in page")
+            self.notify_user("Sign in with Google in your browser. Spoff picks it up automatically.", force=True)
+
+        def _worker() -> None:
+            spec = existing or youtube_account.wait_for_login(
+                cancelled=lambda: getattr(self, "_closing", False))
+            if not spec:
+                _say("Didn't see a YouTube sign-in in your browser. Try again from Settings.")
+                return
+            save_youtube_login(spec)
+            set_youtube_login(spec)
+            where = youtube_account.browser_label(spec)
+            if youtube_account.has_premium_audio(spec):
+                _say(f"Signed in to YouTube via {where}. High-quality (256 kbps) audio is on.")
+            else:
+                _say(f"Signed in to YouTube via {where}. This account doesn't get the high-quality "
+                     "audio; that needs YouTube Premium.")
+            self._on_ui(self._refresh_settings_if_open)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def youtube_logout(self) -> None:
+        save_youtube_login(None)
+        set_youtube_login(None)
+        self.notify_user("Spoff no longer uses your YouTube login.", force=True)
+
+    def _refresh_settings_if_open(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.update_toggle_ui()
 
     def _mark_ready(self) -> None:
         self._is_ready = True

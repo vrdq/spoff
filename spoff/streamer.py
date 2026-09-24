@@ -1,3 +1,4 @@
+import io
 import re
 import time
 import logging
@@ -44,6 +45,57 @@ _download_slots = threading.BoundedSemaphore(4)
 # bitrate; fall back to whatever is best if a video has no Opus track.
 BEST_AUDIO = "bestaudio[acodec=opus]/bestaudio/best"
 
+# Browser whose YouTube login every request uses (set when the user signs in).
+_youtube_login: Optional[Tuple[str, Optional[str], Optional[str]]] = None
+
+
+_cookie_text: Optional[str] = None
+_cookie_time = 0.0
+_cookie_lock = threading.Lock()
+COOKIE_REFRESH = 600.0  # re-read the browser's login every 10 minutes
+
+
+def set_youtube_login(spec: Optional[Tuple[str, Optional[str], Optional[str]]]) -> None:
+    global _youtube_login, _cookie_text
+    _youtube_login = tuple(spec) if spec else None  # type: ignore[assignment]
+    with _cookie_lock:
+        _cookie_text = None
+    with _stream_cache_lock:
+        _stream_cache.clear()  # cached stream URLs were resolved without the login
+
+
+def _youtube_cookies() -> Optional[io.StringIO]:
+    """An in-memory Netscape cookie file holding only the YouTube/Google login.
+
+    Decrypting the browser's cookie store takes about a second, far too slow
+    for every request, so the result is kept in memory (never written to disk)
+    and refreshed every few minutes.
+    """
+    global _cookie_text, _cookie_time
+    spec = _youtube_login
+    if not spec:
+        return None
+    with _cookie_lock:
+        if _cookie_text is None or time.monotonic() - _cookie_time > COOKIE_REFRESH:
+            try:
+                from yt_dlp.cookies import extract_cookies_from_browser
+                jar = extract_cookies_from_browser(spec[0], spec[1], keyring=spec[2])
+            except Exception:
+                logger.warning("Could not read the YouTube login from the browser", exc_info=True)
+                return None
+            lines = ["# Netscape HTTP Cookie File"]
+            for c in jar:
+                if not c.domain.endswith(("youtube.com", "google.com")):
+                    continue
+                lines.append("\t".join([
+                    c.domain, "TRUE" if c.domain.startswith(".") else "FALSE", c.path or "/",
+                    "TRUE" if c.secure else "FALSE", str(int(c.expires or 0)), c.name, c.value or "",
+                ]))
+            _cookie_text = "\n".join(lines) + "\n"
+            _cookie_time = time.monotonic()
+        return io.StringIO(_cookie_text)
+
+
 def get_base_ydl_opts(extra_opts=None):
     opts = {
         "format": BEST_AUDIO,
@@ -58,6 +110,11 @@ def get_base_ydl_opts(extra_opts=None):
         "fragment_retries": 2,
         "extractor_retries": 1,
     }
+    cookies = _youtube_cookies()
+    if cookies is not None:
+        # Signed in: the browser's YouTube login goes with each request, which
+        # also unlocks YouTube Premium's high-quality stream.
+        opts["cookiefile"] = cookies
     if extra_opts:
         opts.update(extra_opts)
     return opts
