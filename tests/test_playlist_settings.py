@@ -49,7 +49,7 @@ def test_shift_s_edits_name_description_and_visibility(tmp_path, monkeypatch):
                 assert app.screen.query_one("#plset-name").value == "Late Night Drive"
                 await pilot.press("j", "i", *"slow jk songs", "enter")   # j/k inside edit are text
                 await pilot.press("j", "space")                  # visibility -> public
-                await pilot.press("w")                           # save
+                await pilot.press("escape")                      # leaving saves
                 await pilot.pause(0.3)
                 assert not isinstance(app.screen, PlaylistSettingsModal)
 

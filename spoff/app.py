@@ -1855,8 +1855,7 @@ class PlaylistSettingsModal(SafeModalScreen[Optional[Dict[str, Any]]]):
                 yield Input(value=str(self.playlist.get("description") or ""), placeholder="none",
                             max_length=300, id="plset-desc", classes="plset-input")
             yield VisibilityToggle(id="plset-visibility", classes="setting-toggle-item")
-            yield Static("", id="plset-error")
-            yield Static("[dim]j/k move · enter edit · space public/private · w save · esc cancel[/dim]",
+            yield Static("[dim]j/k move · enter edit · space public/private · esc done[/dim]",
                          id="plset-footer")
 
     def on_mount(self) -> None:
@@ -1914,10 +1913,8 @@ class PlaylistSettingsModal(SafeModalScreen[Optional[Dict[str, Any]]]):
             self.start_editing(focused)
         elif focused is not None and focused.id == "plset-visibility" and key in ("enter", "space", "h", "l", "left", "right"):
             self.toggle_visibility()
-        elif key == "w":
-            self.action_save()
         elif key in ("escape", "q"):
-            self.dismiss(None)
+            self.action_save()  # leaving the menu saves
         else:
             return
         event.prevent_default()
@@ -1928,11 +1925,8 @@ class PlaylistSettingsModal(SafeModalScreen[Optional[Dict[str, Any]]]):
         self.stop_editing()
 
     def action_save(self) -> None:
-        name = self.query_one("#plset-name", Input).value.strip()
-        if not name:
-            self.query_one("#plset-error", Static).update("[#e06c75]Give the playlist a name.[/]")
-            self.query_one("#plset-name-field", PlaylistField).focus()
-            return
+        # A cleared name falls back to the old one, so leaving never gets stuck.
+        name = self.query_one("#plset-name", Input).value.strip() or str(self.playlist.get("name") or "Playlist")
         description = " ".join(self.query_one("#plset-desc", Input).value.split())
         self.dismiss({"name": name, "description": description, "public": self.public})
 
@@ -4977,10 +4971,6 @@ class SpoffTUI(App):
 
     .plset-input > .input--placeholder {
         color: #5f5f5f;
-    }
-
-    #plset-error {
-        height: auto;
     }
 
     #plset-footer {
