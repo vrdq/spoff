@@ -1242,7 +1242,7 @@ class SettingsModal(SafeModalScreen[None]):
             self.query_one("#settings-status-line", Static).update("All keybindings reset to factory defaults.")
 
         self.app.push_screen(
-            ConfirmModal("RESET ALL KEYBINDINGS", "Reset every shortcut to its default? Your custom bindings will be lost.", confirm_label="Reset"),
+            ConfirmModal("Reset all keybindings", "Reset every shortcut to its default? Your custom bindings will be lost.", confirm_label="Reset"),
             _on_confirm,
         )
 
@@ -1811,7 +1811,7 @@ class VisibilityToggle(Static):
             self.screen.toggle_visibility()
 
 
-class PlaylistField(Vertical):
+class PlaylistField(Horizontal):
     """A text field in normal mode: focusable as a row, edited only after enter/i."""
     can_focus = True
 
@@ -1820,21 +1820,13 @@ class PlaylistField(Vertical):
             self.screen.start_editing(self)
 
 
-class PlaylistSaveRow(Static):
-    can_focus = True
-
-    def on_click(self) -> None:
-        if isinstance(self.screen, PlaylistSettingsModal):
-            self.screen.action_save()
-
-
 class PlaylistSettingsModal(SafeModalScreen[Optional[Dict[str, Any]]]):
     """Name, description, and visibility for one playlist. Returns the edited values.
 
     Vim-style: normal mode moves between rows with j/k; enter or i edits a text
     field, and esc or enter leaves the field again.
     """
-    ROW_IDS = ["plset-name-field", "plset-desc-field", "plset-visibility", "plset-save"]
+    ROW_IDS = ["plset-name-field", "plset-desc-field", "plset-visibility"]
 
     def __init__(self, playlist: Dict[str, Any], linked: bool, followed: bool):
         super().__init__()
@@ -1845,26 +1837,24 @@ class PlaylistSettingsModal(SafeModalScreen[Optional[Dict[str, Any]]]):
 
     def compose(self) -> ComposeResult:
         if self.followed:
-            where = "Someone else's playlist, so changes stay in Spoff."
+            where = "followed · edits stay in Spoff"
         elif self.linked:
-            where = "Changes are saved to Spotify too."
+            where = "synced with Spotify"
         else:
-            where = "Not on Spotify yet. These apply when it syncs."
+            where = "local · applied when it syncs"
         with Vertical(id="plset-dialog"):
             with Horizontal(id="plset-header"):
-                yield Static("PLAYLIST SETTINGS", id="plset-title")
-                yield Static("[dim]esc[/dim]", id="plset-close")
-            yield Static(f"[#888888]{escape(where)}[/]", id="plset-where")
+                yield Static("PLAYLIST", id="plset-title")
+                yield Static(f"[#5a5a5a]{where}[/]", id="plset-where")
             with PlaylistField(id="plset-name-field", classes="plset-field"):
-                yield Static("NAME", classes="settings-section")
+                yield Static("Name", classes="plset-label")
                 yield Input(value=str(self.playlist.get("name") or ""), max_length=100,
                             id="plset-name", classes="plset-input")
             with PlaylistField(id="plset-desc-field", classes="plset-field"):
-                yield Static("DESCRIPTION", classes="settings-section")
-                yield Input(value=str(self.playlist.get("description") or ""), placeholder="Optional",
+                yield Static("Description", classes="plset-label")
+                yield Input(value=str(self.playlist.get("description") or ""), placeholder="none",
                             max_length=300, id="plset-desc", classes="plset-input")
             yield VisibilityToggle(id="plset-visibility", classes="setting-toggle-item")
-            yield PlaylistSaveRow("Save changes", id="plset-save", classes="setting-toggle-item")
             yield Static("", id="plset-error")
             yield Static("[dim]j/k move · enter edit · space public/private · w save · esc cancel[/dim]",
                          id="plset-footer")
@@ -1877,10 +1867,8 @@ class PlaylistSettingsModal(SafeModalScreen[Optional[Dict[str, Any]]]):
 
     def _render_visibility(self) -> None:
         label = "public" if self.public else "private"
-        note = "anyone with the link can find it" if self.public else "only you can see it"
         self.query_one("#plset-visibility", Static).update(
-            SettingsModal._row("Visibility", label, on=self.public or None) + f"  [#5a5a5a]{note}[/]"
-        )
+            SettingsModal._row("Visibility", label, on=self.public or None))
 
     def toggle_visibility(self) -> None:
         self.public = not self.public
@@ -1926,7 +1914,7 @@ class PlaylistSettingsModal(SafeModalScreen[Optional[Dict[str, Any]]]):
             self.start_editing(focused)
         elif focused is not None and focused.id == "plset-visibility" and key in ("enter", "space", "h", "l", "left", "right"):
             self.toggle_visibility()
-        elif (focused is not None and focused.id == "plset-save" and key == "enter") or key == "w":
+        elif key == "w":
             self.action_save()
         elif key in ("escape", "q"):
             self.dismiss(None)
@@ -2551,124 +2539,135 @@ class HelpModal(SafeModalScreen[None]):
     ]
 
     def compose(self) -> ComposeResult:
+        kb = getattr(self.app, "keybindings", {})
+
+        def cap(key: str) -> str:
+            return f"[#e2e2e2 on #2a2a2a]\u2800{escape(key)}\u2800[/]"
+
+        def kcap(act_id: str, default: str) -> str:
+            return cap(format_key_display(kb.get(act_id, default)))
+
         def make_sec_table(rows: List[Tuple[str, str]]) -> Table:
             t = Table.grid(padding=(0, 2))
-            t.add_column(style="bold #ffffff", width=18, no_wrap=True)
-            t.add_column(style="#b0b0b0", no_wrap=True)
+            t.add_column(width=22, no_wrap=True)
+            t.add_column(style="#888888", no_wrap=True)
             for k, d in rows:
                 t.add_row(k, d)
             return t
 
-        kb = getattr(self.app, "keybindings", {})
-        k_s1 = format_key_display(kb.get("nav_search", "1"))
-        k_s2 = format_key_display(kb.get("nav_playlist", "2"))
-        k_s3 = format_key_display(kb.get("nav_offline", "3"))
-        k_s4 = format_key_display(kb.get("nav_lyrics", "4"))
-        k_s5 = format_key_display(kb.get("nav_liked", "5"))
-        k_sett = format_key_display(kb.get("open_settings", ","))
-        k_srch = format_key_display(kb.get("focus_search", "/"))
-        k_play = format_key_display(kb.get("toggle_play", "space"))
-        k_shuf = format_key_display(kb.get("toggle_shuffle", "s"))
-        k_rep = format_key_display(kb.get("toggle_repeat", "r"))
-        k_prev = format_key_display(kb.get("prev_track", "p"))
-        k_next = format_key_display(kb.get("next_track", "n"))
-        k_eng = format_key_display(kb.get("switch_engine", "ctrl+e"))
-        k_share = format_key_display(kb.get("share_track", "c"))
+        sep = "[#555555] / [/]"
+        comma = "[#555555], [/]"
+
+        k_s1 = kcap("nav_search", "1")
+        k_s2 = kcap("nav_playlist", "2")
+        k_s3 = kcap("nav_offline", "3")
+        k_s4 = kcap("nav_lyrics", "4")
+        k_s5 = kcap("nav_liked", "5")
+        k_sett = kcap("open_settings", ",")
+        k_srch = kcap("focus_search", "/")
+        k_play = kcap("toggle_play", "space")
+        k_shuf = kcap("toggle_shuffle", "s")
+        k_rep = kcap("toggle_repeat", "r")
+        k_prev = kcap("prev_track", "p")
+        k_next = kcap("next_track", "n")
+        k_eng = kcap("switch_engine", "ctrl+e")
+        k_share = kcap("share_track", "c")
 
         nav_rows = [
-            (f"{k_s1} / {k_s2} / {k_s3} / {k_s5}", "Search / Playlists / Offline / Liked"),
-            (f"{k_s4}", "Synchronized lyrics view"),
-            ("h / Right, Tab", "Switch Sidebar / Main pane"),
-            ("j / k, Arrows", "Navigate table rows"),
-            ("gg / Home", "Jump to top row"),
-            ("G / End", "Jump to bottom row"),
-            ("Ctrl+d / Ctrl+u", "Scroll page down / up"),
-            ("Tab", "Cycle Sidebar / Table"),
-            ("Enter", "Play track / Open playlist"),
-            ("k (at top row)", "Jump up into input box"),
-            ("Esc", "Unfocus / Back to playlist"),
+            (f"{k_s1} {k_s2} {k_s3} {k_s5}", "Search / Playlists / Offline / Liked"),
+            (k_s4, "Synchronized lyrics view"),
+            (f"{cap('h')}{sep}{cap('→')}{comma}{cap('Tab')}", "Switch sidebar / main pane"),
+            (f"{cap('j')}{sep}{cap('k')}{comma}{cap('Arrows')}", "Navigate table rows"),
+            (f"{cap('gg')}{sep}{cap('Home')}", "Jump to top row"),
+            (f"{cap('G')}{sep}{cap('End')}", "Jump to bottom row"),
+            (f"{cap('Ctrl+d')}{sep}{cap('Ctrl+u')}", "Scroll page down / up"),
+            (cap("Tab"), "Cycle sidebar / table"),
+            (cap("Enter"), "Play track / open playlist"),
+            (f"{cap('k')} [dim](top row)[/dim]", "Jump into input box"),
+            (cap("Esc"), "Unfocus / back to playlist"),
         ]
 
-        k_dl = format_key_display(kb.get("download_offline", "b"))
-        k_vis_cycle = format_key_display(kb.get("toggle_visualizer", "v"))
-        k_vis_toggle = format_key_display(kb.get("toggle_vis_on_off", "V"))
+        k_dl = kcap("download_offline", "b")
+        k_vis_cycle = kcap("toggle_visualizer", "v")
+        k_vis_toggle = kcap("toggle_vis_on_off", "V")
 
         playback_rows = [
-            (f"{k_play}, Fn+F8", "Play / Pause toggle"),
-            (f"{k_shuf}", "Toggle shuffle mode"),
-            (f"{k_rep}", "Cycle repeat (off / all / 1)"),
-            (f"{k_prev} / {k_next}, Fn+F7/F9", "Previous / Next track"),
-            (f"{k_dl}", "Download song / playlist offline"),
-            (f"{k_share}", "Copy track link to clipboard"),
-            ("Left / Right", "Seek -/+ 5 seconds"),
-            (f"{k_vis_cycle} / Click", "Cycle visualizer mode"),
-            (f"{k_vis_toggle}, Shift+V", "Toggle visualizer on / off"),
-            ("C", "Cycle visualizer color theme"),
-            ("e / E", "Parametric EQ / Toggle Bypass (A-B)"),
-            ("F1", "Mute / Unmute audio"),
-            ("F2 / F3", "Volume down / up 5%"),
+            (f"{k_play}{comma}{cap('F8')}", "Play / pause toggle"),
+            (k_shuf, "Toggle shuffle mode"),
+            (k_rep, "Cycle repeat (off / all / 1)"),
+            (f"{k_prev}{sep}{k_next}{comma}{cap('F7/F9')}", "Previous / next track"),
+            (k_dl, "Download song / playlist offline"),
+            (k_share, "Copy track link to clipboard"),
+            (f"{cap('Left')}{sep}{cap('Right')}", "Seek -/+ 5 seconds"),
+            (f"{k_vis_cycle}{comma}{cap('Click')}", "Cycle visualizer mode"),
+            (f"{k_vis_toggle}{comma}{cap('Shift+V')}", "Toggle visualizer on / off"),
+            (cap("C"), "Cycle visualizer color theme"),
+            (f"{cap('e')}{sep}{cap('E')}", "Parametric EQ / toggle bypass"),
+            (cap("F1"), "Mute / unmute audio"),
+            (f"{cap('F2')}{sep}{cap('F3')}", "Volume down / up 5%"),
         ]
 
         seek_rows = [
-            ("Left / Right", "Seek -/+ 5s on bar"),
-            ("h / l", "Seek -/+ 5s on bar"),
-            ("H / L", "Fast seek -/+ 15s on bar"),
-            ("0 – 9", "Jump to 0% – 90% of song"),
-            ("Enter / Click", "Jump to lyric timestamp"),
-            ("Esc / k", "Return to table"),
+            (f"{cap('Left')}{sep}{cap('Right')}", "Seek -/+ 5s on bar"),
+            (f"{cap('h')}{sep}{cap('l')}", "Seek -/+ 5s on bar"),
+            (f"{cap('H')}{sep}{cap('L')}", "Fast seek -/+ 15s on bar"),
+            (f"{cap('0')} – {cap('9')}", "Jump to 0% – 90% of song"),
+            (f"{cap('Enter')}{comma}{cap('Click')}", "Jump to lyric timestamp"),
+            (f"{cap('Esc')}{sep}{cap('k')}", "Return to table"),
         ]
 
-        k_like = format_key_display(kb.get("like_track", "l"))
-        k_spot = format_key_display(kb.get("open_spotify_auth", "L"))
-        k_add = format_key_display(kb.get("add_to_playlist", "a"))
-        k_share_pl = format_key_display(kb.get("share_playlist", "y"))
-        k_del = format_key_display(kb.get("delete_item", "d"))
-        k_del_pl = format_key_display(kb.get("delete_playlist", "D"))
-        k_ren_pl = format_key_display(kb.get("rename_playlist", "R"))
-        k_cln_pl = format_key_display(kb.get("clone_playlist", "Y"))
-        k_imp = format_key_display(kb.get("focus_import", "i"))
-        k_upd = format_key_display(kb.get("check_update", "u"))
-        k_quit = format_key_display(kb.get("quit_app", "q"))
+        k_like = kcap("like_track", "l")
+        k_spot = kcap("open_spotify_auth", "L")
+        k_add = kcap("add_to_playlist", "a")
+        k_share_pl = kcap("share_playlist", "y")
+        k_del = kcap("delete_item", "d")
+        k_del_pl = kcap("delete_playlist", "D")
+        k_ren_pl = kcap("rename_playlist", "R")
+        k_cln_pl = kcap("clone_playlist", "Y")
+        k_pl_sett = kcap("playlist_settings", "S")
+        k_imp = kcap("focus_import", "i")
+        k_upd = kcap("check_update", "u")
+        k_quit = kcap("quit_app", "q")
 
         playlist_rows = [
-            ("J / K, Shift+↑↓", "Reorder songs in playlist"),
-            (f"{k_like}", "Like / Unlike song (Spotify sync)"),
-            (f"{k_add}, +", "Add track to playlist"),
-            (f"{k_ren_pl}, F2", "Rename selected playlist"),
-            (f"{k_cln_pl}, Alt+c", "Clone / copy playlist"),
-            (format_key_display(kb.get("playlist_settings", "S")), "Playlist settings (name, public)"),
-            (f"{k_share_pl}", "Copy playlist link to clipboard"),
-            (f"{k_imp}", "New playlist / import link"),
-            (f"{k_spot}", "Spotify login & sync"),
-            (f"{k_sett}", "Settings & Rebind keys"),
-            (f"{k_srch}", "Focus search box"),
-            (f"{k_del}", "Remove track / playlist"),
-            (f"{k_del_pl}", "Delete whole playlist"),
-            (f"{k_eng}", "Switch Engine (YTM/Spotify)"),
-            (f"{k_upd}", "Check / pull updates"),
-            (f"{k_quit}", "Quit Spoff"),
+            (f"{cap('J')}{sep}{cap('K')}{comma}{cap('Shift+↑↓')}", "Reorder songs in playlist"),
+            (k_like, "Like / unlike song (Spotify sync)"),
+            (f"{k_add}{comma}{cap('+')}", "Add track to playlist"),
+            (f"{k_ren_pl}{comma}{cap('F2')}", "Rename selected playlist"),
+            (f"{k_cln_pl}{comma}{cap('Alt+c')}", "Clone / copy playlist"),
+            (k_pl_sett, "Playlist settings (name, public)"),
+            (k_share_pl, "Copy playlist link to clipboard"),
+            (k_imp, "New playlist / import link"),
+            (k_spot, "Spotify login & sync"),
+            (k_sett, "Settings & rebind keys"),
+            (k_srch, "Focus search box"),
+            (k_del, "Remove track / playlist"),
+            (k_del_pl, "Delete whole playlist"),
+            (k_eng, "Switch engine (YTM / Spotify)"),
+            (k_upd, "Check / pull updates"),
+            (k_quit, "Quit Spoff"),
         ]
 
         with Vertical(id="help-dialog"):
             with Horizontal(id="help-header-bar"):
-                yield Static("KEYBINDINGS & USAGE GUIDE", id="help-title")
-                h_close = "" if getattr(self.app, "advanced_mode", False) else "[dim]Esc / Enter / : to close[/dim]"
+                yield Static("Keybindings", id="help-title")
+                h_close = "" if getattr(self.app, "advanced_mode", False) else "[dim]esc[/dim]"
                 yield Static(h_close, id="help-close-hint")
 
             with Horizontal(id="help-body"):
                 with Vertical(classes="help-col"):
-                    yield Static("[bold #569f68]NAVIGATION & VIEWS[/]", classes="help-sec-title")
+                    yield Static("Navigation & views", classes="help-sec-title")
                     yield Static(make_sec_table(nav_rows), classes="help-sec-table")
-                    yield Static("[bold #569f68]PLAYBACK CONTROLS[/]", classes="help-sec-title")
+                    yield Static("Playback controls", classes="help-sec-title")
                     yield Static(make_sec_table(playback_rows), classes="help-sec-table")
 
                 with Vertical(id="help-col-sep"):
                     pass
 
                 with Vertical(classes="help-col"):
-                    yield Static("[bold #569f68]SEEK & TIMESTAMPS[/]", classes="help-sec-title")
+                    yield Static("Seek & timestamps", classes="help-sec-title")
                     yield Static(make_sec_table(seek_rows), classes="help-sec-table")
-                    yield Static("[bold #569f68]PLAYLISTS & LIBRARY[/]", classes="help-sec-title")
+                    yield Static("Playlists & library", classes="help-sec-title")
                     yield Static(make_sec_table(playlist_rows), classes="help-sec-table")
 
     def action_dismiss_modal(self) -> None:
@@ -4315,7 +4314,7 @@ class SpoffTUI(App):
     }
 
     #help-dialog {
-        width: 110;
+        width: 114;
         max-width: 96%;
         height: auto;
         background: #141414;
@@ -4363,7 +4362,7 @@ class SpoffTUI(App):
         margin-top: 1;
         margin-bottom: 0;
         text-style: bold;
-        color: #569f68;
+        color: #4f8a5e;
     }
 
     .help-sec-table {
@@ -4521,15 +4520,27 @@ class SpoffTUI(App):
     #spotify-dialog {
         width: 80;
         height: auto;
-        background: #181818;
+        background: #141414;
         border: solid #2a2a2a;
         padding: 1 2;
     }
 
+    #spotify-header-bar {
+        height: 2;
+        width: 100%;
+        border-bottom: solid #222222;
+        margin-bottom: 1;
+    }
+
     #spotify-title {
+        width: 1fr;
         text-style: bold;
         color: #ffffff;
-        margin-bottom: 1;
+    }
+
+    #spotify-close-hint {
+        width: auto;
+        color: #555555;
     }
 
     #spotify-user-info {
@@ -4538,18 +4549,25 @@ class SpoffTUI(App):
     }
 
     #spotify-desc {
-        color: #cccccc;
+        color: #888888;
         margin-bottom: 1;
     }
 
     #spotify-status {
-        color: #c4a768;
+        color: #6cc483;
         margin-bottom: 1;
     }
 
     #spotify-instruction {
         display: none;
         color: #888888;
+        margin-top: 1;
+        margin-bottom: 0;
+    }
+
+    #spotify-hint {
+        display: none;
+        color: #555555;
         margin-top: 1;
         margin-bottom: 0;
     }
@@ -4574,33 +4592,33 @@ class SpoffTUI(App):
 
     #spotify-actions > Button:hover {
         background: #2d2d2d;
-        border: tall #569f68;
+        border: tall #4f8a5e;
         color: #ffffff;
     }
 
     #spotify-actions > Button:focus {
         background: #333333;
-        border: tall #569f68;
+        border: tall #4f8a5e;
         color: #ffffff;
         text-style: bold;
     }
 
     #spotify-actions > Button.-primary {
         background: #18271c;
-        color: #569f68;
-        border: tall #36603e;
+        color: #6cc483;
+        border: tall #2d4f36;
     }
 
     #spotify-actions > Button.-primary:hover {
         background: #203425;
         color: #72b984;
-        border: tall #569f68;
+        border: tall #4f8a5e;
     }
 
     #spotify-actions > Button.-primary:focus {
-        background: #569f68;
+        background: #4f8a5e;
         color: #131313;
-        border: tall #72b984;
+        border: tall #6cc483;
         text-style: bold;
     }
 
@@ -4896,10 +4914,6 @@ class SpoffTUI(App):
         background: rgba(0, 0, 0, 0.75);
     }
 
-    #plset-where {
-        margin-bottom: 1;
-    }
-
     #plset-dialog {
         width: 74;
         max-width: 96%;
@@ -4921,45 +4935,57 @@ class SpoffTUI(App):
         color: #ffffff;
     }
 
-    #plset-close {
+    #plset-where {
         width: auto;
     }
 
-    .plset-input {
-        background: #101010;
-        border: tall #262626;
-        color: #e2e2e2;
-        margin-bottom: 0;
-    }
-
-    .plset-input:focus {
-        border: tall #569f68;
-    }
-
+    /* Rows match the Settings screen: label left, value right, green bar on focus. */
     .plset-field {
-        height: auto;
-        padding-left: 1;
+        height: 1;
+        padding: 0 1;
         border-left: outer transparent;
     }
 
-    /* Same focus bar as the settings rows; the input's own border shows edit mode. */
-    .plset-field:focus {
+    .plset-field:focus, .plset-field:focus-within {
+        background: #1e1e1e;
         border-left: outer #569f68;
-        background: #1a1a1a;
     }
 
-    #plset-save {
-        margin-top: 1;
-        color: #6cc483;
+    .plset-label {
+        width: 24;
+        color: #9a9a9a;
+    }
+
+    .plset-field:focus > .plset-label, .plset-field:focus-within > .plset-label {
+        color: #ffffff;
+    }
+
+    /* The text box only looks like a box while editing. */
+    .plset-input {
+        width: 1fr;
+        height: 1;
+        border: none;
+        padding: 0;
+        background: transparent;
+        color: #e2e2e2;
+    }
+
+    .plset-input:focus {
+        background: #2a2a2a;
+        border: none;
+    }
+
+    .plset-input > .input--placeholder {
+        color: #5f5f5f;
     }
 
     #plset-error {
         height: auto;
-        margin-top: 1;
     }
 
     #plset-footer {
         height: auto;
+        margin-top: 1;
         color: #555555;
     }
 
