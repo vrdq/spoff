@@ -96,6 +96,73 @@ def _same_recording_other_uploader(ytm: Any, track_title: str, duration: float) 
     return found
 
 
+def _ytmusic_match_queries(track_title: str, clean_artist: str, duration: float) -> list:
+    """Verified YouTube URLs for a recording, found through YouTube Music search.
+
+    Shared by playback and the search-result check so both agree on what is
+    playable. Returns (url, True) tuples, best first.
+    """
+    queries: list = []
+    try:
+        try:
+            from .ytmusic import get_ytmusic_client
+        except ImportError:
+            from ytmusic import get_ytmusic_client
+        ytm = get_ytmusic_client()
+        if not ytm:
+            return queries
+        performers = dict.fromkeys((clean_artist, clean_artist.split(",")[0].strip()))
+        for flt in ("songs", "videos"):
+            for performer in performers:
+                for match in ytm.search(f"{performer} {track_title}", filter=flt, limit=10) or []:
+                    if match.get("videoId") and _matches_recording(match, track_title, clean_artist, duration):
+                        query = (f"https://www.youtube.com/watch?v={match['videoId']}", True)
+                        if query not in queries:
+                            queries.append(query)
+                if queries:
+                    return queries
+        if duration:
+            queries.extend(_same_recording_other_uploader(ytm, track_title, duration))
+    except Exception:
+        logger.debug("YTMusic song match lookup failed", exc_info=True)
+    return queries
+
+
+_playable_cache: Dict[str, bool] = {}
+_playable_cache_lock = threading.Lock()
+
+
+def is_on_youtube(track_title: str, artist: str, expected_duration_ms: Any = None) -> bool:
+    """Cheap check (no audio download) that a recording can be matched on YouTube."""
+    title = str(track_title or "").strip()
+    clean_artist = str(artist or "").strip()
+    if clean_artist.lower() in ("unknown artist", "unknown", "none"):
+        clean_artist = ""
+    if not title or not clean_artist:
+        return False
+    duration = _seconds(expected_duration_ms) / 1000
+    key = f"{title.lower()}::{clean_artist.lower()}::{int(duration)}"
+    with _playable_cache_lock:
+        if key in _playable_cache:
+            return _playable_cache[key]
+    found = bool(_ytmusic_match_queries(title, clean_artist, duration))
+    if not found:
+        # Same last resort as playback: a plain YouTube search, checked strictly.
+        primary = clean_artist.split(",")[0].strip()
+        opts = get_base_ydl_opts({"extract_flat": True})
+        try:
+            with yt_dlp.YoutubeDL(cast(Any, opts)) as ydl:
+                res = ydl.extract_info(f"ytsearch5:{primary} - {title} official audio", download=False) or {}
+            found = any(isinstance(e, dict) and _matches_recording(e, title, clean_artist, duration)
+                        for e in res.get("entries") or [])
+        except Exception:
+            logger.debug("YouTube search check failed for %s", title, exc_info=True)
+            return True  # a network error is not proof it's missing; don't hide it
+    with _playable_cache_lock:
+        _playable_cache[key] = found
+    return found
+
+
 def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optional[str] = None,
                               expected_duration_ms: Any = None) -> Optional[Dict[str, Any]]:
     track_title = str(track_title or "").strip()
@@ -139,36 +206,7 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
         if not track_title or not clean_artist:
             logger.warning("Insufficient metadata to match recording: %s / %s", track_title, artist)
             return None
-        try:
-            try:
-                from .ytmusic import get_ytmusic_client
-            except ImportError:
-                from ytmusic import get_ytmusic_client
-            ytm = get_ytmusic_client()
-            if ytm:
-                for performer in dict.fromkeys((clean_artist, clean_artist.split(",")[0].strip())):
-                    matches = ytm.search(f"{performer} {track_title}", filter="songs", limit=10)
-                    for match in matches or []:
-                        if match.get("videoId") and _matches_recording(match, track_title, clean_artist, duration):
-                            query = (f"https://www.youtube.com/watch?v={match['videoId']}", True)
-                            if query not in queries:
-                                queries.append(query)
-                    if queries:
-                        break
-                if not queries:
-                    for performer in dict.fromkeys((clean_artist, clean_artist.split(",")[0].strip())):
-                        matches = ytm.search(f"{performer} {track_title}", filter="videos", limit=10)
-                        for match in matches or []:
-                            if match.get("videoId") and _matches_recording(match, track_title, clean_artist, duration):
-                                query = (f"https://www.youtube.com/watch?v={match['videoId']}", True)
-                                if query not in queries:
-                                    queries.append(query)
-                        if queries:
-                            break
-                if not queries and duration:
-                    queries.extend(_same_recording_other_uploader(ytm, track_title, duration))
-        except Exception:
-            logger.debug("YTMusic song match lookup failed", exc_info=True)
+        queries.extend(_ytmusic_match_queries(track_title, clean_artist, duration))
         primary_artist = clean_artist.split(",")[0].strip()
         queries.append((f"ytsearch5:{primary_artist} - {track_title} official audio", False))
 

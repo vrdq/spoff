@@ -54,7 +54,7 @@ class SafeModalScreen(ModalScreen[_ScreenResultType]):
             self.post_message(events.Key(key="enter", character="\r"))
 
 try:
-    from .spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url, fetch_spotify_preview_url
+    from .spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url
     from .ytmusic import (
         fetch_ytmusic_playlist, fetch_ytmusic_album, fetch_ytmusic_track,
         parse_ytmusic_url
@@ -81,9 +81,9 @@ try:
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
         record_deleted_spotify_playlist_id, liked_index, storage_transaction,
-        update_playlist_details, _spotify_track_id_of
+        update_playlist_details
     )
-    from .streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
+    from .streamer import is_on_youtube, search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from .search import live_search_tracks, resolve_direct_track_url
     from .player import MPVController
     from .eq import (
@@ -108,7 +108,7 @@ try:
     from .updater import check_for_updates, perform_update, run_cli_update, is_git_checkout
     from .art import resolve_track_artwork, get_cached_artwork
 except ImportError:
-    from spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url, fetch_spotify_preview_url
+    from spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url
     from ytmusic import (
         fetch_ytmusic_playlist, fetch_ytmusic_album, fetch_ytmusic_track,
         parse_ytmusic_url
@@ -135,9 +135,9 @@ except ImportError:
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
         record_deleted_spotify_playlist_id, liked_index, storage_transaction,
-        update_playlist_details, _spotify_track_id_of
+        update_playlist_details
     )
-    from streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
+    from streamer import is_on_youtube, search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from search import live_search_tracks, resolve_direct_track_url
     from player import MPVController
     from eq import (
@@ -9425,6 +9425,59 @@ class SpoffTUI(App):
                 self.notify_user(fallback_msg or f"No tracks found on {engine_name} for '{query}'. Try different keywords.", force=True)
 
         self.call_from_thread(_update_ui)
+        # Own thread, so "Searching…" clears as soon as the results are shown.
+        threading.Thread(target=self._hide_unplayable_results, args=(req_id, results), daemon=True).start()
+
+    def _hide_unplayable_results(self, req_id: int, results: List[Dict[str, Any]]) -> None:
+        """Checks Spotify results against YouTube and removes the ones with no audio.
+
+        YouTube results are playable by definition and are not checked. Runs on
+        the search worker thread; each removal is applied on the UI thread.
+        """
+        to_check = [t for t in results if not is_client_side_track(t)]
+        if not to_check:
+            return
+        hidden = [0]
+
+        def check(track: Dict[str, Any]) -> None:
+            if req_id != getattr(self, "_search_request_id", None) or getattr(self, "_closing", False):
+                return
+            if not is_on_youtube(track.get("title"), track.get("artist"), track.get("duration_ms")):
+                self.call_from_thread(self._drop_search_result, req_id, track, hidden)
+
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix="spoff-check") as pool:
+            list(pool.map(check, to_check))
+
+        def _report():
+            if req_id != getattr(self, "_search_request_id", None) or not hidden[0]:
+                return
+            n = hidden[0]
+            if not self.search_results:
+                self.notify_user("None of these songs are on YouTube, so none can play. Try YouTube Music search (Ctrl+E).", force=True)
+            else:
+                self.notify_user(f"Hid {n} {'song' if n == 1 else 'songs'} that {'isn’t' if n == 1 else 'aren’t'} on YouTube.", force=True)
+        self.call_from_thread(_report)
+
+    def _drop_search_result(self, req_id: int, track: Dict[str, Any], hidden: List[int]) -> None:
+        if req_id != getattr(self, "_search_request_id", None):
+            return
+        results = self.search_results
+        idx = next((i for i, t in enumerate(results) if t is track), None)
+        if idx is None:
+            return
+        # Keep the cursor on the same song while rows above it disappear.
+        cursor = None
+        table = self.query_one("#track-table", DataTable)
+        if self.active_tab == "search" and table.cursor_row is not None and 0 <= table.cursor_row < len(results):
+            cursor = results[table.cursor_row]
+        results.pop(idx)
+        hidden[0] += 1
+        if self.active_tab == "search":
+            if cursor is track or cursor is None:
+                row = min(idx, len(results) - 1) if results else None
+            else:
+                row = next((i for i, t in enumerate(results) if t is cursor), None)
+            self.render_tracks(results, select_row=row)
 
 
     @work(thread=True)
@@ -9786,17 +9839,7 @@ class SpoffTUI(App):
             return
 
         if not res or not res.get("stream_url"):
-            # Not on YouTube at all (e.g. a Spotify-only upload). Spotify still
-            # serves a public 30-second preview; that beats not playing.
-            sp_id = _spotify_track_id_of(track)
-            preview = fetch_spotify_preview_url(sp_id) if sp_id else None
-            if not is_current():
-                return
-            if preview:
-                self.call_from_thread(self._commit_playback, req_id, preview, track)
-                self.notify_user(f"'{title}' isn't on YouTube, so this is Spotify's 30-second preview.", force=True)
-                return
-            self.notify_user(f"'{title}' isn't on YouTube, and Spotify has no preview for it.", force=True)
+            self.notify_user(f"'{title}' isn't on YouTube, so it can't be played.", force=True)
             self.call_from_thread(self._playback_failed, req_id, track)
             return
 
