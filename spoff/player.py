@@ -425,6 +425,7 @@ class MPVController:
 
     def stop(self):
         listener_to_join = None
+        playback_to_join = None
         with self._lock:
             if self._listener_stop_event is not None:
                 self._listener_stop_event.set()

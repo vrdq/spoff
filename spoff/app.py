@@ -62,7 +62,7 @@ try:
         load_saved_playlists, add_saved_playlist, remove_saved_playlist,
         rename_saved_playlist, clone_saved_playlist, move_saved_playlist, merge_track_artwork,
         create_local_playlist, add_track_to_playlist,
-        update_playlist_tracks, get_cached_track_path, load_offline_index, save_offline_index, register_cached_track, stable_track_id,
+        get_cached_track_path, load_offline_index, save_offline_index, register_cached_track, stable_track_id,
         delete_cached_track, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
@@ -75,13 +75,12 @@ try:
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
         load_eq_settings, save_eq_settings, remove_deleted_spotify_playlist_id,
         load_liked_songs, save_liked_songs, add_track_to_liked_songs, remove_track_from_liked_songs,
-        is_track_liked, is_track_in_playlist, get_track_index_in_playlist, get_saved_last_played, save_last_played,
+        is_track_liked, get_track_index_in_playlist, get_saved_last_played, save_last_played,
         get_saved_last_tab, get_saved_last_playlist_id, save_last_tab,
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
         record_deleted_spotify_playlist_id, liked_index, storage_transaction
     )
-    from .matching import _tracks_match
     from .streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from .search import live_search_tracks, resolve_direct_track_url
     from .player import MPVController
@@ -96,7 +95,7 @@ try:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        reorder_spotify_playlist_track, sync_playlist_tracks_to_spotify, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
+        reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track, extract_spotify_playlist_id,
         fetch_liked_songs, merge_spotify_and_client_tracks
     )
@@ -115,7 +114,7 @@ except ImportError:
         load_saved_playlists, add_saved_playlist, remove_saved_playlist,
         rename_saved_playlist, clone_saved_playlist, move_saved_playlist, merge_track_artwork,
         create_local_playlist, add_track_to_playlist,
-        update_playlist_tracks, get_cached_track_path, load_offline_index, save_offline_index, register_cached_track, stable_track_id,
+        get_cached_track_path, load_offline_index, save_offline_index, register_cached_track, stable_track_id,
         delete_cached_track, is_first_launch, mark_first_launch_done,
         get_saved_volume, save_volume, get_saved_sidebar_width, save_sidebar_width,
         get_saved_advanced_mode, save_advanced_mode, get_saved_search_engine, save_search_engine,
@@ -128,13 +127,12 @@ except ImportError:
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
         load_eq_settings, save_eq_settings, remove_deleted_spotify_playlist_id,
         load_liked_songs, save_liked_songs, add_track_to_liked_songs, remove_track_from_liked_songs,
-        is_track_liked, is_track_in_playlist, get_track_index_in_playlist, get_saved_last_played, save_last_played,
+        is_track_liked, get_track_index_in_playlist, get_saved_last_played, save_last_played,
         get_saved_last_tab, get_saved_last_playlist_id, save_last_tab,
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
         record_deleted_spotify_playlist_id, liked_index, storage_transaction
     )
-    from matching import _tracks_match
     from streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from search import live_search_tracks, resolve_direct_track_url
     from player import MPVController
@@ -149,7 +147,7 @@ except ImportError:
         generate_pkce_pair, build_auth_url, exchange_code_for_tokens,
         fetch_current_user_profile, sync_spotify_library, OAuthCallbackServer,
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
-        reorder_spotify_playlist_track, sync_playlist_tracks_to_spotify, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
+        reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track, extract_spotify_playlist_id,
         fetch_liked_songs, merge_spotify_and_client_tracks
     )
@@ -160,6 +158,8 @@ except ImportError:
     from art import resolve_track_artwork, get_cached_artwork
 
 logger = logging.getLogger("spoff")
+
+__all__ = ["SpoffTUI", "remove_track_from_liked_songs"]
 
 def format_time(seconds: Any) -> str:
     if seconds is None:
@@ -6847,7 +6847,7 @@ class SpoffTUI(App):
         is_queue_mirroring = (
             bool(self.queue) and len(self.queue) == len(self.current_liked_tracks)
             and all(liked_index([queued], visible) is not None
-                    for queued, visible in zip(self.queue, self.current_liked_tracks))
+                    for queued, visible in zip(self.queue, self.current_liked_tracks, strict=False))
         )
         moved = move_liked_track(track, delta, index=idx)
         self.current_liked_tracks = load_liked_songs()
@@ -7894,11 +7894,12 @@ class SpoffTUI(App):
                 dup_idx = get_track_index_in_playlist(target_pl, track) if target_pl else None
 
                 def _do_add(allow_dup: bool = False):
+                    nonlocal pl_name
                     added = add_track_to_playlist(val, track, allow_duplicate=allow_dup)
                     self.playlists = load_saved_playlists()
                     for p in self.playlists:
                         if p.get("id") == val:
-                            p_name = p.get("name", pl_name)
+                            pl_name = p.get("name", pl_name)
                             self.current_playlist_id = val
                             self.current_playlist_tracks = list(p.get("tracks", []))
                             if self.active_tab == "playlist":
@@ -8702,7 +8703,6 @@ class SpoffTUI(App):
 
                 t = liked_tracks[row_idx]
                 t_title = t.get("title", "Track")
-                t_id = t.get("id")
 
                 def handle_remove_liked_confirm(confirmed: Optional[bool]) -> None:
                     if not confirmed:
@@ -9301,6 +9301,17 @@ class SpoffTUI(App):
         self._pending_track = None
         invalidate_stream_cache(track.get("title", ""), track.get("artist", ""), playback_direct_url(track))
         self._failed_indices.add(self.current_index)
+        if not self.queue:
+            self._play_request_id += 1
+            self.player.stop()
+            self.current_index = -1
+            self._pending_track = None
+            if self.mpris:
+                self.mpris.update_status(False, False)
+                self.mpris.update_track(None)
+            self.update_player_hud()
+            self.notify_user("No playable tracks remain in this queue.", force=True)
+            return
         for offset in range(1, len(self.queue) + 1):
             candidate = (self.current_index + offset) % len(self.queue)
             if candidate not in self._failed_indices:

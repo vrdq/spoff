@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .storage import DATA_DIR, _atomic_json_dump
-from .matching import _matches_recording, _seconds, _duration_seconds
+from .matching import _matches_recording, _duration_seconds
 
 logger = logging.getLogger("spoff.lyrics")
 

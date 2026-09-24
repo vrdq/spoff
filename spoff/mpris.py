@@ -351,8 +351,8 @@ class MPRISService:
         hex_id = raw_id.encode("utf-8").hex()
         track_obj_path = f"/org/mpris/MediaPlayer2/track/t_{hex_id}"
 
-        title = track.get("title", "Unknown Title")
-        artist = track.get("artist", "Unknown Artist")
+        title = str(track.get("title") or "Unknown Title")
+        artist = str(track.get("artist") or "Unknown Artist")
         artists_list = [a.strip() for a in artist.split(",") if a.strip()] or [artist]
         dur_us = int(duration_sec * 1_000_000)
         if dur_us <= 0:

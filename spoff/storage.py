@@ -966,20 +966,23 @@ def is_track_in_playlist(playlist: Dict[str, Any], track: Dict[str, Any]) -> boo
 def add_track_to_playlist(playlist_id: str, track: Dict[str, Any], allow_duplicate: bool = False) -> bool:
     if not playlist_id or not isinstance(track, dict):
         return False
+    norm_track = normalize_track(track)
+    if not norm_track:
+        return False
     existing = load_saved_playlists()
     for p in existing:
         if p.get("id") == playlist_id:
             if "tracks" not in p or not isinstance(p["tracks"], list):
                 p["tracks"] = []
-            if not allow_duplicate and is_track_in_playlist(p, track):
+            if not allow_duplicate and is_track_in_playlist(p, norm_track):
                 return False
             for t in p["tracks"]:
                 if not allow_duplicate:
-                    if t.get("id") and track.get("id") and t.get("id") == track.get("id"):
+                    if t.get("id") and norm_track.get("id") and t.get("id") == norm_track.get("id"):
                         return False
-                    if t.get("title") and track.get("title") and t.get("title") == track.get("title") and t.get("artist") == track.get("artist"):
+                    if t.get("title") and norm_track.get("title") and t.get("title") == norm_track.get("title") and t.get("artist") == norm_track.get("artist"):
                         return False
-            p["tracks"].append(track)
+            p["tracks"].append(norm_track)
             save_saved_playlists(existing)
             return True
     return False

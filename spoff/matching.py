@@ -2,7 +2,7 @@
 import math
 import re
 import unicodedata
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List
 
 
 def _seconds(value: Any) -> float:
