@@ -195,3 +195,19 @@ def fetch_spotify_track(track_id_or_url: str) -> Optional[Dict[str, Any]]:
         "source": "spotify"
     }
 
+
+
+def fetch_spotify_preview_url(track_id: str) -> Optional[str]:
+    """Spotify's public 30-second preview clip for a track, if it has one."""
+    if not re.fullmatch(r"[A-Za-z0-9]{22}", str(track_id or "")):
+        return None
+    req = urllib.request.Request(f"https://open.spotify.com/embed/track/{track_id}", headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            html = resp.read().decode("utf-8")
+        match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html)
+        entity = json.loads(match.group(1))["props"]["pageProps"]["state"]["data"]["entity"] if match else {}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    url = (entity.get("audioPreview") or {}).get("url")
+    return url if isinstance(url, str) and url.startswith("https://") else None

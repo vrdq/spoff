@@ -54,7 +54,7 @@ class SafeModalScreen(ModalScreen[_ScreenResultType]):
             self.post_message(events.Key(key="enter", character="\r"))
 
 try:
-    from .spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url
+    from .spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url, fetch_spotify_preview_url
     from .ytmusic import (
         fetch_ytmusic_playlist, fetch_ytmusic_album, fetch_ytmusic_track,
         parse_ytmusic_url
@@ -81,7 +81,7 @@ try:
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
         record_deleted_spotify_playlist_id, liked_index, storage_transaction,
-        update_playlist_details
+        update_playlist_details, _spotify_track_id_of
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from .search import live_search_tracks, resolve_direct_track_url
@@ -108,7 +108,7 @@ try:
     from .updater import check_for_updates, perform_update, run_cli_update, is_git_checkout
     from .art import resolve_track_artwork, get_cached_artwork
 except ImportError:
-    from spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url
+    from spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url, fetch_spotify_preview_url
     from ytmusic import (
         fetch_ytmusic_playlist, fetch_ytmusic_album, fetch_ytmusic_track,
         parse_ytmusic_url
@@ -135,7 +135,7 @@ except ImportError:
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
         record_deleted_spotify_playlist_id, liked_index, storage_transaction,
-        update_playlist_details
+        update_playlist_details, _spotify_track_id_of
     )
     from streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from search import live_search_tracks, resolve_direct_track_url
@@ -9786,7 +9786,17 @@ class SpoffTUI(App):
             return
 
         if not res or not res.get("stream_url"):
-            self.notify_user(f"Could not find a playable matching recording for '{title}'.", force=True)
+            # Not on YouTube at all (e.g. a Spotify-only upload). Spotify still
+            # serves a public 30-second preview; that beats not playing.
+            sp_id = _spotify_track_id_of(track)
+            preview = fetch_spotify_preview_url(sp_id) if sp_id else None
+            if not is_current():
+                return
+            if preview:
+                self.call_from_thread(self._commit_playback, req_id, preview, track)
+                self.notify_user(f"'{title}' isn't on YouTube, so this is Spotify's 30-second preview.", force=True)
+                return
+            self.notify_user(f"'{title}' isn't on YouTube, and Spotify has no preview for it.", force=True)
             self.call_from_thread(self._playback_failed, req_id, track)
             return
 
