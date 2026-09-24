@@ -39,76 +39,54 @@ class TestSpotifyLikedSongsSync(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_resolve_spotify_track_info_cached_id(self):
-        """If track already has spotify_id or spotify:track URI, resolve immediately without searching."""
-        track = {
-            "id": "dQw4w9WgXcQ",
-            "title": "Never Gonna Give You Up",
-            "artist": "Rick Astley",
-            "source": "ytmusic",
-            "spotify_id": "4cOdK2wGLETKBW3PvgPWqT",
-        }
-        res = auth.resolve_spotify_track_info(track)
-        self.assertIsNotNone(res)
-        self.assertEqual(res[0], "4cOdK2wGLETKBW3PvgPWqT")
-        self.assertEqual(res[1], "spotify:track:4cOdK2wGLETKBW3PvgPWqT")
-
+        """Spotify tracks with a known ID resolve immediately; YouTube Music tracks never resolve."""
+        sp_track = {"id": "local_x", "title": "Song", "artist": "A", "source": "spotify",
+                    "spotify_id": "4cOdK2wGLETKBW3PvgPWqT"}
+        self.assertEqual(auth.resolve_spotify_track_info(sp_track),
+                         ("4cOdK2wGLETKBW3PvgPWqT", "spotify:track:4cOdK2wGLETKBW3PvgPWqT"))
+        yt_track = dict(sp_track, id="dQw4w9WgXcQ", source="ytmusic")
+        self.assertIsNone(auth.resolve_spotify_track_info(yt_track))
     def test_resolve_spotify_track_info_via_search(self):
-        """If track has no spotify_id, search Spotify and populate spotify_id and spotify_uri."""
+        """YouTube Music tracks are never matched against Spotify search."""
         track = {
             "id": "dQw4w9WgXcQ",
             "title": "As the World Caves In",
             "artist": "Matt Maltese",
             "source": "ytmusic",
         }
-        found_mock = {
-            "id": "0v1XpBHm95PZTGmsyQe69r",
-            "uri": "spotify:track:0v1XpBHm95PZTGmsyQe69r",
-            "title": "As the World Caves In",
-            "artist": "Matt Maltese",
-        }
-        with patch.object(auth, "search_spotify_track", return_value=found_mock) as mock_search:
-            res = auth.resolve_spotify_track_info(track, token="valid_token")
-            mock_search.assert_called_once_with("As the World Caves In", "Matt Maltese", token="valid_token")
-            self.assertEqual(res, ("0v1XpBHm95PZTGmsyQe69r", "spotify:track:0v1XpBHm95PZTGmsyQe69r"))
-            self.assertEqual(track["spotify_id"], "0v1XpBHm95PZTGmsyQe69r")
-            self.assertEqual(track["spotify_uri"], "spotify:track:0v1XpBHm95PZTGmsyQe69r")
-
+        with patch.object(auth, "search_spotify_track") as mock_search:
+            self.assertIsNone(auth.resolve_spotify_track_info(track, token="valid_token"))
+            mock_search.assert_not_called()
+        self.assertNotIn("spotify_id", track)
     def test_add_client_side_track_to_spotify_liked_songs(self):
-        """Client-side/YouTube tracks can be resolved and synced to Spotify Liked Songs."""
+        """Liking a YouTube Music track stays local and never calls the Spotify API."""
         yt_track = {
             "id": "dQw4w9WgXcQ",
             "title": "As the World Caves In",
             "artist": "Matt Maltese",
             "source": "ytmusic",
         }
-        with patch.object(auth, "get_valid_token", return_value="valid_token"), \
-             patch.object(auth, "has_modify_scopes", return_value=True), \
-             patch.object(auth, "resolve_spotify_track_info", return_value=("0v1XpBHm95PZTGmsyQe69r", "spotify:track:0v1XpBHm95PZTGmsyQe69r")), \
-             patch.object(auth, "spotify_api_request", return_value=(True, {}, "")) as mock_api:
-            ok, msg = auth.add_track_to_spotify_account("liked", "Liked Songs", yt_track, token="valid_token")
-            self.assertTrue(ok)
-            self.assertIn("Synced to Spotify Liked Songs", msg)
-            mock_api.assert_called_once_with("/me/tracks?ids=0v1XpBHm95PZTGmsyQe69r", method="PUT", token="valid_token")
-
+        with patch.object(auth, "has_modify_scopes", return_value=True), \
+             patch.object(auth, "search_spotify_track") as mock_search, \
+             patch.object(auth, "spotify_api_request") as mock_api:
+            ok, _ = auth.add_track_to_spotify_account("liked", "Liked Songs", yt_track, token="valid_token")
+            self.assertFalse(ok)
+            mock_search.assert_not_called()
+            mock_api.assert_not_called()
     def test_remove_client_side_track_from_spotify_liked_songs(self):
-        """Client-side/YouTube tracks can be resolved and removed from Spotify Liked Songs."""
+        """Unliking a YouTube Music track never removes anything from Spotify."""
         yt_track = {
             "id": "dQw4w9WgXcQ",
             "title": "As the World Caves In",
             "artist": "Matt Maltese",
             "source": "ytmusic",
             "spotify_id": "0v1XpBHm95PZTGmsyQe69r",
-            "duration_ms": 0,
         }
-        with patch.object(auth, "get_valid_token", return_value="valid_token"), \
-             patch.object(auth, "has_modify_scopes", return_value=True), \
-             patch.object(auth, "resolve_spotify_track_info", return_value=("0v1XpBHm95PZTGmsyQe69r", "spotify:track:0v1XpBHm95PZTGmsyQe69r")), \
-             patch.object(auth, "spotify_api_request", return_value=(True, {}, "")) as mock_api:
-            ok, msg = auth.remove_track_from_spotify_account("liked", "Liked Songs", yt_track, token="valid_token")
-            self.assertTrue(ok)
-            self.assertIn("Removed from Spotify Liked Songs", msg)
-            mock_api.assert_called_once_with("/me/tracks?ids=0v1XpBHm95PZTGmsyQe69r", method="DELETE", token="valid_token")
-
+        with patch.object(auth, "has_modify_scopes", return_value=True), \
+             patch.object(auth, "spotify_api_request") as mock_api:
+            ok, _ = auth.remove_track_from_spotify_account("liked", "Liked Songs", yt_track, token="valid_token")
+            self.assertFalse(ok)
+            mock_api.assert_not_called()
     def test_merge_spotify_and_client_tracks_deduplicates_counterpart(self):
         """When merging remote Spotify liked tracks with existing local client tracks, counterpart tracks are not duplicated."""
         existing_client = [

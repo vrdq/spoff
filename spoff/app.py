@@ -97,7 +97,7 @@ try:
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
         reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track, extract_spotify_playlist_id,
-        fetch_liked_songs, merge_spotify_and_client_tracks
+        fetch_liked_songs, merge_spotify_and_client_tracks, sync_playlist_tracks_to_spotify
     )
     from .lyrics import fetch_lyrics, get_active_lyric_index
     from .mpris import MPRISService
@@ -149,7 +149,7 @@ except ImportError:
         SPOTIFY_PORT, add_track_to_spotify_account, remove_track_from_spotify_account,
         reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track, extract_spotify_playlist_id,
-        fetch_liked_songs, merge_spotify_and_client_tracks
+        fetch_liked_songs, merge_spotify_and_client_tracks, sync_playlist_tracks_to_spotify
     )
     from lyrics import fetch_lyrics, get_active_lyric_index
     from mpris import MPRISService
@@ -9046,11 +9046,18 @@ class SpoffTUI(App):
                 if u.startswith("http://") or u.startswith("https://") or "spotify.com" in u or "youtube.com" in u or "youtu.be" in u or u.startswith("PL") or u.startswith("MPREb_"):
                     self.import_playlist_url(u)
                 else:
-                    create_local_playlist(u)
+                    new_pl = create_local_playlist(u)
                     self.playlists = load_saved_playlists()
                     self.refresh_side_table()
                     self.load_playlist_by_index(0, focus_tracks=True)
                     self.notify_user(f"Created playlist '{u}'." if self.advanced_mode else f"Created playlist '{u}'. Press 'a' on any song to add it.", force=True)
+                    if has_modify_scopes():
+                        def _bg_create_pl():
+                            try:
+                                sync_playlist_tracks_to_spotify(new_pl["id"])
+                            except Exception as e:
+                                logger.debug(f"Failed to sync newly created playlist '{u}' to Spotify: {e}")
+                        self._submit_spotify_job(_bg_create_pl)
 
     def do_search(self, query: str):
         if self.active_tab != "search":

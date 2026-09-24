@@ -831,17 +831,19 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
         deleted_ids = get_deleted_spotify_playlist_ids()
         for p in current_playlists:
             p_id = p.get("id")
-            sp_id = p.get("spotify_id") or (p_id if p_id and len(p_id) == 22 and not p_id.startswith("local_") else None)
-            if p_id and p_id not in deleted_ids and (not sp_id or sp_id not in deleted_ids):
-                remote_match = any(
-                    r_pl.get("id") == sp_id or r_pl.get("id") == p_id
-                    for r_pl, _ in fetched_remote
-                )
-                if not remote_match:
-                    try:
-                        sync_playlist_tracks_to_spotify(p_id, tracks=p.get("tracks", []), token=token)
-                    except Exception as e:
-                        logger.debug(f"Failed to auto-sync local playlist '{p.get('name')}' to Spotify: {e}")
+            # Only push playlists that were never linked. A linked playlist
+            # missing from fetched_remote may just have failed to fetch, and a
+            # full PUT from stale local data would delete remote-only tracks.
+            # YouTube Music tracks are left out and stay in Spoff only.
+            if not p_id or p_id in deleted_ids or extract_spotify_playlist_id(p):
+                continue
+            try:
+                ok_sync, msg = sync_playlist_tracks_to_spotify(p_id, tracks=p.get("tracks", []), token=token)
+                if ok_sync:
+                    synced_count += 1
+                    logger.info(f"Auto-synced local playlist '{p.get('name')}' to Spotify: {msg}")
+            except Exception as e:
+                logger.debug(f"Failed to auto-sync local playlist '{p.get('name')}' to Spotify: {e}")
 
     return synced_count
 
@@ -852,7 +854,7 @@ def has_modify_scopes() -> bool:
         return False
     granted_scopes = set(auth.get("scope", "").split())
     required = {"playlist-modify-public", "playlist-modify-private", "user-library-modify"}
-    return bool(required.intersection(granted_scopes))
+    return required.issubset(granted_scopes)
 
 def search_spotify_tracks(query: str, limit: int = 25, token: Optional[str] = None) -> Tuple[bool, List[Dict[str, Any]], str]:
     """
@@ -970,6 +972,11 @@ def resolve_spotify_track_info(track: Dict[str, Any], token: Optional[str] = Non
     """
     if not isinstance(track, dict):
         return None
+    # YouTube Music / local tracks stay in Spoff only. They are never matched
+    # to a Spotify recording, so liking, adding, or removing them never
+    # touches the Spotify account.
+    if is_client_side_track(track):
+        return None
 
     sp_id = str(track.get("spotify_id") or "").strip()
     if sp_id and len(sp_id) == 22 and sp_id.isalnum():
@@ -1056,18 +1063,39 @@ def create_spotify_playlist(
     return False, None, err or "Failed to create playlist on Spotify"
 
 
+def _merge_resolved_spotify_ids(
+    current_tracks: List[Dict[str, Any]],
+    resolved_tracks: List[Dict[str, Any]],
+) -> None:
+    """Copies resolved spotify_id/spotify_uri onto the stored tracks in place.
+
+    Writing back the resolved snapshot wholesale would drop any edit made to the
+    playlist while the Spotify requests were in flight.
+    """
+    for rt in resolved_tracks:
+        if not isinstance(rt, dict) or not (rt.get("spotify_id") or rt.get("spotify_uri")):
+            continue
+        for ct in current_tracks:
+            if not isinstance(ct, dict) or ct.get("spotify_id"):
+                continue
+            if ct is rt or (rt.get("id") and ct.get("id") == rt.get("id")):
+                ct["spotify_id"] = rt.get("spotify_id")
+                if rt.get("spotify_uri"):
+                    ct["spotify_uri"] = rt["spotify_uri"]
+
+
 def _collect_playlist_spotify_uris(
     tracks: List[Dict[str, Any]],
-    token: Optional[str] = None
+    token: Optional[str] = None,
 ) -> List[str]:
     """
     Extracts or resolves Spotify track URIs for all tracks in a playlist.
-    Tracks that cannot be matched to Spotify are cleanly excluded.
+    YouTube Music and local tracks are excluded; they stay in Spoff only.
     """
     uris: List[str] = []
     seen: set = set()
     for t in tracks:
-        if not isinstance(t, dict):
+        if not isinstance(t, dict) or is_client_side_track(t):
             continue
         sp_uri = str(t.get("spotify_uri") or "").strip()
         if sp_uri.startswith("spotify:track:"):
@@ -1095,6 +1123,7 @@ def _collect_playlist_spotify_uris(
                 seen.add(uri)
                 uris.append(uri)
             continue
+
     return uris
 
 
@@ -1169,7 +1198,6 @@ def add_track_to_spotify_account(
         if not ok_create or not new_sp_id:
             return False, f"Failed to create playlist on Spotify: {err}"
         target_spotify_pl_id = new_sp_id
-        mutate_playlist(playlist_id, lambda p: p.update(spotify_id=target_spotify_pl_id))
 
         local_playlists = load_saved_playlists()
         cur_pl = next((p for p in local_playlists if p.get("id") == playlist_id), None)
@@ -1181,8 +1209,15 @@ def add_track_to_spotify_account(
         for i in range(0, len(uris), 100):
             spotify_api_request(f"/playlists/{target_spotify_pl_id}/tracks", method="POST", body={"uris": uris[i:i+100]}, token=token)
 
+        def _save_new_sp_pl(p: Dict[str, Any]) -> None:
+            p["spotify_id"] = target_spotify_pl_id
+            if not p.get("url") or not str(p.get("url")).startswith("http"):
+                p["url"] = f"https://open.spotify.com/playlist/{target_spotify_pl_id}"
+            _merge_resolved_spotify_ids(p.get("tracks", []), all_tracks)
+            update_sp_meta(p)
+
         try:
-            mutate_playlist(playlist_id, update_sp_meta)
+            mutate_playlist(playlist_id, _save_new_sp_pl)
         except Exception as e:
             logger.debug(f"Failed to persist resolved spotify track info to playlist: {e}")
         return True, f"Created Spotify playlist '{playlist_name}' and synced tracks"
@@ -1205,7 +1240,6 @@ def add_track_to_spotify_account(
         ok_create, new_sp_id, cr_err = create_spotify_playlist(playlist_name, token=token)
         if ok_create and new_sp_id:
             target_spotify_pl_id = new_sp_id
-            mutate_playlist(playlist_id, lambda p: p.update(spotify_id=target_spotify_pl_id))
             local_playlists = load_saved_playlists()
             cur_pl = next((p for p in local_playlists if p.get("id") == playlist_id), None)
             all_tracks = list(cur_pl.get("tracks", [])) if cur_pl else [track]
@@ -1216,8 +1250,15 @@ def add_track_to_spotify_account(
             for i in range(0, len(uris), 100):
                 spotify_api_request(f"/playlists/{target_spotify_pl_id}/tracks", method="POST", body={"uris": uris[i:i+100]}, token=token)
 
+            def _heal_save(p: Dict[str, Any]) -> None:
+                p["spotify_id"] = target_spotify_pl_id
+                if not p.get("url") or not str(p.get("url")).startswith("http"):
+                    p["url"] = f"https://open.spotify.com/playlist/{target_spotify_pl_id}"
+                _merge_resolved_spotify_ids(p.get("tracks", []), all_tracks)
+                update_sp_meta(p)
+
             try:
-                mutate_playlist(playlist_id, update_sp_meta)
+                mutate_playlist(playlist_id, _heal_save)
             except Exception as e:
                 logger.debug(f"Failed to persist resolved spotify track info to playlist: {e}")
             return True, f"Recreated and synced to Spotify playlist '{playlist_name}'"
@@ -1246,8 +1287,9 @@ def remove_track_from_spotify_account(
 
     res = resolve_spotify_track_info(track, token=token)
     if not res:
-        # Non-Spotify / YT Music track: already removed locally, nothing to delete on Spotify
-        return True, "Track is client-side only (not on Spotify)"
+        # YouTube Music / local track: it never reached Spotify, so there is
+        # nothing to delete. Report False so the UI shows no Spotify notice.
+        return False, "Track is local-only; nothing to remove on Spotify"
     spotify_track_id, spotify_track_uri = res
 
     if playlist_id in ("spotify_liked_songs", "liked", "liked_songs"):
@@ -1348,30 +1390,63 @@ def sync_playlist_tracks_to_spotify(
     pl_name = "Playlist"
     target_spotify_pl_id = extract_spotify_playlist_id(playlist_id)
     local_playlists = load_saved_playlists()
-    for pl in local_playlists:
-        if pl.get("id") == playlist_id or extract_spotify_playlist_id(pl) == target_spotify_pl_id:
-            pl_name = pl.get("name") or pl_name
-            if not target_spotify_pl_id:
-                target_spotify_pl_id = extract_spotify_playlist_id(pl)
-            if tracks is None:
-                tracks = pl.get("tracks", [])
-            break
+    # Match by local ID first. Comparing extracted Spotify IDs alone would let
+    # any unlinked playlist (None == None) stand in for this one.
+    local_pl = next((pl for pl in local_playlists if pl.get("id") == playlist_id), None)
+    if local_pl is None and target_spotify_pl_id:
+        local_pl = next(
+            (pl for pl in local_playlists if extract_spotify_playlist_id(pl) == target_spotify_pl_id),
+            None,
+        )
+    if local_pl is not None:
+        pl_name = local_pl.get("name") or pl_name
+        if not target_spotify_pl_id:
+            target_spotify_pl_id = extract_spotify_playlist_id(local_pl)
+        if tracks is None:
+            tracks = local_pl.get("tracks", [])
 
     if tracks is None:
         return False, "No tracks provided"
 
-    uris = _collect_playlist_spotify_uris(tracks, token=token)
-    if not uris:
-        return True, "No Spotify tracks to sync"
-
-    if not target_spotify_pl_id:
+    was_unlinked = not bool(target_spotify_pl_id)
+    if was_unlinked:
         ok_cr, new_id, cr_err = create_spotify_playlist(pl_name, token=token)
         if not ok_cr or not new_id:
             return False, f"Failed to create playlist on Spotify: {cr_err}"
         target_spotify_pl_id = new_id
-        mutate_playlist(playlist_id, lambda p: p.update(spotify_id=new_id))
+        def _set_created_pl(p: Dict[str, Any]) -> None:
+            p["spotify_id"] = new_id
+            if not p.get("url") or not str(p.get("url")).startswith("http"):
+                p["url"] = f"https://open.spotify.com/playlist/{new_id}"
+        mutate_playlist(playlist_id, _set_created_pl)
+
+    uris = _collect_playlist_spotify_uris(tracks, token=token)
+
+    # Persist any tracks that were resolved with spotify_id / spotify_uri
+    try:
+        def _update_resolved(p: Dict[str, Any]) -> None:
+            _merge_resolved_spotify_ids(p.get("tracks", []), tracks)
+            if target_spotify_pl_id:
+                p["spotify_id"] = target_spotify_pl_id
+                if not p.get("url") or not str(p.get("url")).startswith("http"):
+                    p["url"] = f"https://open.spotify.com/playlist/{target_spotify_pl_id}"
+        mutate_playlist(playlist_id, _update_resolved)
+    except Exception as e:
+        logger.debug(f"Failed to persist resolved tracks to playlist: {e}")
+
+    if not uris:
+        if was_unlinked:
+            return True, f"Created Spotify playlist '{pl_name}'"
+        return True, "No Spotify tracks to sync"
+
+    if was_unlinked:
         for i in range(0, len(uris), 100):
-            spotify_api_request(f"/playlists/{target_spotify_pl_id}/tracks", method="POST", body={"uris": uris[i:i+100]}, token=token)
+            spotify_api_request(
+                f"/playlists/{target_spotify_pl_id}/tracks",
+                method="POST",
+                body={"uris": uris[i:i+100]},
+                token=token
+            )
         return True, f"Synced {len(uris)} tracks to new Spotify playlist '{pl_name}'"
 
     first_batch = uris[:100]
@@ -1388,7 +1463,12 @@ def sync_playlist_tracks_to_spotify(
             if not ok_cr or not new_id:
                 return False, f"Failed to recreate playlist on Spotify: {cr_err}"
             target_spotify_pl_id = new_id
-            mutate_playlist(playlist_id, lambda p: p.update(spotify_id=new_id))
+            def _heal_pl(p: Dict[str, Any]) -> None:
+                p["spotify_id"] = new_id
+                if not p.get("url") or not str(p.get("url")).startswith("http"):
+                    p["url"] = f"https://open.spotify.com/playlist/{new_id}"
+                _merge_resolved_spotify_ids(p.get("tracks", []), tracks)
+            mutate_playlist(playlist_id, _heal_pl)
             for i in range(0, len(uris), 100):
                 spotify_api_request(f"/playlists/{target_spotify_pl_id}/tracks", method="POST", body={"uris": uris[i:i+100]}, token=token)
             return True, f"Recreated and synced {len(uris)} tracks to Spotify playlist '{pl_name}'"
