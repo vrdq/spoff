@@ -301,8 +301,8 @@ class TestParametricEQDSP(unittest.TestCase):
         curve = render_braille_curve(engine, width=40, height=6)
         self.assertIn("+12dB", curve)
         self.assertIn("-12dB", curve)
-        self.assertIn("20Hz", curve)
-        self.assertIn("20kHz", curve)
+        self.assertIn("1k", curve)
+        self.assertIn("10k", curve)
 
 
     def test_equalizer_modal_ui_workflow(self):
@@ -362,7 +362,7 @@ class TestParametricEQDSP(unittest.TestCase):
                 modal.action_toggle_bypass()
                 self.assertTrue(engine.bypassed)
                 pill = modal.query_one("#eq-status-pill", Static)
-                self.assertIn("BYPASS", str(pill.render()))
+                self.assertIn("bypassed", str(pill.render()))
                 modal.action_toggle_bypass()
                 self.assertFalse(engine.bypassed)
 
@@ -551,13 +551,13 @@ class TestEQEngineAdvancedSettings(unittest.TestCase):
     def test_render_curve_dispatchers(self):
         engine = ParametricEQEngine(SAMSUNG_AKG_REFERENCE_PRESET)
         blocks = render_blocks_curve(engine, width=40, height=6)
-        self.assertIn("20Hz", blocks)
-        self.assertIn("20kHz", blocks)
+        self.assertIn("1k", blocks)
+        self.assertIn("10k", blocks)
         self.assertTrue("█" in blocks or "▄" in blocks or "▀" in blocks or "·" in blocks)
 
         outline = render_outline_curve(engine, width=40, height=6)
-        self.assertIn("20Hz", outline)
-        self.assertIn("20kHz", outline)
+        self.assertIn("1k", outline)
+        self.assertIn("10k", outline)
         self.assertIn("●", outline)
 
         # Dispatcher with style arg
@@ -568,7 +568,7 @@ class TestEQEngineAdvancedSettings(unittest.TestCase):
         self.assertEqual(d_outline, outline)
 
         d_braille = render_curve(engine, width=40, height=6, style="braille")
-        self.assertIn("20Hz", d_braille)
+        self.assertIn("1k", d_braille)
 
     def test_builtin_acoustic_target_presets(self):
         names = [p.name for p in BUILTIN_PRESETS]
@@ -623,21 +623,23 @@ class TestEQSettingsModalUI(unittest.TestCase):
                 app.push_screen(modal)
                 await pilot.pause()
 
-                # Test navigation cursor down and up
+                # Focus starts on the preset row; down/up and Tab/Shift+Tab step through rows.
+                self.assertEqual(modal.focused.id, "eq-opt-target-profile")
                 modal.action_cursor_down()
                 await pilot.pause()
-                self.assertEqual(modal.focused.id, "eq-opt-precision")
+                self.assertEqual(modal.focused.id, "eq-opt-sample-rate")
                 modal.action_cursor_up()
                 await pilot.pause()
-                self.assertEqual(modal.focused.id, "eq-opt-sample-rate")
+                self.assertEqual(modal.focused.id, "eq-opt-target-profile")
 
-                # Test switch focus (Tab / Shift+Tab)
                 modal.action_switch_focus()
                 await pilot.pause()
-                self.assertEqual(modal.focused.id, "eq-opt-precision")
+                self.assertEqual(modal.focused.id, "eq-opt-sample-rate")
                 modal.action_switch_focus_back()
                 await pilot.pause()
-                self.assertEqual(modal.focused.id, "eq-opt-sample-rate")
+                self.assertEqual(modal.focused.id, "eq-opt-target-profile")
+                modal.action_cursor_down()
+                await pilot.pause()
 
                 # Test action_select_or_toggle when focused on sample rate
                 modal.action_select_or_toggle()

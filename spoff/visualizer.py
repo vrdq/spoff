@@ -25,19 +25,19 @@ LEFT_PEAK = [0, 0x40, 0x4, 0x2, 0x1]
 RIGHT_PEAK = [0, 0x80, 0x20, 0x10, 0x8]
 
 STYLE_NAMES: Dict[str, str] = {
-    "bars": "Studio Spectrum (Peaks)",
-    "braille": "High-Res Braille EQ",
-    "stereo": "Mirrored Stereo Pulse",
-    "wave": "Liquid Oscilloscope",
-    "dots": "Minimal Matrix",
-    "off": "Disabled (Hidden)",
+    "bars": "Bars",
+    "braille": "Braille",
+    "stereo": "Mirrored",
+    "wave": "Wave",
+    "dots": "Dots",
+    "off": "Off",
 }
 
 COLOR_NAMES: Dict[str, str] = {
-    "green": "Spotify Emerald",
-    "cyan": "Cyberpunk Ice",
-    "amber": "Warm Vintage Tube",
-    "mono": "Studio Greyscale",
+    "green": "Green",
+    "cyan": "Cyan",
+    "amber": "Amber",
+    "mono": "Grey",
 }
 
 PALETTES: Dict[str, List[str]] = {
@@ -182,10 +182,10 @@ bit_format = 8bit
         return self.color
 
     def get_style_name(self) -> str:
-        return STYLE_NAMES.get(self.style, "Studio Spectrum")
+        return STYLE_NAMES.get(self.style, "Bars")
 
     def get_color_name(self) -> str:
-        return COLOR_NAMES.get(self.color, "Emerald")
+        return COLOR_NAMES.get(self.color, "Green")
 
     def set_style(self, style: str) -> None:
         if style in STYLE_NAMES:

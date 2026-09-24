@@ -260,85 +260,85 @@ def validate_preset(preset: EQPreset, sample_rate: float = 48000.0) -> EQPreset:
 
 SAMSUNG_AKG_AUDIOPHILE_PRO_PRESET = EQPreset(
     name="Samsung AKG Audiophile Pro",
-    description="Flagship audiophile master tuning for Samsung dual-driver IEMs: tight sub-bass, mud purge, intimate vocal presence, anti-shout pinna, and holographic 3D air",
+    description="Samsung AKG earbuds: more sub-bass, less mud, softer upper mids, more air",
     preamp_db=-3.8,
     bands=[
-        EQBand(1, FilterType.LOW_SHELF, 55.0, +3.8, 0.71, label="Sub-Bass Visceral Foundation"),
-        EQBand(2, FilterType.PEAKING, 160.0, -3.2, 0.85, label="Lower-Mid Mud Purge"),
-        EQBand(3, FilterType.PEAKING, 650.0, +2.2, 1.10, label="Vocal Body & Acoustic Warmth"),
-        EQBand(4, FilterType.PEAKING, 1200.0, -1.0, 1.80, label="Boxiness Tamer"),
-        EQBand(5, FilterType.PEAKING, 2900.0, -1.8, 2.50, label="Anti-Shout Pinna Resonance"),
-        EQBand(6, FilterType.PEAKING, 4200.0, +1.8, 2.80, label="Instrument Snap & Articulation"),
-        EQBand(7, FilterType.PEAKING, 6300.0, -3.5, 3.20, label="Crossover Sibilance Killer"),
-        EQBand(8, FilterType.PEAKING, 8200.0, +1.5, 3.00, label="Brilliance Sparkle"),
-        EQBand(9, FilterType.PEAKING, 9800.0, -4.5, 2.60, label="8mm Tweeter Spike De-Harsh"),
-        EQBand(10, FilterType.HIGH_SHELF, 13000.0, +3.5, 0.71, label="Holographic 3D Ultra-Air"),
+        EQBand(1, FilterType.LOW_SHELF, 55.0, +3.8, 0.71, label="Sub-bass shelf"),
+        EQBand(2, FilterType.PEAKING, 160.0, -3.2, 0.85, label="Mud cut"),
+        EQBand(3, FilterType.PEAKING, 650.0, +2.2, 1.10, label="Vocal warmth"),
+        EQBand(4, FilterType.PEAKING, 1200.0, -1.0, 1.80, label="Boxiness cut"),
+        EQBand(5, FilterType.PEAKING, 2900.0, -1.8, 2.50, label="Upper-mid cut"),
+        EQBand(6, FilterType.PEAKING, 4200.0, +1.8, 2.80, label="Attack lift"),
+        EQBand(7, FilterType.PEAKING, 6300.0, -3.5, 3.20, label="Sibilance cut"),
+        EQBand(8, FilterType.PEAKING, 8200.0, +1.5, 3.00, label="Treble lift"),
+        EQBand(9, FilterType.PEAKING, 9800.0, -4.5, 2.60, label="Tweeter peak cut"),
+        EQBand(10, FilterType.HIGH_SHELF, 13000.0, +3.5, 0.71, label="Air shelf"),
     ]
 )
 
 SAMSUNG_AKG_REFERENCE_PRESET = EQPreset(
     name="Samsung AKG Master Reference",
-    description="Studio-grade calibration for Samsung EO-IG955 dual-driver IEMs (Harman Target with mud purge and tweeter resonance compensation)",
+    description="Samsung AKG EO-IG955 earbuds tuned toward the Harman target",
     preamp_db=-5.0,
     bands=[
-        EQBand(1, FilterType.LOW_SHELF, 65.0, +4.5, 0.70, label="Sub-Bass Shelf"),
-        EQBand(2, FilterType.PEAKING, 145.0, -4.5, 0.50, label="Acoustic Mud Purge"),
-        EQBand(3, FilterType.PEAKING, 230.0, -1.8, 1.40, label="Bass/Mid Transition"),
-        EQBand(4, FilterType.PEAKING, 780.0, +4.2, 0.65, label="Vocal Chest Resonance"),
-        EQBand(5, FilterType.PEAKING, 1750.0, -1.2, 1.80, label="Anti-Nasal Notch"),
-        EQBand(6, FilterType.PEAKING, 2900.0, -2.2, 3.20, label="Pinna Glare Tamer"),
-        EQBand(7, FilterType.PEAKING, 4600.0, +2.2, 3.50, label="Instrument Snap"),
-        EQBand(8, FilterType.PEAKING, 6400.0, +2.8, 4.00, label="Dual-Driver Crossover Bridge"),
-        EQBand(9, FilterType.PEAKING, 10000.0, -7.5, 2.20, label="8mm Tweeter Spike Killer"),
-        EQBand(10, FilterType.HIGH_SHELF, 13500.0, +3.0, 0.70, label="Holographic Air Shelf"),
+        EQBand(1, FilterType.LOW_SHELF, 65.0, +4.5, 0.70, label="Sub-bass shelf"),
+        EQBand(2, FilterType.PEAKING, 145.0, -4.5, 0.50, label="Mud cut"),
+        EQBand(3, FilterType.PEAKING, 230.0, -1.8, 1.40, label="Low-mid cut"),
+        EQBand(4, FilterType.PEAKING, 780.0, +4.2, 0.65, label="Vocal warmth"),
+        EQBand(5, FilterType.PEAKING, 1750.0, -1.2, 1.80, label="Nasal cut"),
+        EQBand(6, FilterType.PEAKING, 2900.0, -2.2, 3.20, label="Upper-mid cut"),
+        EQBand(7, FilterType.PEAKING, 4600.0, +2.2, 3.50, label="Attack lift"),
+        EQBand(8, FilterType.PEAKING, 6400.0, +2.8, 4.00, label="Crossover fill"),
+        EQBand(9, FilterType.PEAKING, 10000.0, -7.5, 2.20, label="Tweeter peak cut"),
+        EQBand(10, FilterType.HIGH_SHELF, 13500.0, +3.0, 0.70, label="Air shelf"),
     ]
 )
 
 HARMAN_IN_EAR_2019_PRESET = EQPreset(
     name="Harman Target 2019 (In-Ear)",
-    description="Industry reference Harman In-Ear Target 2019 curve with sub-bass shelf and pinna compensation",
+    description="Harman 2019 in-ear target",
     preamp_db=-5.5,
     bands=[
-        EQBand(1, FilterType.LOW_SHELF, 80.0, +5.5, 0.71, label="Harman Sub-Bass"),
-        EQBand(2, FilterType.PEAKING, 200.0, -1.5, 1.00, label="Warmth Control"),
-        EQBand(3, FilterType.PEAKING, 1000.0, +1.0, 1.20, label="Midrange Body"),
-        EQBand(4, FilterType.PEAKING, 2800.0, +3.5, 2.00, label="Ear Canal Resonance"),
-        EQBand(5, FilterType.PEAKING, 5000.0, -2.0, 3.00, label="Concha Notch"),
-        EQBand(6, FilterType.PEAKING, 7500.0, -3.0, 3.50, label="Sibilance Dampener"),
-        EQBand(7, FilterType.HIGH_SHELF, 11000.0, +2.5, 0.71, label="Air & Brilliance"),
+        EQBand(1, FilterType.LOW_SHELF, 80.0, +5.5, 0.71, label="Bass shelf"),
+        EQBand(2, FilterType.PEAKING, 200.0, -1.5, 1.00, label="Low-mid cut"),
+        EQBand(3, FilterType.PEAKING, 1000.0, +1.0, 1.20, label="Mid lift"),
+        EQBand(4, FilterType.PEAKING, 2800.0, +3.5, 2.00, label="Ear-canal lift"),
+        EQBand(5, FilterType.PEAKING, 5000.0, -2.0, 3.00, label="Treble dip"),
+        EQBand(6, FilterType.PEAKING, 7500.0, -3.0, 3.50, label="Sibilance cut"),
+        EQBand(7, FilterType.HIGH_SHELF, 11000.0, +2.5, 0.71, label="Air"),
     ]
 )
 
 BASS_IMPACT_PRESET = EQPreset(
     name="Deep Sub-Bass Impact",
-    description="Club & EDM low-end authority with high-pass safety and mud cut",
+    description="More bass and punch, less mud",
     preamp_db=-6.0,
     bands=[
-        EQBand(1, FilterType.LOW_SHELF, 45.0, +6.0, 0.70, label="Sub-Bass Rumble"),
-        EQBand(2, FilterType.PEAKING, 85.0, +3.5, 1.20, label="Punch & Thump"),
-        EQBand(3, FilterType.PEAKING, 250.0, -2.5, 1.00, label="Boxiness Cut"),
-        EQBand(4, FilterType.PEAKING, 3500.0, +1.5, 2.00, label="Transient Attack"),
-        EQBand(5, FilterType.HIGH_SHELF, 12000.0, +2.0, 0.70, label="Crisp Shimmer"),
+        EQBand(1, FilterType.LOW_SHELF, 45.0, +6.0, 0.70, label="Sub-bass shelf"),
+        EQBand(2, FilterType.PEAKING, 85.0, +3.5, 1.20, label="Punch"),
+        EQBand(3, FilterType.PEAKING, 250.0, -2.5, 1.00, label="Boxiness cut"),
+        EQBand(4, FilterType.PEAKING, 3500.0, +1.5, 2.00, label="Attack lift"),
+        EQBand(5, FilterType.HIGH_SHELF, 12000.0, +2.0, 0.70, label="Treble shelf"),
     ]
 )
 
 VOCAL_PRESENCE_PRESET = EQPreset(
     name="Vocal Intelligibility & Air",
-    description="Brings lead vocals and dialogue forward with body resonance and anti-sibilance",
+    description="Brings vocals forward and softens sibilance",
     preamp_db=-3.5,
     bands=[
-        EQBand(1, FilterType.LOW_SHELF, 100.0, -2.0, 0.70, label="Proximity Rumble Cut"),
-        EQBand(2, FilterType.PEAKING, 250.0, -1.5, 1.40, label="Chest Mud Reduction"),
-        EQBand(3, FilterType.PEAKING, 1200.0, +2.5, 1.20, label="Vocal Formant Lift"),
-        EQBand(4, FilterType.PEAKING, 3200.0, +3.2, 1.80, label="Presence & Articulation"),
-        EQBand(5, FilterType.PEAKING, 6800.0, -3.0, 3.00, label="De-Esser Notch"),
-        EQBand(6, FilterType.HIGH_SHELF, 12000.0, +2.0, 0.70, label="Vocal Air"),
+        EQBand(1, FilterType.LOW_SHELF, 100.0, -2.0, 0.70, label="Bass cut"),
+        EQBand(2, FilterType.PEAKING, 250.0, -1.5, 1.40, label="Low-mid cut"),
+        EQBand(3, FilterType.PEAKING, 1200.0, +2.5, 1.20, label="Vocal lift"),
+        EQBand(4, FilterType.PEAKING, 3200.0, +3.2, 1.80, label="Presence lift"),
+        EQBand(5, FilterType.PEAKING, 6800.0, -3.0, 3.00, label="Sibilance cut"),
+        EQBand(6, FilterType.HIGH_SHELF, 12000.0, +2.0, 0.70, label="Air shelf"),
     ]
 )
 
 FLAT_PRESET = EQPreset(
     name="Flat / Studio Neutral",
-    description="Bit-perfect unity response (0.0 dB across all bands)",
+    description="No change (all bands at 0 dB)",
     preamp_db=0.0,
     bands=[
         EQBand(1, FilterType.LOW_SHELF, 65.0, 0.0, 0.70, label="Band 1"),
@@ -356,69 +356,69 @@ FLAT_PRESET = EQPreset(
 
 HARMAN_OVER_EAR_2018_PRESET = EQPreset(
     name="Harman Target 2018 (Over-Ear)",
-    description="Harman Over-Ear Target 2018 curve for circumaural headphones with balanced sub-bass and smooth pinna gain",
+    description="Harman 2018 over-ear target",
     preamp_db=-4.5,
     bands=[
-        EQBand(1, FilterType.LOW_SHELF, 60.0, +4.0, 0.71, label="Harman Bass Shelf"),
-        EQBand(2, FilterType.PEAKING, 200.0, -1.0, 1.00, label="Warmth Purge"),
-        EQBand(3, FilterType.PEAKING, 1200.0, +1.5, 1.40, label="Midrange Presence"),
-        EQBand(4, FilterType.PEAKING, 3000.0, +3.0, 2.00, label="Pinna Gain"),
-        EQBand(5, FilterType.PEAKING, 6000.0, -2.5, 3.00, label="Treble Peak Tamer"),
-        EQBand(6, FilterType.HIGH_SHELF, 10000.0, +2.0, 0.71, label="Air & Extension"),
+        EQBand(1, FilterType.LOW_SHELF, 60.0, +4.0, 0.71, label="Bass shelf"),
+        EQBand(2, FilterType.PEAKING, 200.0, -1.0, 1.00, label="Low-mid cut"),
+        EQBand(3, FilterType.PEAKING, 1200.0, +1.5, 1.40, label="Presence lift"),
+        EQBand(4, FilterType.PEAKING, 3000.0, +3.0, 2.00, label="Ear-canal lift"),
+        EQBand(5, FilterType.PEAKING, 6000.0, -2.5, 3.00, label="Treble peak cut"),
+        EQBand(6, FilterType.HIGH_SHELF, 10000.0, +2.0, 0.71, label="Air"),
     ]
 )
 
 IEF_NEUTRAL_PRESET = EQPreset(
     name="IEF Neutral 2020",
-    description="In-Ear Fidelity neutral target curve with uncolored bass-to-midrange transition and natural ear canal gain",
+    description="In-Ear Fidelity 2020 neutral target",
     preamp_db=-4.0,
     bands=[
-        EQBand(1, FilterType.PEAKING, 1000.0, +1.0, 1.40, label="Linear Midrange"),
-        EQBand(2, FilterType.PEAKING, 2800.0, +4.0, 1.80, label="IEF Ear Canal Gain"),
-        EQBand(3, FilterType.PEAKING, 5800.0, -1.5, 2.50, label="Treble Smooth Notch"),
-        EQBand(4, FilterType.HIGH_SHELF, 10000.0, +1.0, 0.71, label="Natural Air"),
+        EQBand(1, FilterType.PEAKING, 1000.0, +1.0, 1.40, label="Mid lift"),
+        EQBand(2, FilterType.PEAKING, 2800.0, +4.0, 1.80, label="Ear-canal lift"),
+        EQBand(3, FilterType.PEAKING, 5800.0, -1.5, 2.50, label="Treble dip"),
+        EQBand(4, FilterType.HIGH_SHELF, 10000.0, +1.0, 0.71, label="Air"),
     ]
 )
 
 DIFFUSE_FIELD_PRESET = EQPreset(
     name="Diffuse Field (DF)",
-    description="Studio acoustic standard simulating flat speaker power response in a reverberant diffuse room",
+    description="Diffuse-field target",
     preamp_db=-6.0,
     bands=[
-        EQBand(1, FilterType.PEAKING, 1500.0, +1.5, 1.20, label="DF Mid Rise"),
-        EQBand(2, FilterType.PEAKING, 3000.0, +6.0, 1.50, label="Diffuse Field Ear Resonance"),
-        EQBand(3, FilterType.PEAKING, 7000.0, -2.0, 2.50, label="DF Treble Taper"),
-        EQBand(4, FilterType.HIGH_SHELF, 11000.0, +2.0, 0.71, label="DF Top Octave"),
+        EQBand(1, FilterType.PEAKING, 1500.0, +1.5, 1.20, label="Mid lift"),
+        EQBand(2, FilterType.PEAKING, 3000.0, +6.0, 1.50, label="Ear-canal lift"),
+        EQBand(3, FilterType.PEAKING, 7000.0, -2.0, 2.50, label="Treble dip"),
+        EQBand(4, FilterType.HIGH_SHELF, 11000.0, +2.0, 0.71, label="Air"),
     ]
 )
 
 FREE_FIELD_PRESET = EQPreset(
     name="Free Field (FF)",
-    description="Anechoic reference target compensating for head and ear diffraction from a frontal sound source",
+    description="Free-field target",
     preamp_db=-5.0,
     bands=[
-        EQBand(1, FilterType.PEAKING, 1000.0, +1.0, 1.00, label="FF Mid Elevation"),
-        EQBand(2, FilterType.PEAKING, 2700.0, +5.0, 1.60, label="Free Field Pinna Peak"),
-        EQBand(3, FilterType.PEAKING, 6500.0, -3.0, 2.80, label="FF Ear Notch"),
-        EQBand(4, FilterType.HIGH_SHELF, 12000.0, +1.5, 0.71, label="FF Air Extension"),
+        EQBand(1, FilterType.PEAKING, 1000.0, +1.0, 1.00, label="Mid lift"),
+        EQBand(2, FilterType.PEAKING, 2700.0, +5.0, 1.60, label="Ear-canal lift"),
+        EQBand(3, FilterType.PEAKING, 6500.0, -3.0, 2.80, label="Treble dip"),
+        EQBand(4, FilterType.HIGH_SHELF, 12000.0, +1.5, 0.71, label="Air"),
     ]
 )
 
 MOONDROP_CHU_2_REFERENCE_PRESET = EQPreset(
     name="Moondrop Chu II Audiophile Reference",
-    description="Studio-grade calibration for Moondrop Chu 2: sub-bass rumble, 200Hz mid-bass mud purge, vocal warmth, 3.1kHz pinna anti-glare, 5.8k/8.2k nozzle resonance elimination, and 13.5kHz holographic air extension",
+    description="Moondrop Chu II: a little more sub-bass, less mud, tamed 5.8k and 8.2k peaks, more air",
     preamp_db=-4.0,
     bands=[
-        EQBand(1, FilterType.LOW_SHELF, 40.0, +2.0, 0.71, label="Sub-Bass Visceral Rumble"),
-        EQBand(2, FilterType.PEAKING, 200.0, -2.2, 1.00, label="Mid-Bass Mud Purge"),
-        EQBand(3, FilterType.PEAKING, 750.0, +1.2, 1.20, label="Vocal Body & Warmth"),
-        EQBand(4, FilterType.PEAKING, 1500.0, -1.0, 1.80, label="Boxiness Tamer"),
-        EQBand(5, FilterType.PEAKING, 3100.0, -2.0, 2.20, label="Pinna Anti-Shout Notch"),
-        EQBand(6, FilterType.PEAKING, 4500.0, +1.8, 2.50, label="Transient Attack & Snap"),
-        EQBand(7, FilterType.PEAKING, 5800.0, -3.2, 3.20, label="Nozzle Sibilance Killer"),
-        EQBand(8, FilterType.PEAKING, 8200.0, -3.0, 3.50, label="Coupler Splash Tamer"),
-        EQBand(9, FilterType.PEAKING, 10500.0, +2.0, 2.00, label="Brilliance Micro-Detail"),
-        EQBand(10, FilterType.HIGH_SHELF, 13500.0, +3.5, 0.71, label="Holographic 3D Air Shelf"),
+        EQBand(1, FilterType.LOW_SHELF, 40.0, +2.0, 0.71, label="Sub-bass shelf"),
+        EQBand(2, FilterType.PEAKING, 200.0, -2.2, 1.00, label="Mud cut"),
+        EQBand(3, FilterType.PEAKING, 750.0, +1.2, 1.20, label="Vocal warmth"),
+        EQBand(4, FilterType.PEAKING, 1500.0, -1.0, 1.80, label="Boxiness cut"),
+        EQBand(5, FilterType.PEAKING, 3100.0, -2.0, 2.20, label="Upper-mid cut"),
+        EQBand(6, FilterType.PEAKING, 4500.0, +1.8, 2.50, label="Attack lift"),
+        EQBand(7, FilterType.PEAKING, 5800.0, -3.2, 3.20, label="Sibilance cut"),
+        EQBand(8, FilterType.PEAKING, 8200.0, -3.0, 3.50, label="Treble peak cut"),
+        EQBand(9, FilterType.PEAKING, 10500.0, +2.0, 2.00, label="Treble lift"),
+        EQBand(10, FilterType.HIGH_SHELF, 13500.0, +3.5, 0.71, label="Air shelf"),
     ]
 )
 
@@ -941,6 +941,27 @@ def format_gain_bar(gain_db: float, max_range: float = 12.0, width: int = 12) ->
         return f"[dim #555555]{'·' * dots}[/][#61afef]{'=' * bars}[/]|[dim #555555]{'·' * half}[/]"
 
 
+def _frequency_axis(width: int, offset: int = 7) -> str:
+    """Tick labels placed at their real position on the curve's log 20 Hz–20 kHz scale."""
+    # U+2800 (blank braille) pads the start: Textual strips leading spaces.
+    row = ["\u2800"] * offset + [" "] * (width + 6)
+    last_end = 0
+    for hz, label in ((20, "20"), (100, "100"), (1000, "1k"), (10000, "10k"), (20000, "20k")):
+        col = offset + round(math.log(hz / 20.0) / math.log(1000.0) * (width - 1))
+        start = max(offset, min(col - len(label) // 2, offset + width - len(label)))
+        if start <= last_end:
+            continue  # too narrow to fit this label without merging into the last
+        row[start:start + len(label)] = label
+        last_end = start + len(label)
+    return f"[#555555]{''.join(row).rstrip()}  Hz[/]"
+
+
+def _db_label(db: float) -> str:
+    """Fixed-width dB label (5 cells) so the plot's left border lines up."""
+    text = "0dB" if abs(db) < 0.5 else f"{db:+.0f}dB"
+    return text.rjust(5, "\u2800")
+
+
 def render_braille_curve(
     engine: ParametricEQEngine,
     width: int = 68,
@@ -993,11 +1014,11 @@ def render_braille_curve(
         chr(0x2800 + sum(dot_map[dr][dc] for dr in range(4) for dc in range(2) if grid[dr][c * 2 + dc]))
         for c in range(width)
     )
-    lines.append(f"[#555555]{limit_db:+3.0f}dB ┌[/][{color}]{top_chars}[/][#555555]┐[/]")
+    lines.append(f"[#555555]{_db_label(limit_db)} ┌[/][{color}]{top_chars}[/][#555555]┐[/]")
 
     for r in range(1, height - 1):
         db_val = max_db_val - r * (max_db_val - min_db) / (height - 1)
-        lbl = "  0dB" if abs(db_val) < 0.5 else f"{db_val:+3.0f}dB"
+        lbl = _db_label(db_val)
         chars = "".join(
             chr(0x2800 + sum(dot_map[dr][dc] for dr in range(4) for dc in range(2) if grid[r * 4 + dr][c * 2 + dc]))
             for c in range(width)
@@ -1009,8 +1030,8 @@ def render_braille_curve(
         chr(0x2800 + sum(dot_map[dr][dc] for dr in range(4) for dc in range(2) if grid[(height - 1) * 4 + dr][c * 2 + dc]))
         for c in range(width)
     )
-    lines.append(f"[#555555]{-limit_db:+3.0f}dB └[/][{color}]{bot_chars}[/][#555555]┘[/]")
-    lines.append("[#555555]       20Hz       100Hz        500Hz        1kHz         5kHz        10kHz      20kHz[/]")
+    lines.append(f"[#555555]{_db_label(-limit_db)} └[/][{color}]{bot_chars}[/][#555555]┘[/]")
+    lines.append(_frequency_axis(width))
 
     return "\n".join(lines)
 
@@ -1038,16 +1059,16 @@ def render_blocks_curve(
     for r in range(height):
         db_val = max_db_val - r * (max_db_val - min_db) / (height - 1)
         if r == 0:
-            lbl = f"{limit_db:+3.0f}dB ┌"
+            lbl = f"{_db_label(limit_db)} ┌"
             r_edge = "┐"
         elif r == height - 1:
-            lbl = f"{-limit_db:+3.0f}dB └"
+            lbl = f"{_db_label(-limit_db)} └"
             r_edge = "┘"
         elif abs(db_val) < 0.5:
-            lbl = "  0dB │"
+            lbl = f"{_db_label(0)} │"
             r_edge = "│"
         else:
-            lbl = f"{db_val:+3.0f}dB │"
+            lbl = f"{_db_label(db_val)} │"
             r_edge = "│"
 
         row_chars = []
@@ -1070,7 +1091,7 @@ def render_blocks_curve(
         line_str = "".join(row_chars)
         lines.append(f"[#555555]{lbl}[/][{color}]{line_str}[/][#555555]{r_edge}[/]")
 
-    lines.append("[#555555]       20Hz       100Hz        500Hz        1kHz         5kHz        10kHz      20kHz[/]")
+    lines.append(_frequency_axis(width))
     return "\n".join(lines)
 
 
@@ -1098,16 +1119,16 @@ def render_outline_curve(
     for r in range(height):
         db_val = max_db_val - r * (max_db_val - min_db) / (height - 1)
         if r == 0:
-            lbl = f"{limit_db:+3.0f}dB ┌"
+            lbl = f"{_db_label(limit_db)} ┌"
             r_edge = "┐"
         elif r == height - 1:
-            lbl = f"{-limit_db:+3.0f}dB └"
+            lbl = f"{_db_label(-limit_db)} └"
             r_edge = "┘"
         elif abs(db_val) < 0.5:
-            lbl = "  0dB │"
+            lbl = f"{_db_label(0)} │"
             r_edge = "│"
         else:
-            lbl = f"{db_val:+3.0f}dB │"
+            lbl = f"{_db_label(db_val)} │"
             r_edge = "│"
 
         row_chars = []
@@ -1122,7 +1143,7 @@ def render_outline_curve(
         line_str = "".join(row_chars)
         lines.append(f"[#555555]{lbl}[/][{color}]{line_str}[/][#555555]{r_edge}[/]")
 
-    lines.append("[#555555]       20Hz       100Hz        500Hz        1kHz         5kHz        10kHz      20kHz[/]")
+    lines.append(_frequency_axis(width))
     return "\n".join(lines)
 
 

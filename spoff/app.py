@@ -164,6 +164,9 @@ logger = logging.getLogger("spoff")
 
 __all__ = ["SpoffTUI", "remove_track_from_liked_songs"]
 
+def format_frequency(hz: float) -> str:
+    return f"{hz / 1000:.1f} kHz" if hz >= 1000 else f"{hz:.0f} Hz"
+
 def format_time(seconds: Any) -> str:
     if seconds is None:
         return "00:00"
@@ -965,114 +968,122 @@ class SettingsModal(SafeModalScreen[None]):
     def spoff_app(self) -> Any:
         return self.app
 
+    SETTINGS_HINT = "enter change · u unbind · r reset · R reset all · esc close"
+
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-dialog"):
             with Horizontal(id="settings-header"):
                 yield Static("SETTINGS", id="settings-title")
-                yield Static("[dim]Esc / q to close[/dim]", id="settings-close-hint")
+                yield Static("[dim]esc[/dim]", id="settings-close-hint")
 
-            yield Static("PREFERENCES", id="settings-options-title")
             with Vertical(id="settings-options-container"):
+                yield Static("INTERFACE", classes="settings-section")
                 yield AdvModeToggle(id="adv-mode-toggle", classes="setting-toggle-item")
                 yield NotificationsToggle(id="notifications-toggle", classes="setting-toggle-item")
                 yield TransparencyToggle(id="transparency-toggle", classes="setting-toggle-item")
+                yield Static("SEARCH & UPDATES", classes="settings-section")
+                yield SearchEngineToggle(id="engine-toggle", classes="setting-toggle-item")
                 yield InstantSearchToggle(id="instant-search-toggle", classes="setting-toggle-item")
                 yield AutoUpdateToggle(id="auto-update-toggle", classes="setting-toggle-item")
-                yield SearchEngineToggle(id="engine-toggle", classes="setting-toggle-item")
+                yield Static("VISUALIZER", classes="settings-section")
                 yield VisualizerToggle(id="vis-toggle", classes="setting-toggle-item")
                 yield VisualizerStyleToggle(id="vis-style-toggle", classes="setting-toggle-item")
                 yield VisualizerColorToggle(id="vis-color-toggle", classes="setting-toggle-item")
+                yield Static("AUDIO", classes="settings-section")
                 yield EQSettingsNavToggle(id="eq-settings-nav-toggle", classes="setting-toggle-item")
 
-            yield Static("KEYBINDINGS", id="settings-table-title")
-            yield DataTable(id="settings-table", cursor_type="row", show_header=True)
+            yield Static("KEYS", id="settings-table-title")
+            yield DataTable(id="settings-table", cursor_type="row", show_header=False)
             yield Static("", id="settings-status-line")
-            yield Static("[dim]Enter / Space: toggle  |  Enter: rebind  |  Del / u: unbind  |  Backspace: reset default[/dim]", id="settings-footer")
+            yield Static(f"[dim]{self.SETTINGS_HINT}[/dim]", id="settings-footer")
+
+    @staticmethod
+    def _action_label(title: str) -> str:
+        """ACTION_INFO titles carry their default key in parentheses; the key column already shows it."""
+        return re.sub(r"\s*\([^)]*\)\s*$", "", title)
+
+    def _key_cells(self, act_id: str) -> Tuple[str, str]:
+        cur_key = self.spoff_app.keybindings.get(act_id, "")
+        if not cur_key:
+            return "[#555555]none[/]", ""
+        marker = "" if cur_key == DEFAULT_KEYBINDINGS.get(act_id) else "[#569f68]•[/]"
+        return format_key_display(cur_key), marker
 
     def on_mount(self) -> None:
         self.update_toggle_ui()
         table = self.query_one("#settings-table", DataTable)
         table.cursor_foreground_priority = "renderable"
-        table.add_column("Category", key="cat", width=14)
-        table.add_column("Action", key="act", width=30)
-        table.add_column("Keybind", key="key", width=18)
-        table.add_column("Status", key="stat", width=12)
+        table.add_column("Section", key="cat", width=11)
+        table.add_column("Action", key="act", width=34)
+        table.add_column("Key", key="key", width=14)
+        table.add_column("", key="stat", width=1)
 
-        for act_id in ACTION_INFO.keys():
+        # Group rows by section (ACTION_INFO interleaves them). Handlers map a
+        # cursor row back to its action through self._row_ids.
+        cat_order = list(dict.fromkeys(cat for cat, _ in ACTION_INFO.values()))
+        self._row_ids = sorted(ACTION_INFO, key=lambda a: cat_order.index(ACTION_INFO[a][0]))
+        prev_cat = None
+        for act_id in self._row_ids:
             cat, title = ACTION_INFO[act_id]
-            cur_key = self.spoff_app.keybindings.get(act_id, "")
-            is_default = (cur_key == DEFAULT_KEYBINDINGS.get(act_id))
-            if not cur_key:
-                disp_k = "[dim]—[/dim]"
-                status_str = "[dim]unbound[/dim]"
-            else:
-                disp_k = format_key_display(cur_key)
-                status_str = "[dim]default[/dim]" if is_default else "[#ffffff]custom[/]"
-            table.add_row(cat, title, disp_k, status_str, key=act_id)
+            key_text, marker = self._key_cells(act_id)
+            # Name each section once; repeating it on every row is noise.
+            cat_cell = f"[#555555]{escape(cat)}[/]" if cat != prev_cat else ""
+            prev_cat = cat
+            table.add_row(cat_cell, escape(self._action_label(title)), key_text, marker, key=act_id)
 
         try:
             self.query_one("#adv-mode-toggle", AdvModeToggle).focus()
         except Exception:
             table.focus()
 
+    @staticmethod
+    def _row(label: str, value: str, on: Optional[bool] = None) -> str:
+        """One settings line: label on the left, plain value on the right; 'off' values are dimmed."""
+        colour = "#666666" if on is False else "#e2e2e2"
+        return f" {label:<24}[{colour}]{escape(value)}[/]"
+
     def update_toggle_ui(self) -> None:
+        app = self.spoff_app
         try:
-            adv_toggle = self.query_one("#adv-mode-toggle", AdvModeToggle)
-            is_adv = getattr(self.spoff_app, "advanced_mode", False)
-            adv_state = "[#ffffff]On[/]" if is_adv else "[#666666]Off[/]"
-            adv_toggle.update(f" {'Advanced Mode':<26} {adv_state}")
+            is_adv = bool(getattr(app, "advanced_mode", False))
+            footer = self.query_one("#settings-footer", Static)
+            footer.update("" if is_adv else f"[dim]{self.SETTINGS_HINT}[/dim]")
+            self.query_one("#settings-close-hint", Static).update("" if is_adv else "[dim]esc[/dim]")
 
-            if is_adv:
-                self.query_one("#settings-footer", Static).update("")
-                self.query_one("#settings-close-hint", Static).update("")
-            else:
-                self.query_one("#settings-footer", Static).update("[dim]Enter / Space: toggle  |  Enter: rebind  |  Del / u: unbind  |  Backspace: reset default[/dim]")
-                self.query_one("#settings-close-hint", Static).update("[dim]Esc / q to close[/dim]")
+            # "Advanced mode" only hides the key hints, so name it for what it does.
+            self.query_one("#adv-mode-toggle", Static).update(
+                self._row("Key hints", "hidden" if is_adv else "shown", on=not is_adv))
+            notif = bool(getattr(app, "notifications_enabled", True))
+            self.query_one("#notifications-toggle", Static).update(
+                self._row("Notifications", "on" if notif else "off", on=notif))
+            trans = bool(getattr(app, "transparency", True))
+            op_pct = int(round(getattr(app, "transparency_opacity", 0.85) * 100))
+            self.query_one("#transparency-toggle", Static).update(
+                self._row("Transparent background", f"on · {op_pct}%" if trans else "off", on=trans))
 
-            trans_toggle = self.query_one("#transparency-toggle", TransparencyToggle)
-            if getattr(self.spoff_app, "transparency", True):
-                op_pct = int(round(getattr(self.spoff_app, "transparency_opacity", 0.85) * 100))
-                trans_state = f"[#ffffff]On ({op_pct}%)[/]"
-            else:
-                trans_state = "[#666666]Off[/]"
-            trans_toggle.update(f" {'UI Transparency':<26} {trans_state}")
+            engine = "Spotify" if getattr(app, "search_engine", "ytmusic") == "spotify" else "YouTube Music"
+            self.query_one("#engine-toggle", Static).update(self._row("Search with", engine))
+            inst = bool(getattr(app, "instant_search", True))
+            self.query_one("#instant-search-toggle", Static).update(
+                self._row("Focus search on open", "on" if inst else "off", on=inst))
+            upd = bool(getattr(app, "auto_update", True))
+            self.query_one("#auto-update-toggle", Static).update(
+                self._row("Update automatically", "on" if upd else "off", on=upd))
 
-            notif_toggle = self.query_one("#notifications-toggle", NotificationsToggle)
-            is_notif = getattr(self.spoff_app, "notifications_enabled", True)
-            notif_state = "[#ffffff]On[/]" if is_notif else "[#666666]Off[/]"
-            notif_toggle.update(f" {'Notifications':<26} {notif_state}")
+            vis = getattr(app, "visualizer", None)
+            vis_on = bool(getattr(app, "vis_enabled", True)) and getattr(vis, "style", "bars") != "off"
+            self.query_one("#vis-toggle", Static).update(self._row("Visualizer", "on" if vis_on else "off", on=vis_on))
+            style = vis.get_style_name() if vis else "Bars"
+            self.query_one("#vis-style-toggle", Static).update(self._row("Style", style, on=vis_on))
+            colour = vis.get_color_name() if vis else "Green"
+            self.query_one("#vis-color-toggle", Static).update(self._row("Colour", colour, on=vis_on))
 
-            instant_toggle = self.query_one("#instant-search-toggle", InstantSearchToggle)
-            inst_state = "[#ffffff]On[/]" if getattr(self.spoff_app, "instant_search", True) else "[#666666]Off[/]"
-            instant_toggle.update(f" {'Instant Search':<26} {inst_state}")
-
-            autoup_toggle = self.query_one("#auto-update-toggle", AutoUpdateToggle)
-            autoup_state = "[#ffffff]On[/]" if getattr(self.spoff_app, "auto_update", True) else "[#666666]Off[/]"
-            autoup_toggle.update(f" {'Auto-Update':<26} {autoup_state}")
-
-            eng_toggle = self.query_one("#engine-toggle", SearchEngineToggle)
-            eng_label = "Spotify" if getattr(self.spoff_app, "search_engine", "ytmusic") == "spotify" else "YouTube Music"
-            eng_toggle.update(f" {'Search Engine':<26} [#ffffff]{eng_label}[/]")
-
-            vis_toggle = self.query_one("#vis-toggle", VisualizerToggle)
-            vis_enabled = getattr(self.spoff_app, "vis_enabled", True) and (getattr(self.spoff_app.visualizer, "style", "bars") != "off")
-            vis_state = "[#ffffff]On[/]" if vis_enabled else "[#666666]Off[/]"
-            vis_toggle.update(f" {'CAVA Visualizer':<26} {vis_state}")
-
-            vis_style_toggle = self.query_one("#vis-style-toggle", VisualizerStyleToggle)
-            style_name = self.spoff_app.visualizer.get_style_name() if hasattr(self.spoff_app, "visualizer") else "Studio Bars"
-            vis_style_toggle.update(f" {'Visualizer Style':<26} [#ffffff]{style_name}[/]")
-
-            vis_color_toggle = self.query_one("#vis-color-toggle", VisualizerColorToggle)
-            color_name = self.spoff_app.visualizer.get_color_name() if hasattr(self.spoff_app, "visualizer") else "Emerald"
-            vis_color_toggle.update(f" {'Visualizer Theme':<26} [#ffffff]{color_name}[/]")
-
-            eq_nav_toggle = self.query_one("#eq-settings-nav-toggle", EQSettingsNavToggle)
-            eq_eng = getattr(self.spoff_app, "eq_engine", None)
+            eq_eng = getattr(app, "eq_engine", None)
             p_name = eq_eng.preset_name if eq_eng else "AKG Reference"
-            eq_nav_toggle.update(f" {'Equalizer & DSP':<26} [#ffffff]{p_name}[/]  [dim]→[/dim]")
+            state = "bypassed" if eq_eng is not None and eq_eng.bypassed else p_name
+            self.query_one("#eq-settings-nav-toggle", Static).update(self._row("Equalizer", f"{state}  ›"))
         except Exception:
-            pass
+            logger.debug("Could not refresh settings rows", exc_info=True)
 
     def toggle_advanced_mode(self) -> None:
         new_state = self.spoff_app.toggle_advanced_mode()
@@ -1182,34 +1193,19 @@ class SettingsModal(SafeModalScreen[None]):
         self._refresh_row(act_id)
         self.query_one("#settings-status-line", Static).update(status_msg)
 
-    def _refresh_row(self, act_id: str, key_override: Optional[str] = None) -> None:
+    def _refresh_row(self, act_id: str) -> None:
         table = self.query_one("#settings-table", DataTable)
-        cat, title = ACTION_INFO.get(act_id, ("General", act_id))
-        cur_key = self.spoff_app.keybindings.get(act_id, "")
-        is_default = (cur_key == DEFAULT_KEYBINDINGS.get(act_id))
-
-        if key_override:
-            disp_key = key_override
-            disp_status = "capturing"
-        elif not cur_key:
-            disp_key = "[dim]—[/dim]"
-            disp_status = "[dim]unbound[/dim]"
-        else:
-            disp_key = format_key_display(cur_key)
-            disp_status = "[dim]default[/dim]" if is_default else "[#ffffff]custom[/]"
-
+        key_text, marker = self._key_cells(act_id)
         try:
-            table.update_cell(act_id, "cat", cat)
-            table.update_cell(act_id, "act", title)
-            table.update_cell(act_id, "key", disp_key)
-            table.update_cell(act_id, "stat", disp_status)
+            table.update_cell(act_id, "key", key_text)
+            table.update_cell(act_id, "stat", marker)
         except Exception:
             pass
 
     def action_unbind_selected_key(self) -> None:
         table = self.query_one("#settings-table", DataTable)
         if table.cursor_row is not None and table.row_count > 0:
-            act_id = list(ACTION_INFO.keys())[table.cursor_row]
+            act_id = self._row_ids[table.cursor_row]
             self.spoff_app.set_custom_keybinding(act_id, "")
             self._refresh_row(act_id)
             _, title = ACTION_INFO.get(act_id, ("General", act_id))
@@ -1220,7 +1216,7 @@ class SettingsModal(SafeModalScreen[None]):
     def action_reset_selected_key(self) -> None:
         table = self.query_one("#settings-table", DataTable)
         if table.cursor_row is not None and table.row_count > 0:
-            act_id = list(ACTION_INFO.keys())[table.cursor_row]
+            act_id = self._row_ids[table.cursor_row]
             self.spoff_app.reset_keybinding(act_id)
             self._refresh_row(act_id)
             _, title = ACTION_INFO.get(act_id, ("General", act_id))
@@ -1256,9 +1252,9 @@ class SettingsModal(SafeModalScreen[None]):
             "adv-mode-toggle",
             "notifications-toggle",
             "transparency-toggle",
+            "engine-toggle",
             "instant-search-toggle",
             "auto-update-toggle",
-            "engine-toggle",
             "vis-toggle",
             "vis-style-toggle",
             "vis-color-toggle",
@@ -1299,7 +1295,7 @@ class SettingsModal(SafeModalScreen[None]):
         elif self.focused and self.focused.id == "settings-table":
             table = self.query_one("#settings-table", DataTable)
             if table.cursor_row is not None and table.row_count > 0:
-                act_id = list(ACTION_INFO.keys())[table.cursor_row]
+                act_id = self._row_ids[table.cursor_row]
                 self.start_rebinding(act_id)
 
     def action_cursor_down(self) -> None:
@@ -1315,7 +1311,7 @@ class SettingsModal(SafeModalScreen[None]):
 
     def on_key(self, event: events.Key) -> None:
         table = self.query_one("#settings-table", DataTable)
-        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "instant-search-toggle", "auto-update-toggle", "engine-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "eq-settings-nav-toggle"]
+        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "eq-settings-nav-toggle"]
         focused_id = self.focused.id if self.focused else None
 
         if focused_id in toggle_ids:
@@ -2579,9 +2575,9 @@ class EqualizerModal(SafeModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="eq-dialog"):
             with Horizontal(id="eq-header-bar"):
-                yield Static("PARAMETRIC EQUALIZER (10-BAND STUDIO DSP)", id="eq-title")
-                yield Static("[bold #569f68][ACTIVE][/]", id="eq-status-pill")
-                yield Static("[dim]Esc / q to close[/dim]", id="eq-close-hint")
+                yield Static("EQUALIZER", id="eq-title")
+                yield Static("", id="eq-status-pill")
+                yield Static("[dim]esc[/dim]", id="eq-close-hint")
 
             with Vertical(id="eq-info-panel"):
                 yield Static("", id="eq-preset-info")
@@ -2592,64 +2588,45 @@ class EqualizerModal(SafeModalScreen[None]):
 
             yield DataTable(id="eq-table", cursor_type="row", show_header=True)
             yield Static(
-                "[#767676]←/→: gain  |  Shift+←/→: ±2dB  |  \\[/]: Q  |  \\{/\\}: freq  |  t: type  |  Space: toggle  |  b: bypass A-B  |  p/P: preset  |  a: auto-headroom  |  s: DSP settings  |  c: copy APO[/]",
+                "[#555555]←→ gain · shift ±2 dB · \\[ ] Q · , . frequency · t type · space on/off\n"
+                "b bypass · p P preset · a lower preamp · s settings · c copy · esc close[/]",
                 id="eq-footer"
             )
 
     def on_mount(self) -> None:
         table = self.query_one("#eq-table", DataTable)
         table.cursor_foreground_priority = "renderable"
-        table.add_column("#", key="idx", width=5)
-        table.add_column("Type", key="type", width=7)
-        table.add_column("Freq", key="freq", width=11)
-        table.add_column("Gain", key="gain", width=10)
-        table.add_column("Curve Bar", key="curve", width=15)
-        table.add_column("Q", key="q", width=7)
-        table.add_column("State", key="state", width=8)
-        table.add_column("Target / Acoustic Role", key="role", width=34)
+        table.add_column("Band", key="idx", width=5)
+        table.add_column("Type", key="type", width=10)
+        table.add_column("Freq", key="freq", width=9)
+        table.add_column("Gain", key="gain", width=8)
+        table.add_column("", key="curve", width=13)
+        table.add_column("Q", key="q", width=5)
+        table.add_column("", key="state", width=3)
+        table.add_column("Label", key="role", width=30)
 
         self.rebuild_table()
         self.update_header_and_curve()
         table.focus()
 
     def update_header_and_curve(self) -> None:
-        pill = self.query_one("#eq-status-pill", Static)
-        if self.engine.bypassed:
-            pill.update("[bold #c4a768][BYPASS (FLAT)][/]")
-        else:
-            pill.update("[bold #569f68][ACTIVE][/]")
-
-        p_info = self.query_one("#eq-preset-info", Static)
-        safe_pname = escape(str(self.engine.preset_name))
-        safe_pdesc = escape(str(self.engine.description))
-        p_info.update(
-            f"[bold #ffffff]Preset:[/] [bold #569f68]{safe_pname}[/]  "
-            f"[dim]— {safe_pdesc}[/dim]"
+        eng = self.engine
+        self.query_one("#eq-status-pill", Static).update("[#c4a768]bypassed[/]  " if eng.bypassed else "")
+        self.query_one("#eq-preset-info", Static).update(
+            f"[#ffffff]{escape(str(eng.preset_name))}[/]  [#555555]{len(eng.bands)} bands[/]"
         )
-
-        hr_stat = self.query_one("#eq-headroom-meter", Static)
-        peak_gain, peak_freq = self.engine.calculate_peak_gain(num_points=250)
-        preamp = self.engine.preamp_db
-        if self.engine.bypassed:
-            hr_stat.update(
-                f"[dim]Bypassed — Bit-perfect flat bypass  |  Preamp: {preamp:+.1f} dB[/dim]"
-            )
+        peak_gain, peak_freq = eng.calculate_peak_gain(num_points=250)
+        meter = self.query_one("#eq-headroom-meter", Static)
+        if eng.bypassed:
+            meter.update(f"[#888888]Bypassed, playing unchanged audio. Preamp {eng.preamp_db:+.1f} dB when on.[/]")
         elif peak_gain <= 0.0:
-            headroom = -peak_gain
-            hr_stat.update(
-                f"Preamp: [bold #ffffff]{preamp:+.1f} dB[/]  |  "
-                f"[bold #569f68]Headroom: +{headroom:.2f} dBFS margin[/] "
-                f"[dim](Zero Clipping Guaranteed, peak {peak_gain:+.2f} dBFS at {peak_freq:.0f} Hz)[/dim]"
-            )
+            meter.update(f"Preamp {eng.preamp_db:+.1f} dB    [#888888]peak {peak_gain:+.1f} dB, no clipping[/]")
         else:
-            hr_stat.update(
-                f"Preamp: [bold #ffffff]{preamp:+.1f} dB[/]  |  "
-                f"[bold #e06c75]HEADROOM ALERT: +{peak_gain:.2f} dBFS clipping risk at {peak_freq:.0f} Hz![/] "
-                f"[bold #c4a768](Press 'a' to auto-attenuate)[/]"
+            meter.update(
+                f"Preamp {eng.preamp_db:+.1f} dB    [#e06c75]peak {peak_gain:+.1f} dB at "
+                f"{format_frequency(peak_freq)}, may clip.[/] [#888888]Press a to lower the preamp.[/]"
             )
-
-        curve = self.query_one("#eq-curve-plot", Static)
-        curve.update(render_curve(self.engine, width=68, height=6))
+        self.query_one("#eq-curve-plot", Static).update(render_curve(eng, width=68, height=7))
 
     def rebuild_table(self) -> None:
         table = self.query_one("#eq-table", DataTable)
@@ -2658,28 +2635,18 @@ class EqualizerModal(SafeModalScreen[None]):
 
         preamp_gain = f"{self.engine.preamp_db:+.1f} dB"
         p_bar = format_gain_bar(self.engine.preamp_db)
-        p_state = "[dim #c47676]BYPASS[/]" if self.engine.bypassed else "[bold #569f68]ACTIVE[/]"
-        table.add_row(
-            "PRE",
-            "GAIN",
-            "Global",
-            preamp_gain,
-            p_bar,
-            "—",
-            p_state,
-            "Digital Headroom / Anti-Clipping Stage",
-            key="row_preamp"
-        )
+        p_state = ""
+        table.add_row("pre", "", "", preamp_gain, p_bar, "", p_state, "[#888888]Preamp[/]", key="row_preamp")
 
         for b in self.engine.bands:
             f_str = f"{b.frequency:.0f} Hz" if b.frequency < 1000 else f"{b.frequency/1000:.1f} kHz"
             g_str = f"{b.gain_db:+.1f} dB"
             b_bar = format_gain_bar(b.gain_db)
             q_str = f"{b.q:.2f}"
-            s_str = "[bold #569f68]ON[/]" if b.enabled else "[dim #555555]OFF[/]"
+            s_str = "on" if b.enabled else "[#555555]off[/]"
             table.add_row(
-                f"B{b.index:02d}",
-                b.filter_type.value,
+                f"{b.index}",
+                {"PK": "peak", "LSC": "low shelf", "HSC": "high shelf"}.get(b.filter_type.value, b.filter_type.value),
                 f_str,
                 g_str,
                 b_bar,
@@ -2704,7 +2671,7 @@ class EqualizerModal(SafeModalScreen[None]):
             if row_only == 0:
                 p_gain = f"{self.engine.preamp_db:+.1f} dB"
                 p_bar = format_gain_bar(self.engine.preamp_db)
-                p_state = "[dim #c47676]BYPASS[/]" if self.engine.bypassed else "[bold #569f68]ACTIVE[/]"
+                p_state = ""
                 table.update_cell("row_preamp", "gain", p_gain)
                 table.update_cell("row_preamp", "curve", p_bar)
                 table.update_cell("row_preamp", "state", p_state)
@@ -2714,9 +2681,9 @@ class EqualizerModal(SafeModalScreen[None]):
                 g_str = f"{b.gain_db:+.1f} dB"
                 b_bar = format_gain_bar(b.gain_db)
                 q_str = f"{b.q:.2f}"
-                s_str = "[bold #569f68]ON[/]" if b.enabled else "[dim #555555]OFF[/]"
+                s_str = "on" if b.enabled else "[#555555]off[/]"
                 rk = f"row_band_{b.index}"
-                table.update_cell(rk, "type", b.filter_type.value)
+                table.update_cell(rk, "type", {"PK": "peak", "LSC": "low shelf", "HSC": "high shelf"}.get(b.filter_type.value, b.filter_type.value))
                 table.update_cell(rk, "freq", f_str)
                 table.update_cell(rk, "gain", g_str)
                 table.update_cell(rk, "curve", b_bar)
@@ -2816,8 +2783,8 @@ class EqualizerModal(SafeModalScreen[None]):
     def action_toggle_bypass(self) -> None:
         bypassed = self.engine.toggle_bypass()
         self._sync_and_refresh()
-        status_lbl = "Bypassed (Flat bit-perfect)" if bypassed else f"Active ({self.engine.preset_name})"
-        self.notify(f"EQ {status_lbl}", title="A-B Testing")
+        status_lbl = "bypassed" if bypassed else f"on: {self.engine.preset_name}"
+        self.notify(f"EQ {status_lbl}")
 
     def action_next_preset(self) -> None:
         names = [p.name for p in BUILTIN_PRESETS]
@@ -2827,7 +2794,7 @@ class EqualizerModal(SafeModalScreen[None]):
         next_idx = (cur_idx + 1) % len(BUILTIN_PRESETS)
         self.engine.load_preset(BUILTIN_PRESETS[next_idx])
         self._sync_and_refresh()
-        self.notify(f"Loaded: {self.engine.preset_name}", title="Parametric EQ")
+        self.notify(f"Preset: {self.engine.preset_name}")
 
     def action_prev_preset(self) -> None:
         names = [p.name for p in BUILTIN_PRESETS]
@@ -2837,15 +2804,14 @@ class EqualizerModal(SafeModalScreen[None]):
         prev_idx = (cur_idx - 1) % len(BUILTIN_PRESETS)
         self.engine.load_preset(BUILTIN_PRESETS[prev_idx])
         self._sync_and_refresh()
-        self.notify(f"Loaded: {self.engine.preset_name}", title="Parametric EQ")
+        self.notify(f"Preset: {self.engine.preset_name}")
 
     def action_auto_headroom(self) -> None:
         rec = self.engine.auto_preamp_headroom(margin_db=0.5)
         self.engine.set_preamp(rec)
         self._sync_and_refresh(row_only=0)
         self.notify(
-            f"Anti-clipping active: Preamp set to {rec:+.1f} dB for guaranteed 0 dBFS ceiling",
-            title="Digital Headroom"
+            f"Preamp lowered to {rec:+.1f} dB so boosts can't clip"
         )
 
     def action_reset_preset(self) -> None:
@@ -2856,14 +2822,13 @@ class EqualizerModal(SafeModalScreen[None]):
         else:
             self.engine.load_preset(SAMSUNG_AKG_REFERENCE_PRESET)
         self._sync_and_refresh()
-        self.notify(f"Reset {self.engine.preset_name} to defaults", title="Parametric EQ")
+        self.notify(f"Reset {self.engine.preset_name}")
 
     def action_copy_apo(self) -> None:
         apo = self.engine.to_equalizer_apo()
         copy_to_clipboard(apo, self.app)
         self.notify(
-            f"Copied EqualizerAPO config ({len(self.engine.bands)} bands) to clipboard",
-            title="Export EQ"
+            "Copied as EqualizerAPO text"
         )
 
     def action_open_settings(self) -> None:
@@ -3076,6 +3041,7 @@ class EQSettingsModal(SafeModalScreen[None]):
     ]
 
     EQ_TOGGLE_IDS = [
+        "eq-opt-target-profile",
         "eq-opt-sample-rate",
         "eq-opt-precision",
         "eq-opt-auto-headroom",
@@ -3083,11 +3049,10 @@ class EQSettingsModal(SafeModalScreen[None]):
         "eq-opt-intersample-guard",
         "eq-opt-curve-style",
         "eq-opt-curve-range",
-        "eq-opt-target-profile",
+        "eq-act-open-live-editor",
         "eq-act-import-clipboard",
         "eq-act-export-clipboard",
         "eq-act-reset-defaults",
-        "eq-act-open-live-editor",
     ]
 
     def __init__(self, engine: ParametricEQEngine):
@@ -3097,185 +3062,92 @@ class EQSettingsModal(SafeModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="eq-settings-dialog"):
             with Horizontal(id="eq-settings-header"):
-                yield Static("STUDIO DSP & PARAMETRIC EQ CONFIGURATION", id="eq-settings-title")
-                yield Static("[bold #569f68][64-BIT DSP][/]", id="eq-settings-pill")
-                yield Static("[dim]Esc / q to close[/dim]", id="eq-settings-close-hint")
+                yield Static("EQUALIZER SETTINGS", id="eq-settings-title")
+                yield Static("", id="eq-settings-pill")
+                yield Static("[dim]esc[/dim]", id="eq-settings-close-hint")
 
-            with Vertical(id="eq-settings-status-card"):
-                yield Static("", id="eq-settings-status-info")
-                yield Static("", id="eq-settings-status-sub")
+            yield Static("", id="eq-settings-status-info")
+            yield Static("", id="eq-settings-status-sub")
 
             with Vertical(id="eq-settings-options-container"):
-                yield Static("[bold #888888]DSP CORE & NUMERICAL PRECISION[/]", classes="eq-settings-section-title")
+                yield EQTargetProfileToggle(id="eq-opt-target-profile", classes="eq-setting-item")
+                yield Static("PROCESSING", classes="eq-settings-section-title")
                 yield EQSampleRateToggle(id="eq-opt-sample-rate", classes="eq-setting-item")
                 yield EQPrecisionToggle(id="eq-opt-precision", classes="eq-setting-item")
-
-                yield Static("[bold #888888]DIGITAL HEADROOM & CLIPPING PROTECTION[/]", classes="eq-settings-section-title")
+                yield Static("CLIPPING PROTECTION", classes="eq-settings-section-title")
                 yield EQAutoHeadroomToggle(id="eq-opt-auto-headroom", classes="eq-setting-item")
                 yield EQHeadroomMarginToggle(id="eq-opt-headroom-margin", classes="eq-setting-item")
                 yield EQIntersampleGuardToggle(id="eq-opt-intersample-guard", classes="eq-setting-item")
-
-                yield Static("[bold #888888]TUI CURVE VISUALIZATION ENGINE[/]", classes="eq-settings-section-title")
+                yield Static("CURVE", classes="eq-settings-section-title")
                 yield EQCurveStyleToggle(id="eq-opt-curve-style", classes="eq-setting-item")
                 yield EQCurveRangeToggle(id="eq-opt-curve-range", classes="eq-setting-item")
-
-                yield Static("[bold #888888]ACOUSTIC CALIBRATION TARGET CURVES[/]", classes="eq-settings-section-title")
-                yield EQTargetProfileToggle(id="eq-opt-target-profile", classes="eq-setting-item")
-
-                yield Static("[bold #888888]PRESET IMPORT, EXPORT & WORKFLOW[/]", classes="eq-settings-section-title")
-                yield EQImportClipboardAction(id="eq-act-import-clipboard", classes="eq-setting-item eq-action-item")
-                yield EQExportClipboardAction(id="eq-act-export-clipboard", classes="eq-setting-item eq-action-item")
-                yield EQResetDefaultsAction(id="eq-act-reset-defaults", classes="eq-setting-item eq-action-item")
-                yield EQOpenLiveEditorAction(id="eq-act-open-live-editor", classes="eq-setting-item eq-action-item")
+                yield Static("ACTIONS", classes="eq-settings-section-title")
+                yield EQOpenLiveEditorAction(id="eq-act-open-live-editor", classes="eq-setting-item")
+                yield EQImportClipboardAction(id="eq-act-import-clipboard", classes="eq-setting-item")
+                yield EQExportClipboardAction(id="eq-act-export-clipboard", classes="eq-setting-item")
+                yield EQResetDefaultsAction(id="eq-act-reset-defaults", classes="eq-setting-item")
 
             yield Static("", id="eq-settings-status-line")
             yield Static(
-                "[dim]Enter / Space: toggle/execute  |  j/k: navigate  |  i: import  |  c: export  |  e: live editor  |  r: reset[/dim]",
+                "[dim]enter change · e editor · i import · c copy · r reset · esc close[/dim]",
                 id="eq-settings-footer"
             )
 
     def on_mount(self) -> None:
         self.update_ui()
         try:
-            self.query_one("#eq-opt-sample-rate", EQSampleRateToggle).focus()
+            self.query_one("#eq-opt-target-profile", EQTargetProfileToggle).focus()
         except Exception:
             pass
 
+    @staticmethod
+    def _row(label: str, value: str, note: str = "", on: Optional[bool] = None) -> str:
+        colour = "#666666" if on is False else "#e2e2e2"
+        note_part = f"  [#555555]{escape(note)}[/]" if note else ""
+        return f" {label:<22}[{colour}]{escape(value)}[/]{note_part}"
+
     def update_ui(self) -> None:
+        eng = self.engine
         try:
-            prec_label = "64-Bit Float (f64)" if self.engine.precision == "f64" else "32-Bit Float (f32)"
-            sr_khz = self.engine.sample_rate / 1000.0
-            pill = self.query_one("#eq-settings-pill", Static)
-            pill.update(f"[bold #569f68][{self.engine.precision.upper()} | {sr_khz:.1f}kHz][/]")
-
-            stat_info = self.query_one("#eq-settings-status-info", Static)
-            bypass_str = "[#c4a768]BYPASS (FLAT)[/]" if self.engine.bypassed else "[#569f68]ACTIVE[/]"
-            safe_pname = escape(str(self.engine.preset_name))
-            stat_info.update(
-                f"Active Profile: [bold #ffffff]{safe_pname}[/]  "
-                f"[dim]({len(self.engine.bands)} bands)[/dim]  |  Status: {bypass_str}  |  "
-                f"Preamp: [bold #ffffff]{self.engine.preamp_db:+.1f} dB[/]"
-            )
-
-            stat_sub = self.query_one("#eq-settings-status-sub", Static)
-            peak_gain, peak_freq = self.engine.calculate_peak_gain(num_points=250)
-            if peak_gain <= 0.0:
-                headroom_str = f"[bold #569f68]+{-peak_gain:.2f} dBFS margin[/]"
+            self.query_one("#eq-settings-pill", Static).update("[#c4a768]bypassed[/]  " if eng.bypassed else "")
+            peak_gain, peak_freq = eng.calculate_peak_gain(num_points=250)
+            if eng.bypassed:
+                level = "[#888888]bypassed[/]"
+            elif peak_gain <= 0.0:
+                level = f"peak {peak_gain:+.1f} dB, no clipping"
             else:
-                headroom_str = f"[bold #e06c75]+{peak_gain:.2f} dBFS risk[/]"
-            stat_sub.update(
-                f"Headroom Ceiling: {headroom_str} [dim]at {peak_freq:.0f}Hz[/dim]  |  "
-                f"Engine: [bold #ffffff]{prec_label}[/]  |  Curve: [bold #ffffff]{self.engine.curve_style.title()}[/] (±{int(self.engine.curve_range_db)}dB)"
+                level = f"[#e06c75]peak {peak_gain:+.1f} dB at {format_frequency(peak_freq)}, may clip[/]"
+            self.query_one("#eq-settings-status-info", Static).update(
+                f" Preamp {eng.preamp_db:+.1f} dB    {level}"
             )
+            self.query_one("#eq-settings-status-sub", Static).update("")
 
-            # 1. Sample Rate
-            sr_toggle = self.query_one("#eq-opt-sample-rate", EQSampleRateToggle)
-            sr_str = f"{sr_khz:.1f} kHz"
-            if self.engine.sample_rate == 48000.0:
-                sr_desc = "Studio Reference Standard (Recommended)"
-            elif self.engine.sample_rate == 44100.0:
-                sr_desc = "Red Book CD Audio Standard"
-            elif self.engine.sample_rate == 88200.0:
-                sr_desc = "Hi-Res Studio Master (2x 44.1k)"
-            elif self.engine.sample_rate == 96000.0:
-                sr_desc = "Hi-Res Studio Master (2x 48k)"
-            elif self.engine.sample_rate == 192000.0:
-                sr_desc = "Ultra Hi-Res Audiophile Master"
-            else:
-                sr_desc = "Custom Audio Sampling Rate"
-            sr_toggle.update(
-                f"[bold #569f68]● {sr_str}[/]   [#ffffff]Internal DSP Sampling Rate[/]  [dim]— {sr_desc}[/dim]"
-            )
+            self.query_one("#eq-opt-target-profile", Static).update(
+                self._row("Preset", eng.preset_name, f"{len(eng.bands)} bands"))
+            self.query_one("#eq-opt-sample-rate", Static).update(
+                self._row("Sample rate", f"{eng.sample_rate / 1000:g} kHz", "48 kHz suits most devices"))
+            self.query_one("#eq-opt-precision", Static).update(
+                self._row("Filter precision", "64-bit" if eng.precision == "f64" else "32-bit"))
+            self.query_one("#eq-opt-auto-headroom", Static).update(
+                self._row("Auto preamp", "on" if eng.auto_headroom else "off",
+                          "lowers preamp so boosts can't clip", on=eng.auto_headroom))
+            self.query_one("#eq-opt-headroom-margin", Static).update(
+                self._row("Safety margin", f"{eng.headroom_margin:.1f} dB", on=eng.auto_headroom))
+            self.query_one("#eq-opt-intersample-guard", Static).update(
+                self._row("True-peak guard", "on" if eng.intersample_guard else "off",
+                          "extra 0.2 dB", on=eng.intersample_guard))
+            self.query_one("#eq-opt-curve-style", Static).update(
+                self._row("Style", eng.curve_style))
+            self.query_one("#eq-opt-curve-range", Static).update(
+                self._row("Range", f"±{int(eng.curve_range_db)} dB"))
 
-            # 2. Precision
-            prec_toggle = self.query_one("#eq-opt-precision", EQPrecisionToggle)
-            if self.engine.precision == "f64":
-                prec_toggle.update(
-                    "[bold #569f68]● 64-BIT FLOAT (f64)[/]   [#ffffff]Numerical Precision[/]  [dim]— Studio reference biquad calculations (no quantization error)[/dim]"
-                )
-            else:
-                prec_toggle.update(
-                    "[bold #e5c07b]● 32-BIT FLOAT (f32)[/]   [#ffffff]Numerical Precision[/]  [dim]— Standard single precision SIMD filtering[/dim]"
-                )
-
-            # 3. Auto Headroom
-            ah_toggle = self.query_one("#eq-opt-auto-headroom", EQAutoHeadroomToggle)
-            if self.engine.auto_headroom:
-                ah_toggle.update(
-                    "[bold #569f68]● ENABLED[/]   [#ffffff]Auto-Headroom Anti-Clipping[/]  [dim]— Automatically attenuates preamp to guarantee 0 dBFS ceiling[/dim]"
-                )
-            else:
-                ah_toggle.update(
-                    "[#767676]○ DISABLED[/]  [#cccccc]Auto-Headroom Anti-Clipping[/]  [dim]— Manual Preamp Gain mode (press 'a' in live EQ to attenuate)[/dim]"
-                )
-
-            # 5. Headroom margin
-            hm_toggle = self.query_one("#eq-opt-headroom-margin", EQHeadroomMarginToggle)
-            hm_val = self.engine.headroom_margin
-            if hm_val == 0.0:
-                hm_desc = "Exact 0 dBFS mathematical limit"
-            elif hm_val == 0.5:
-                hm_desc = "True-Peak safety margin (Studio standard)"
-            elif hm_val == 1.0:
-                hm_desc = "Inter-sample reconstruction guard"
-            elif hm_val == 1.5:
-                hm_desc = "Lossy MP3 / AAC codec compression headroom"
-            else:
-                hm_desc = "Ultra conservative digital headroom margin"
-            hm_toggle.update(
-                f"[bold #569f68]● +{hm_val:.1f} dB[/]   [#ffffff]Headroom Safety Margin[/]  [dim]— {hm_desc}[/dim]"
-            )
-
-            # 6. Inter-sample guard
-            ig_toggle = self.query_one("#eq-opt-intersample-guard", EQIntersampleGuardToggle)
-            if self.engine.intersample_guard:
-                ig_toggle.update(
-                    "[bold #569f68]● ENABLED[/]   [#ffffff]Inter-Sample True-Peak Guard[/]  [dim]— Adds 0.2dB buffer against DAC reconstruction filter overshoot[/dim]"
-                )
-            else:
-                ig_toggle.update(
-                    "[#767676]○ DISABLED[/]  [#cccccc]Inter-Sample True-Peak Guard[/]  [dim]— Standard sample-peak measurement only[/dim]"
-                )
-
-            # 7. Curve style
-            cs_toggle = self.query_one("#eq-opt-curve-style", EQCurveStyleToggle)
-            if self.engine.curve_style == "braille":
-                cs_desc = "High-Res Braille (⠤⠶⠛) — Smooth sub-pixel curve"
-            elif self.engine.curve_style == "blocks":
-                cs_desc = "Solid ASCII Blocks (█/▄) — Bold geometric frequency response"
-            else:
-                cs_desc = "Dotted Outline (··) — Minimalist dotted response"
-            cs_toggle.update(
-                f"[bold #569f68]● {self.engine.curve_style.upper()}[/]   [#ffffff]Curve Display Mode[/]  [dim]— {cs_desc}[/dim]"
-            )
-
-            # 8. Curve range
-            cr_toggle = self.query_one("#eq-opt-curve-range", EQCurveRangeToggle)
-            cr_toggle.update(
-                f"[bold #569f68]● ±{int(self.engine.curve_range_db)} dB[/]   [#ffffff]Vertical Display Range[/]  [dim]— Dynamic visualization amplitude scale (±12dB, ±18dB, ±24dB)[/dim]"
-            )
-
-            # 9. Target profile
-            tp_toggle = self.query_one("#eq-opt-target-profile", EQTargetProfileToggle)
-            safe_tpname = escape(str(self.engine.preset_name))
-            tp_toggle.update(
-                f"[bold #569f68]● LOAD TARGET[/]   [#ffffff]{safe_tpname}[/]  [dim]— Space/Enter cycles reference targets & loads live[/dim]"
-            )
-
-            # 10. Actions
-            self.query_one("#eq-act-import-clipboard", EQImportClipboardAction).update(
-                "[bold #61afef]⬇ IMPORT CLIPBOARD[/]   [#ffffff]AutoEQ / EqualizerAPO / Peace Loader[/]  [dim]— Parse & load preset from clipboard[/dim]"
-            )
-            self.query_one("#eq-act-export-clipboard", EQExportClipboardAction).update(
-                "[bold #569f68]⬆ EXPORT CLIPBOARD[/]   [#ffffff]Copy EqualizerAPO Syntax[/]  [dim]— Export active 10-band DSP parameters[/dim]"
-            )
-            self.query_one("#eq-act-reset-defaults", EQResetDefaultsAction).update(
-                "[bold #c4a768]↺ RESTORE CALIBRATION[/]   [#ffffff]Reset to Samsung AKG Master Reference[/]  [dim]— Studio dual-driver reference[/dim]"
-            )
-            self.query_one("#eq-act-open-live-editor", EQOpenLiveEditorAction).update(
-                "[bold #ffffff]🎛 10-BAND LIVE EQ[/]   [#ffffff]Open Interactive Real-Time Equalizer[/]  [dim]— Sliders, Q, & visual curve editor (e)[/dim]"
-            )
-
+            self.query_one("#eq-act-open-live-editor", Static).update(" Open the editor")
+            self.query_one("#eq-act-import-clipboard", Static).update(
+                " Import from clipboard  [#555555]AutoEQ or EqualizerAPO text[/]")
+            self.query_one("#eq-act-export-clipboard", Static).update(
+                " Copy as EqualizerAPO text")
+            self.query_one("#eq-act-reset-defaults", Static).update(
+                f" Reset to {escape(SAMSUNG_AKG_REFERENCE_PRESET.name)}")
         except Exception as e:
             logger.error(f"Error updating EQSettingsModal UI: {e}")
 
@@ -3296,16 +3168,16 @@ class EQSettingsModal(SafeModalScreen[None]):
         self._sync_and_save()
         adjustment = f" Adjusted {clamped} band(s) to fit this rate." if clamped else ""
         self.query_one("#eq-settings-status-line", Static).update(
-            f"Audio DSP sample rate set to [bold #569f68]{nxt/1000.0:.1f} kHz[/].{adjustment}"
+            f"Sample rate: {nxt/1000.0:g} kHz.{adjustment}"
         )
 
     def cycle_precision(self) -> None:
         nxt = "f32" if self.engine.precision == "f64" else "f64"
         self.engine.set_precision(nxt)
         self._sync_and_save()
-        lbl = "64-Bit Double Precision (f64)" if nxt == "f64" else "32-Bit Single Precision (f32)"
+        lbl = "64-bit" if nxt == "f64" else "32-bit"
         self.query_one("#eq-settings-status-line", Static).update(
-            f"Filter computation precision set to [bold #569f68]{lbl}[/]."
+            f"Filter precision: {lbl}."
         )
 
     def toggle_auto_headroom(self) -> None:
@@ -3315,9 +3187,9 @@ class EQSettingsModal(SafeModalScreen[None]):
             rec = self.engine.auto_preamp_headroom()
             self.engine.set_preamp(rec)
         self._sync_and_save()
-        lbl = f"Enabled (preamp {self.engine.preamp_db:+.1f}dB)" if nxt else "Disabled (manual preamp)"
+        lbl = f"on, preamp {self.engine.preamp_db:+.1f} dB" if nxt else "off, preamp is manual"
         self.query_one("#eq-settings-status-line", Static).update(
-            f"Auto-Headroom anti-clipping {lbl}."
+            f"Auto preamp {lbl}."
         )
 
     def cycle_headroom_margin(self) -> None:
@@ -3331,7 +3203,7 @@ class EQSettingsModal(SafeModalScreen[None]):
             self.engine.set_preamp(rec)
         self._sync_and_save()
         self.query_one("#eq-settings-status-line", Static).update(
-            f"Headroom margin set to [bold #569f68]+{nxt:.1f} dB[/] (Preamp: {self.engine.preamp_db:+.1f}dB)."
+            f"Safety margin: {nxt:.1f} dB (preamp {self.engine.preamp_db:+.1f} dB)."
         )
 
     def toggle_intersample_guard(self) -> None:
@@ -3341,9 +3213,9 @@ class EQSettingsModal(SafeModalScreen[None]):
             rec = self.engine.auto_preamp_headroom()
             self.engine.set_preamp(rec)
         self._sync_and_save()
-        lbl = "Enabled (+0.2dB DAC safety)" if nxt else "Disabled"
+        lbl = "on" if nxt else "off"
         self.query_one("#eq-settings-status-line", Static).update(
-            f"Inter-sample true-peak guard {lbl}."
+            f"True-peak guard {lbl}."
         )
 
     def cycle_curve_style(self) -> None:
@@ -3354,7 +3226,7 @@ class EQSettingsModal(SafeModalScreen[None]):
         self.engine.set_curve_style(nxt)
         self._sync_and_save()
         self.query_one("#eq-settings-status-line", Static).update(
-            f"Curve visualization mode set to [bold #569f68]{nxt.upper()}[/]."
+            f"Curve style: {nxt}."
         )
 
     def cycle_curve_range(self) -> None:
@@ -3365,7 +3237,7 @@ class EQSettingsModal(SafeModalScreen[None]):
         self.engine.set_curve_range_db(nxt)
         self._sync_and_save()
         self.query_one("#eq-settings-status-line", Static).update(
-            f"Curve vertical scale set to [bold #569f68]±{int(nxt)} dB[/]."
+            f"Curve range: ±{int(nxt)} dB."
         )
 
     def cycle_target_profile(self) -> None:
@@ -3379,15 +3251,14 @@ class EQSettingsModal(SafeModalScreen[None]):
             self.engine.set_preamp(rec)
         self._sync_and_save()
         self.query_one("#eq-settings-status-line", Static).update(
-            f"Loaded acoustic target profile: [bold #569f68]{nxt_preset.name}[/]."
+            f"Preset: {escape(nxt_preset.name)}."
         )
-        self.notify(f"Target Loaded: {nxt_preset.name}", title="Acoustic Calibration")
-
+        
     def import_from_clipboard(self) -> None:
         text = read_from_clipboard(self.app)
         if not text:
             self.query_one("#eq-settings-status-line", Static).update(
-                "[bold #e06c75]Clipboard is empty or contains no readable text.[/]"
+                "[#e06c75]The clipboard has no text. Copy an AutoEQ or EqualizerAPO preset first.[/]"
             )
             self.notify("Clipboard is empty or unreadable.", title="AutoEQ Import", severity="warning")
             return
@@ -3396,7 +3267,7 @@ class EQSettingsModal(SafeModalScreen[None]):
             preset = parse_equalizer_apo(text, sample_rate=self.engine.sample_rate)
             if not preset:
                 self.query_one("#eq-settings-status-line", Static).update(
-                    "[bold #e06c75]Could not detect EqualizerAPO or AutoEQ filter syntax in clipboard.[/]"
+                    "[#e06c75]No filter lines in the clipboard. Expected lines like: Filter 1: ON PK Fc 100 Hz Gain 2 dB Q 1[/]"
                 )
                 self.notify("No valid EqualizerAPO / AutoEQ filters found in clipboard.", title="AutoEQ Import", severity="warning")
                 return
@@ -3412,8 +3283,8 @@ class EQSettingsModal(SafeModalScreen[None]):
             rec = self.engine.auto_preamp_headroom()
             self.engine.set_preamp(rec)
         self._sync_and_save()
-        msg = f"Successfully imported '{preset.name}' ({len(preset.bands)} bands, preamp {preset.preamp_db:+.1f}dB)!"
-        self.query_one("#eq-settings-status-line", Static).update(f"[bold #569f68]{escape(msg)}[/]")
+        msg = f"Imported '{preset.name}': {len(preset.bands)} bands, preamp {self.engine.preamp_db:+.1f} dB."
+        self.query_one("#eq-settings-status-line", Static).update(escape(msg))
         self.notify(msg, title="AutoEQ Imported")
 
     def export_to_clipboard(self) -> None:
@@ -3421,9 +3292,9 @@ class EQSettingsModal(SafeModalScreen[None]):
         copied = copy_to_clipboard(apo, self.app)
         if copied:
             self.query_one("#eq-settings-status-line", Static).update(
-                f"[bold #569f68]Copied EqualizerAPO config ({len(self.engine.bands)} bands) to clipboard.[/]"
+                "Copied as EqualizerAPO text."
             )
-            self.notify(f"Copied EqualizerAPO profile ({len(self.engine.bands)} bands) to clipboard.", title="Export EQ")
+            self.notify("Copied as EqualizerAPO text")
         else:
             self.query_one("#eq-settings-status-line", Static).update("[dim #c47676]Failed to write to clipboard.[/]")
 
@@ -3434,10 +3305,9 @@ class EQSettingsModal(SafeModalScreen[None]):
             self.engine.set_preamp(rec)
         self._sync_and_save()
         self.query_one("#eq-settings-status-line", Static).update(
-            "Reset EQ to Samsung AKG Master Reference calibration."
+            f"Reset to {escape(SAMSUNG_AKG_REFERENCE_PRESET.name)}."
         )
-        self.notify("Reset EQ to Samsung AKG Master Reference", title="Parametric EQ")
-
+        
     def open_live_editor(self) -> None:
         self.dismiss(None)
         if not isinstance(self.app.screen, EqualizerModal):
@@ -3453,7 +3323,7 @@ class EQSettingsModal(SafeModalScreen[None]):
             nxt_idx = (idx + 1) % len(self.EQ_TOGGLE_IDS)
             self.query_one(f"#{self.EQ_TOGGLE_IDS[nxt_idx]}", Static).focus()
         else:
-            self.query_one("#eq-opt-sample-rate", EQSampleRateToggle).focus()
+            self.query_one("#eq-opt-target-profile", EQTargetProfileToggle).focus()
 
     def action_cursor_up(self) -> None:
         focused_id = self.focused.id if self.focused else None
@@ -3462,7 +3332,7 @@ class EQSettingsModal(SafeModalScreen[None]):
             prev_idx = (idx - 1) % len(self.EQ_TOGGLE_IDS)
             self.query_one(f"#{self.EQ_TOGGLE_IDS[prev_idx]}", Static).focus()
         else:
-            self.query_one("#eq-opt-sample-rate", EQSampleRateToggle).focus()
+            self.query_one("#eq-opt-target-profile", EQTargetProfileToggle).focus()
 
     def action_switch_focus(self) -> None:
         self.action_cursor_down()
@@ -4426,7 +4296,7 @@ class SpoffTUI(App):
     }
 
     #eq-settings-dialog {
-        width: 96;
+        width: 78;
         max-width: 98%;
         height: auto;
         max-height: 94%;
@@ -4449,32 +4319,17 @@ class SpoffTUI(App):
         color: #ffffff;
     }
 
-    #eq-settings-pill {
-        width: auto;
-        margin-right: 2;
-        text-style: bold;
-    }
-
-    #eq-settings-close-hint {
+    #eq-settings-pill, #eq-settings-close-hint {
         width: auto;
         color: #555555;
     }
 
-    #eq-settings-status-card {
-        height: auto;
-        width: 100%;
-        background: #0d0d0d;
-        border: solid #222222;
-        padding: 0 1;
-        margin-bottom: 1;
-    }
-
     #eq-settings-status-info {
-        color: #ffffff;
+        color: #888888;
     }
 
     #eq-settings-status-sub {
-        color: #888888;
+        height: 0;
     }
 
     #eq-settings-options-container {
@@ -4488,45 +4343,32 @@ class SpoffTUI(App):
         width: 100%;
         color: #555555;
         margin-top: 1;
-        margin-bottom: 0;
         text-style: bold;
     }
 
     .eq-setting-item {
-        height: 3;
+        height: 1;
         width: 100%;
-        background: #1a1a1a;
-        border: solid #282828;
+        background: transparent;
+        color: #888888;
         padding: 0 1;
-        margin-bottom: 1;
-        content-align: left middle;
     }
 
     .eq-setting-item:focus {
-        border: solid #569f68;
-        background: #1c261e;
-    }
-
-    .eq-action-item {
-        border: solid #333333;
-    }
-
-    .eq-action-item:focus {
-        border: solid #61afef;
-        background: #15202b;
+        background: #242424;
+        color: #ffffff;
     }
 
     #eq-settings-status-line {
         height: 1;
         width: 100%;
-        color: #569f68;
-        margin-bottom: 0;
+        color: #888888;
     }
 
     #eq-settings-footer {
         height: auto;
         width: 100%;
-        color: #767676;
+        color: #555555;
     }
 
     /* MODAL: SPOTIFY AUTH */
@@ -4819,11 +4661,10 @@ class SpoffTUI(App):
     }
 
     #settings-dialog {
-        width: 82;
+        width: 74;
         max-width: 96%;
-        height: auto;
-        max-height: 94%;
-        overflow-y: auto;
+        height: 94%;
+        max-height: 44;
         background: #141414;
         border: solid #2a2a2a;
         padding: 1 2;
@@ -4847,20 +4688,21 @@ class SpoffTUI(App):
         color: #555555;
     }
 
-    #settings-options-title {
-        height: 1;
-        text-style: bold;
-        color: #666666;
-        margin-bottom: 0;
-    }
-
     #settings-options-container {
         height: auto;
         width: 100%;
-        border: solid #222222;
-        background: #111111;
-        padding: 0;
         margin-bottom: 1;
+    }
+
+    .settings-section, #settings-table-title {
+        height: 1;
+        color: #555555;
+        text-style: bold;
+        margin-top: 1;
+    }
+
+    .settings-section:first-of-type {
+        margin-top: 0;
     }
 
     .setting-toggle-item {
@@ -4870,38 +4712,27 @@ class SpoffTUI(App):
         color: #888888;
         padding: 0 1;
         margin: 0;
-        content-align: left middle;
     }
 
     .setting-toggle-item:focus {
         background: #242424;
         color: #ffffff;
-        text-style: bold;
-    }
-
-    #settings-table-title {
-        height: 1;
-        text-style: bold;
-        color: #666666;
-        margin-bottom: 0;
     }
 
     #settings-table {
-        height: 9;
-        border: solid #222222;
-        background: #111111;
+        height: 1fr;
+        min-height: 5;
+        background: transparent;
     }
 
     #settings-table > .datatable--cursor {
-        background: #1c1c1c;
+        background: transparent;
         color: #cccccc;
-        text-style: bold;
     }
 
     #settings-table:focus > .datatable--cursor {
         background: #242424;
         color: #ffffff;
-        text-style: bold;
     }
 
     #settings-status-line {
@@ -7224,9 +7055,9 @@ class SpoffTUI(App):
             bypassed = self.player.toggle_eq_bypass()
             save_eq_settings(self.eq_engine.to_dict())
             if bypassed:
-                self.notify_user("EQ Bypassed (Flat bit-perfect)")
+                self.notify_user("EQ bypassed")
             else:
-                self.notify_user(f"EQ Active: {self.eq_engine.preset_name} ({self.eq_engine.preamp_db:+.1f}dB)")
+                self.notify_user(f"EQ on: {self.eq_engine.preset_name}")
             self.update_player_hud()
 
     def action_toggle_notifications(self):
