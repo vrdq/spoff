@@ -302,8 +302,7 @@ def download_track_to_cache(
         return None
 
     cached_path = get_cached_track_path(val_id)
-    if (cached_path and cached_path.is_file() and cached_path.stat().st_size > 0
-            and not _seconds((track_meta or {}).get("duration_ms"))):
+    if cached_path and not _seconds((track_meta or {}).get("duration_ms")):
         meta_to_save = dict(track_meta) if track_meta else {"title": title, "artist": artist}
         try:
             register_cached_track(val_id, meta_to_save, cached_path)
@@ -316,8 +315,7 @@ def download_track_to_cache(
             report_error(exc)
         return None
 
-    # Cache inspection and registration use the same worker/error path as a
-    # fresh download, so filesystem failures cannot escape into the UI thread.
+    # Duration validation runs in the worker because probing audio may block.
     acquired_slot = False
     busy_error = None
     with _download_lock:

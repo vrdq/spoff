@@ -6357,14 +6357,13 @@ class SpoffTUI(App):
                 self.notify_user("")
         elif view == "playlist":
             self.playlists = load_saved_playlists()
-            if self.current_playlist_id:
-                for p in self.playlists:
-                    if p.get("id") == self.current_playlist_id:
-                        self.current_playlist_tracks = list(p.get("tracks", []))
-                        break
-            elif self.playlists:
-                self.current_playlist_id = self.playlists[0].get("id")
-                self.current_playlist_tracks = list(self.playlists[0].get("tracks", []))
+            selected = next((p for p in self.playlists
+                             if p.get("id") == self.current_playlist_id), None)
+            if selected is None and self.playlists:
+                selected = self.playlists[0]
+            self.current_playlist_id = selected.get("id") if selected else None
+            self.current_playlist_tracks = list(selected.get("tracks") or []) if selected else []
+            self.refresh_side_table()
 
             self.render_tracks(self.current_playlist_tracks, select_row=select_row, reset_cursor=(select_row is None))
             st = self.query_one("#side-table", DataTable)
@@ -8177,21 +8176,6 @@ class SpoffTUI(App):
         title = track.get("title") or "Unknown Track"
         artist = track.get("artist") or "Unknown Artist"
 
-        cached_path = get_cached_track_path(t_id)
-        if cached_path and cached_path.exists() and cached_path.stat().st_size > 0 and not track.get("duration_ms"):
-            try:
-                register_cached_track(t_id, track, cached_path)
-            except Exception:
-                pass
-            if self.active_tab == "offline":
-                self.render_tracks(list(load_offline_index().values()))
-            remaining = getattr(self, "_active_single_downloads", 0)
-            if remaining:
-                _dl_status(f"'{title}' is already offline. {remaining} downloads remaining…")
-            else:
-                _dl_status(f"'{title}' is already available offline.", clear_after=3.0)
-            return
-
         track_url = track.get("url")
         if not track_url and t_id and len(t_id) == 11 and re.match(r'^[a-zA-Z0-9_-]{11}$', t_id):
             track_url = f"https://www.youtube.com/watch?v={t_id}"
@@ -8214,6 +8198,8 @@ class SpoffTUI(App):
                     self.render_tracks(self.current_playlist_tracks)
                 elif self.active_tab == "search":
                     self.render_tracks(self.search_results)
+                elif self.active_tab == "liked":
+                    self.render_tracks(self.current_liked_tracks)
             self._on_ui(_refresh)
 
         def _on_err(err):
@@ -8298,10 +8284,16 @@ class SpoffTUI(App):
 
                 if not needed:
                     _dl_status(f"'{name}' is already available offline ({total} {'song' if total == 1 else 'songs'}).", clear_after=4.0)
-                    def _refresh_if_offline():
+                    def _refresh_cached_rows():
                         if self.active_tab == "offline":
                             self.render_tracks(list(load_offline_index().values()))
-                    self.call_from_thread(_refresh_if_offline)
+                        elif self.active_tab == "liked":
+                            self.render_tracks(self.current_liked_tracks)
+                        elif self.active_tab == "playlist":
+                            self.render_tracks(self.current_playlist_tracks)
+                        elif self.active_tab == "search":
+                            self.render_tracks(self.search_results)
+                    self.call_from_thread(_refresh_cached_rows)
                     return
 
                 to_dl_count = len(needed)
@@ -8332,10 +8324,14 @@ class SpoffTUI(App):
                     if dl_ok[0]:
                         success_count += 1
                         def _refresh_table():
-                            if self.active_tab == "playlist" and self.current_playlist_id == playlist.get("id"):
+                            if self.active_tab == "playlist":
                                 self.render_tracks(self.current_playlist_tracks)
                             elif self.active_tab == "offline":
                                 self.render_tracks(list(load_offline_index().values()))
+                            elif self.active_tab == "liked":
+                                self.render_tracks(self.current_liked_tracks)
+                            elif self.active_tab == "search":
+                                self.render_tracks(self.search_results)
                         self.call_from_thread(_refresh_table)
                     else:
                         fail_count += 1
@@ -8349,6 +8345,10 @@ class SpoffTUI(App):
                         self.render_tracks(self.current_playlist_tracks)
                     elif self.active_tab == "offline":
                         self.render_tracks(list(load_offline_index().values()))
+                    elif self.active_tab == "liked":
+                        self.render_tracks(self.current_liked_tracks)
+                    elif self.active_tab == "search":
+                        self.render_tracks(self.search_results)
                 self.call_from_thread(_final_refresh)
             except Exception:
                 logger.exception("Bulk download failed for %s", name)
@@ -9468,6 +9468,8 @@ class SpoffTUI(App):
                     self.render_tracks(self.current_playlist_tracks)
                 elif self.active_tab == "search":
                     self.render_tracks(self.search_results)
+                elif self.active_tab == "liked":
+                    self.render_tracks(self.current_liked_tracks)
             self._on_ui(_publish_cached_state)
 
         download_track_to_cache(t_id, title, artist, on_complete=on_cached, direct_url=track_url, track_meta=track)

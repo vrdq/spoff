@@ -272,7 +272,7 @@ class MPVController:
                 if self.eq_engine:
                     self.apply_eq()
                 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            except OSError:
+            except (OSError, RuntimeError):
                 logger.exception("Could not start mpv or open its IPC socket")
                 self.stop()
                 return False
@@ -320,14 +320,15 @@ class MPVController:
                         self._duration = float(track_meta.get("duration_ms") or 0) / 1000.0
                     except (ValueError, TypeError):
                         self._duration = 0.0
-                    self._playback_thread = threading.Thread(
+                    playback_thread = threading.Thread(
                         target=self._watch_playback,
                         args=(sock, stream, entry_id, callback, deferred), daemon=True,
                     )
-                    self._playback_thread.start()
+                    playback_thread.start()
+                    self._playback_thread = playback_thread
                 self._send_command(["set_property", "pause", False])
                 return True
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, RuntimeError) as exc:
                 logger.warning("Could not establish mpv playback ownership: %s", exc)
                 # An unacknowledged command might still execute. Retire the
                 # process so it cannot produce a late start for the next load.

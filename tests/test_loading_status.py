@@ -13,6 +13,7 @@ def fake_app(**kwargs):
     pill = Mock()
     values = dict(_is_mounted=True, _pending_track=None, _search_loading_request_id=None,
                   _search_request_id=1, _closing=False, active_tab='search', advanced_mode=False,
+                  search_results=[], current_playlist_tracks=[], current_liked_tracks=[],
                   query_one=Mock(return_value=pill), call_from_thread=lambda fn,*a:fn(*a),
                   notify_user=Mock(), render_tracks=Mock())
     values.update(kwargs)
@@ -152,6 +153,27 @@ def test_loading_is_visible_above_seek_bar_in_real_layout(size):
     asyncio.run(check_layout())
 
 
+@pytest.mark.parametrize('remaining', [[], [{'id': 'kept', 'name': 'Kept', 'tracks': []}]])
+def test_playlist_removed_during_sync_cannot_leave_stale_tracks(remaining):
+    async def check():
+        application = LoadingHarness(visualizer_enabled=False)
+        async with application.run_test(size=(100, 30)) as pilot:
+            application.query_one('#side-table', app.DataTable).add_column('Playlist')
+            table = application.query_one('#track-table', app.DataTable)
+            table.add_columns('Source', 'Title', 'Artist', 'Duration')
+            application.current_playlist_id = 'removed'
+            application.current_playlist_tracks = [{'id': 'old', 'title': 'Old song'}]
+            with patch.object(app, 'load_saved_playlists', return_value=remaining), \
+                 patch.object(app, 'save_last_tab'):
+                application.switch_view('playlist')
+            await pilot.pause()
+            assert application.current_playlist_id == ('kept' if remaining else None)
+            assert application.current_playlist_tracks == []
+            assert table.row_count == 0
+            assert application.query_one('#side-table', app.DataTable).row_count == len(remaining)
+    asyncio.run(check())
+
+
 def test_download_channels_share_one_line_and_resume_after_completion():
     fake,bar=fake_app(_thread_id=threading.get_ident())
     timers=[]
@@ -186,10 +208,12 @@ def test_brief_copy_confirmation_resumes_existing_download():
     bar.update.assert_called_with('Downloading 2/10 from Favorites')
 
 
-def test_single_download_emits_no_duplicate_toast():
+@pytest.mark.parametrize('tab', ['search', 'playlist', 'liked'])
+def test_single_download_emits_no_duplicate_toast(tab):
     from types import MethodType
     fake,bar=fake_app(_thread_id=threading.get_ident(),_on_ui=lambda fn,*a,**kw:fn(*a,**kw),
-                      search_results=[],notify=Mock(),set_timer=Mock())
+                      active_tab=tab, search_results=[], current_playlist_tracks=[],
+                      current_liked_tracks=[], notify=Mock(),set_timer=Mock())
     fake.set_download_status=MethodType(app.SpoffTUI.set_download_status,fake)
     with patch.object(app,'get_cached_track_path',return_value=None),patch.object(app,'download_track_to_cache') as download:
         app.SpoffTUI._download_single_track(fake,{'id':'song','title':'Song','artist':'Artist'})
@@ -197,13 +221,15 @@ def test_single_download_emits_no_duplicate_toast():
         download.call_args.kwargs['on_complete']('song.m4a')
     bar.update.assert_called_with("Saved 'Song' offline.")
     fake.notify.assert_not_called()
+    fake.render_tracks.assert_called_once_with([])
     fake.query_one.assert_called_with('#notification-line',Static)
 
 
 @pytest.mark.parametrize('already_cached',[False,True])
-def test_bulk_download_runs_and_reports_only_one_status_surface(tmp_path,already_cached):
+@pytest.mark.parametrize('tab', ['search', 'playlist', 'liked'])
+def test_bulk_download_runs_and_reports_only_one_status_surface(tmp_path,already_cached,tab):
     from types import MethodType
-    fake,bar=fake_app(_thread_id=threading.get_ident(),notify=Mock(),set_timer=Mock())
+    fake,bar=fake_app(_thread_id=threading.get_ident(),notify=Mock(),set_timer=Mock(),active_tab=tab)
     fake.set_download_status=MethodType(app.SpoffTUI.set_download_status,fake)
     cached=tmp_path/'song.m4a'
     cached.write_bytes(b'audio')
@@ -220,6 +246,7 @@ def test_bulk_download_runs_and_reports_only_one_status_surface(tmp_path,already
          patch.object(app,'download_track_to_cache',side_effect=complete_download) as download:
         app.SpoffTUI._bulk_download_playlist(fake,{'name':'Favorites','tracks':tracks})
     assert not fake._bulk_download_in_progress
+    fake.render_tracks.assert_called_with([])
     assert download.call_count == (0 if already_cached else 1)
     expected="'Favorites' is already available offline (1 song)." if already_cached else "Saved 1/1 song from 'Favorites' offline."
     bar.update.assert_called_with(expected)

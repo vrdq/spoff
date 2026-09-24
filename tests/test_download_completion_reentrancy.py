@@ -107,3 +107,18 @@ def test_invalid_id_error_callback_failure_is_contained():
         raise RuntimeError('unmounted')
     assert streamer.download_track_to_cache('../escape', 'Song', 'Artist',
                                             on_error=broken_callback) is None
+
+
+def test_cache_disappears_after_lookup_reports_failure_once(tmp_path):
+    from unittest.mock import Mock
+    cached = Mock(spec=Path)
+    cached.is_file.return_value = True
+    cached.stat.side_effect = FileNotFoundError('cache removed')
+    errors, completed = [], []
+    with patch.object(streamer, 'get_cached_track_path', return_value=cached), \
+         patch.object(streamer, 'register_cached_track', side_effect=FileNotFoundError('cache removed')):
+        streamer.download_track_to_cache('song', 'Song', 'Artist', blocking=True,
+                                         on_error=errors.append, on_complete=completed.append)
+    assert len(errors) == 1
+    assert isinstance(errors[0], FileNotFoundError)
+    assert not completed

@@ -244,6 +244,32 @@ def test_malformed_direct_url_fails_without_crashing():
     assert streamer.search_and_resolve_stream('Song','Artist','https://[') is None
 
 
+def test_mpv_watcher_start_failure_closes_audio_process_and_socket(tmp_path):
+    from spoff import player as player_module
+    player = player_module.MPVController(socket_path=str(tmp_path / 'mpv.sock'))
+    proc = Mock()
+    player.process = proc
+    sock = Mock()
+    stream = sock.makefile.return_value
+    stream.readline.side_effect = [
+        b'{"request_id":1,"error":"success"}\n',
+        b'{"event":"start-file","playlist_entry_id":1}\n',
+    ]
+    with patch.object(player, 'start_mpv'), \
+         patch.object(player, '_send_command', return_value=True), \
+         patch.object(player_module.socket, 'socket', return_value=sock), \
+         patch.object(player_module.threading, 'Thread') as thread:
+        thread.return_value.start.side_effect = RuntimeError('cannot start thread')
+        assert not player.load_and_play('audio', {'id': 'song'})
+    assert player.current_track is None
+    assert player.process is None
+    assert player._playback_socket is None
+    proc.terminate.assert_called_once()
+    stream.close.assert_called()
+    sock.close.assert_called()
+    thread.return_value.join.assert_not_called()
+
+
 @pytest.mark.parametrize('title,duration,accepted', [
     ('Crave You (feat. Giselle)', '3:55', True),
     ('Crave You (feat. Giselle)', '4:19', False),
