@@ -62,6 +62,7 @@ class SpotifyAudio:
         self._lock = threading.RLock()
         self._events = threading.Condition()
         self._last_event: Dict[str, Any] = {}
+        self._events_fifo: Optional[Path] = None
 
         # Playback state read by the player facade.
         self.track_id: Optional[str] = None
@@ -143,7 +144,9 @@ class SpotifyAudio:
         return False
 
     def _make_event_fifo(self) -> Path:
-        path = self.dir / "events.fifo"
+        # One FIFO per session: a reader left over from an earlier session
+        # would otherwise take events meant for this one.
+        path = self.dir / f"events-{os.getpid()}-{id(self)}.fifo"
         try:
             if path.exists() and not stat.S_ISFIFO(path.stat().st_mode):
                 path.unlink()
@@ -151,7 +154,26 @@ class SpotifyAudio:
                 os.mkfifo(path, 0o600)
         except OSError:
             logger.exception("Could not create librespot event FIFO")
+        self._events_fifo = path
         return path
+
+    def _close_event_fifo(self) -> None:
+        """Wakes the event reader with an empty line so it exits, then removes the FIFO."""
+        path, self._events_fifo = self._events_fifo, None
+        if path is None:
+            return
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_NONBLOCK)
+            try:
+                os.write(fd, b"\n")
+            finally:
+                os.close(fd)
+        except OSError:
+            pass  # no reader is waiting
+        try:
+            path.unlink()
+        except OSError:
+            pass
 
     def _write_event_script(self) -> Path:
         path = self.dir / "onevent.sh"
@@ -229,6 +251,8 @@ class SpotifyAudio:
             return
         with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as stream:
             for line in stream:
+                if not line.strip():
+                    return  # shutdown() asked this reader to stop
                 parts = (line.rstrip("\n").split("\t") + ["", "", "", ""])[:4]
                 self._handle_event(*parts)
 
@@ -374,6 +398,7 @@ class SpotifyAudio:
                         proc.kill()
             self._librespot = None
             self._sink = None
+            self._close_event_fifo()
 
 
 def _ms_to_s(value: str) -> Optional[float]:

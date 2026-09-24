@@ -314,7 +314,8 @@ class MPVController:
                 if callback is not None:
                     callback(reason)
 
-            if not self.spotify.play(uri, duration, _ended):
+            spotify = self.spotify
+            if spotify is None or not spotify.play(uri, duration, _ended):
                 return False
             with self._lock:
                 self._on_spotify = True
@@ -465,9 +466,16 @@ class MPVController:
             except Exception:
                 logger.exception("Playback completion callback failed")
 
+    def _active_spotify(self) -> Optional[Any]:
+        """The Spotify player while a song plays on it. Read once per call:
+        Spotify audio can be switched off from another thread."""
+        spotify = self.spotify
+        return spotify if self._on_spotify and spotify is not None else None
+
     def pause(self):
-        if self._on_spotify:
-            self.spotify.pause()
+        spotify = self._active_spotify()
+        if spotify:
+            spotify.pause()
             self.is_paused = True
             return
         with self._lock:
@@ -475,8 +483,9 @@ class MPVController:
             self._send_command(["set_property", "pause", True])
 
     def resume(self):
-        if self._on_spotify:
-            self.spotify.resume()
+        spotify = self._active_spotify()
+        if spotify:
+            spotify.resume()
             self.is_paused = False
             return
         with self._lock:
@@ -484,24 +493,27 @@ class MPVController:
             self._send_command(["set_property", "pause", False])
 
     def toggle_pause(self):
-        if self._on_spotify:
-            (self.resume if self.spotify.is_paused else self.pause)()
+        spotify = self._active_spotify()
+        if spotify:
+            (self.resume if spotify.is_paused else self.pause)()
             return
         with self._lock:
             self.is_paused = not self.is_paused
             self._send_command(["set_property", "pause", self.is_paused])
 
     def seek(self, seconds_relative: float):
-        if self._on_spotify:
-            self.spotify.seek(self.spotify.position() + seconds_relative)
+        spotify = self._active_spotify()
+        if spotify:
+            spotify.seek(spotify.position() + seconds_relative)
             return
         with self._lock:
             self._send_command(["seek", seconds_relative, "relative"])
             self._last_pos = max(0.0, self._last_pos + seconds_relative)
 
     def seek_absolute(self, seconds_absolute: float):
-        if self._on_spotify:
-            self.spotify.seek(seconds_absolute)
+        spotify = self._active_spotify()
+        if spotify:
+            spotify.seek(seconds_absolute)
             return
         with self._lock:
             seconds_absolute = max(0.0, float(seconds_absolute))
@@ -509,8 +521,9 @@ class MPVController:
             self._last_pos = seconds_absolute
 
     def set_volume(self, volume: int):
-        if self.spotify is not None:
-            self.spotify.set_volume(volume)
+        spotify = self.spotify
+        if spotify is not None:
+            spotify.set_volume(volume)
         with self._lock:
             self._volume = max(0, min(100, volume))
             self._send_command(["set_property", "volume", self._volume])
@@ -520,29 +533,33 @@ class MPVController:
             return int(self._volume)
 
     def get_progress(self) -> tuple[float, float]:
-        if self._on_spotify and self.current_track:
+        spotify = self._active_spotify()
+        if spotify and self.current_track:
             # Pauses can come from another device (e.g. the phone app).
-            self.is_paused = self.spotify.is_paused
-            return self.spotify.position(), self.spotify.duration or self._duration
+            self.is_paused = spotify.is_paused
+            return spotify.position(), spotify.duration or self._duration
         if not self.current_track:
             return 0.0, 0.0
         return self._last_pos, self._duration
 
     def get_position(self) -> float:
-        if self._on_spotify:
-            return self.spotify.position()
         """Returns the current playback position in seconds."""
+        spotify = self._active_spotify()
+        if spotify:
+            return spotify.position()
         return float(self._last_pos)
 
     def get_duration(self) -> float:
-        if self._on_spotify:
-            return float(self.spotify.duration or self._duration)
         """Returns the current track duration in seconds."""
+        spotify = self._active_spotify()
+        if spotify:
+            return float(spotify.duration or self._duration)
         return float(self._duration)
 
     def stop(self):
-        if self.spotify is not None:
-            self.spotify.stop_playback()
+        spotify = self.spotify
+        if spotify is not None:
+            spotify.stop_playback()
         self._on_spotify = False
         listener_to_join = None
         playback_to_join = None

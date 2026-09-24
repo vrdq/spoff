@@ -97,3 +97,21 @@ def test_refused_audio_keys_fail_fast_and_turn_spotify_audio_off(tmp_path):
     assert not audio.running()                     # the app stops routing songs here
     with patch("spoff.spotify_audio.auth.spotify_api_request", return_value=(True, {}, "")):
         assert not audio.play("spotify:track:ABC", 100.0, lambda r: None, timeout=5)
+
+
+def test_shutdown_stops_the_event_reader_and_removes_its_fifo(tmp_path):
+    audio = _audio(tmp_path)
+    audio.dir.mkdir(parents=True)
+    fifo = audio._make_event_fifo()
+    reader = threading.Thread(target=audio._read_events, args=(fifo,), daemon=True)
+    reader.start()
+    audio.shutdown()
+    reader.join(timeout=3)
+    assert not reader.is_alive()
+    assert not fifo.exists()
+
+
+def test_each_session_gets_its_own_event_fifo(tmp_path):
+    first, second = _audio(tmp_path), _audio(tmp_path)
+    first.dir.mkdir(parents=True)
+    assert first._make_event_fifo() != second._make_event_fifo()

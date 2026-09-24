@@ -5927,8 +5927,15 @@ class SpoffTUI(App):
                     logger.exception("Could not open the librespot login page")
 
             if audio.start(on_login_url=_open_login):
+                if not get_saved_spotify_audio():
+                    # Switched off again while librespot was starting.
+                    audio.shutdown()
+                    return
+                previous = getattr(self, "spotify_audio", None)
                 self.spotify_audio = audio
                 self.player.spotify = audio
+                if previous is not None and previous is not audio:
+                    previous.shutdown()     # toggled on twice: keep one librespot
                 if not quiet:
                     _say("Spotify songs now play from Spotify.")
             else:
