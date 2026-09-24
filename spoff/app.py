@@ -310,6 +310,20 @@ def resolve_playlist_url(playlist: Dict[str, Any], default_engine: str = "ytmusi
     return "", ""
 
 
+def open_in_browser(url: str) -> None:
+    """Opens a URL detached from the terminal.
+
+    Launched through Python's webbrowser, browsers inherit Spoff's terminal and
+    print their warnings over the interface.
+    """
+    try:
+        subprocess.Popen(["xdg-open", url], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        import webbrowser
+        webbrowser.open(url)
+
+
 def copy_to_clipboard(text: str, app: Optional[Any] = None) -> bool:
     """
     Copies text to the system clipboard across Wayland (wl-copy), X11 (xclip/xsel),
@@ -2495,9 +2509,8 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
             return
 
         def _open():
-            import webbrowser
             try:
-                webbrowser.open(auth_url)
+                open_in_browser(auth_url)
             except Exception as e:
                 logger.error(f"Failed to open browser: {e}")
         threading.Thread(target=_open, daemon=True).start()
@@ -5908,9 +5921,8 @@ class SpoffTUI(App):
                 _say("Finish logging in to Spotify in your browser to turn on Spotify audio.")
 
             def _open_login(url: str) -> None:
-                import webbrowser
                 try:
-                    webbrowser.open(url)
+                    open_in_browser(url)
                 except Exception:
                     logger.exception("Could not open the librespot login page")
 
@@ -5947,7 +5959,6 @@ class SpoffTUI(App):
 
     def start_youtube_login(self) -> None:
         """Opens Google's sign-in for YouTube Music and waits for the browser to have it."""
-        import webbrowser
 
         def _say(text: str) -> None:
             self._on_ui(self.notify_user, text, force=True)
@@ -5955,7 +5966,7 @@ class SpoffTUI(App):
         existing = youtube_account.find_logged_in_browser()
         if existing is None:
             try:
-                webbrowser.open(youtube_account.LOGIN_URL)
+                open_in_browser(youtube_account.LOGIN_URL)
             except Exception:
                 logger.exception("Could not open the Google sign-in page")
             self.notify_user("Sign in with Google in your browser. Spoff picks it up automatically.", force=True)

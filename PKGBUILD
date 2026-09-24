@@ -15,6 +15,7 @@ depends=(
     'python-ytmusicapi'
     'python-pydbus'
     'python-gobject'
+    'python-secretstorage'
 )
 optdepends=(
     'cava: audio spectrum visualizer'
