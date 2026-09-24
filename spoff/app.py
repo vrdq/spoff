@@ -7610,9 +7610,6 @@ class SpoffTUI(App):
                 styled_text = Text.from_markup(f"[bold #ffffff]{escape(raw_name)}[/]")
             else:
                 styled_text = Text.from_markup(f"[#888888]{escape(raw_name)}[/]")
-            tracks = p.get("tracks")
-            count = len(tracks) if isinstance(tracks, list) else 0
-            styled_text.append(f"  {count}", style="#929292")
             st.add_row(styled_text, key=str(idx))
 
         if target_row is not None and 0 <= target_row < len(self.playlists):

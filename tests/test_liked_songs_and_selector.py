@@ -208,12 +208,12 @@ class TestPlaylistSelectorAndLikedTabAppLogic(unittest.TestCase):
         self.assertEqual(len(side_rows), 2)
         # pl_1 is the active playlist -> MUST have bold #ffffff style
         pl_1_text = side_rows[0][0]
-        self.assertTrue(pl_1_text.plain.startswith("Chill Beats  "))
+        self.assertEqual(pl_1_text.plain, "Chill Beats")
         self.assertTrue(any(span.style == "bold #ffffff" for span in pl_1_text.spans))
 
         # pl_2 is unselected -> MUST NOT have bold, must have #888888 style
         pl_2_text = side_rows[1][0]
-        self.assertTrue(pl_2_text.plain.startswith("Vaporwave  "))
+        self.assertEqual(pl_2_text.plain, "Vaporwave")
         self.assertFalse(any(span.style == "bold #ffffff" for span in pl_2_text.spans))
         self.assertTrue(any(span.style == "#888888" for span in pl_2_text.spans))
 

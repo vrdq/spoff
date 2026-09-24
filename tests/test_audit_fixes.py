@@ -346,8 +346,8 @@ class AuditFixesTests(unittest.TestCase):
         self.assertEqual(len(side_rows), 2)
         fav_text = side_rows[0][0].plain
         chill_text = side_rows[1][0].plain
-        self.assertEqual(fav_text, "Favorites  0")
-        self.assertEqual(chill_text, "Chill Beats  0")
+        self.assertEqual(fav_text, "Favorites")
+        self.assertEqual(chill_text, "Chill Beats")
         self.assertNotIn("●", chill_text)
         self.assertTrue(any(span.style == "bold #ffffff" for span in side_rows[1][0].spans))
 

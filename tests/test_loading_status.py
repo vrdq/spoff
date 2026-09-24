@@ -102,8 +102,8 @@ def test_sidebar_browsing_preserves_status_and_marks_open_playlist(size):
             await pilot.press('down')
             await pilot.pause()
             assert application.current_playlist_id == 'one'
-            assert table.get_cell_at(app.Coordinate(0, 0)).plain == 'Evening  1'
-            assert table.get_cell_at(app.Coordinate(1, 0)).plain == 'Weekend  0'
+            assert table.get_cell_at(app.Coordinate(0, 0)).plain == 'Evening'
+            assert table.get_cell_at(app.Coordinate(1, 0)).plain == 'Weekend'
             assert table.show_cursor
             selected_row = table.cursor_row
             application.query_one('#track-table', app.DataTable).focus()
