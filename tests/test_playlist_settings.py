@@ -86,3 +86,25 @@ def test_followed_playlist_edits_never_reach_spotify(tmp_path, monkeypatch):
          patch.object(auth, "spotify_api_request", return_value=(False, None, "HTTP 403: Forbidden")):
         ok, msg = auth.update_spotify_playlist_details("x", public=True, token="t", remote_id="r" * 22)
     assert not ok and "owner" in msg
+
+
+def test_hints_follow_the_key_hints_setting(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    storage.save_saved_playlists([{"id": "local_c", "name": "Mix", "tracks": []}])
+    from spoff.app import SpoffTUI, PlaylistSettingsModal
+
+    async def footer_text(advanced):
+        app = SpoffTUI(visualizer_enabled=False, notifications_enabled=False)
+        app.advanced_mode = advanced
+        with patch.object(app, "check_github_updates_bg"), \
+             patch.object(app, "backfill_playlists_art_bg"), \
+             patch.object(app.player, "start_mpv"), \
+             patch("spoff.app.is_first_launch", return_value=False):
+            async with app.run_test() as pilot:
+                await pilot.pause(0.6)
+                app.push_screen(PlaylistSettingsModal({"id": "local_c", "name": "Mix"}, linked=False, followed=False))
+                await pilot.pause(0.2)
+                return str(app.screen.query_one("#plset-footer").render())
+
+    assert "esc done" in asyncio.run(footer_text(False))
+    assert asyncio.run(footer_text(True)).strip() == ""

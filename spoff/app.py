@@ -1855,8 +1855,10 @@ class PlaylistSettingsModal(SafeModalScreen[Optional[Dict[str, Any]]]):
                 yield Input(value=str(self.playlist.get("description") or ""), placeholder="none",
                             max_length=300, id="plset-desc", classes="plset-input")
             yield VisibilityToggle(id="plset-visibility", classes="setting-toggle-item")
-            yield Static("[dim]j/k move · enter edit · space public/private · esc done[/dim]",
-                         id="plset-footer")
+            # Hidden with key hints off (advanced mode), like the other screens.
+            hints = "" if getattr(self.app, "advanced_mode", False) else \
+                "[dim]j/k move · enter edit · space public/private · esc done[/dim]"
+            yield Static(hints, id="plset-footer", classes="has-hints" if hints else "")
 
     def on_mount(self) -> None:
         for inp in self.query(Input):
@@ -4973,9 +4975,12 @@ class SpoffTUI(App):
         color: #5f5f5f;
     }
 
+    #plset-footer.has-hints {
+        margin-top: 1;
+    }
+
     #plset-footer {
         height: auto;
-        margin-top: 1;
         color: #555555;
     }
 
