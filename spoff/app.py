@@ -80,7 +80,8 @@ try:
         get_saved_last_tab, get_saved_last_playlist_id, save_last_tab,
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
-        record_deleted_spotify_playlist_id, liked_index, storage_transaction
+        record_deleted_spotify_playlist_id, liked_index, storage_transaction,
+        update_playlist_details
     )
     from .streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from .search import live_search_tracks, resolve_direct_track_url
@@ -99,7 +100,7 @@ try:
         reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track, extract_spotify_playlist_id,
         fetch_liked_songs, merge_spotify_and_client_tracks, sync_playlist_tracks_to_spotify,
-        apply_pending_unlikes
+        apply_pending_unlikes, update_spotify_playlist_details
     )
     from .lyrics import fetch_lyrics, get_active_lyric_index
     from .mpris import MPRISService
@@ -133,7 +134,8 @@ except ImportError:
         get_saved_last_tab, get_saved_last_playlist_id, save_last_tab,
         remove_liked_track, move_liked_track, move_playlist_track,
         remove_track_from_playlist_by_index_or_track, quarantine_cached_track,
-        record_deleted_spotify_playlist_id, liked_index, storage_transaction
+        record_deleted_spotify_playlist_id, liked_index, storage_transaction,
+        update_playlist_details
     )
     from streamer import search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from search import live_search_tracks, resolve_direct_track_url
@@ -152,7 +154,7 @@ except ImportError:
         reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track, extract_spotify_playlist_id,
         fetch_liked_songs, merge_spotify_and_client_tracks, sync_playlist_tracks_to_spotify,
-        apply_pending_unlikes
+        apply_pending_unlikes, update_spotify_playlist_details
     )
     from lyrics import fetch_lyrics, get_active_lyric_index
     from mpris import MPRISService
@@ -462,6 +464,7 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "delete_playlist": "D",
     "rename_playlist": "R",
     "clone_playlist": "Y",
+    "playlist_settings": "S",
     "open_spotify_auth": "L",
     "nav_search": "1",
     "nav_playlist": "2",
@@ -515,6 +518,7 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "delete_playlist": ("Playlists", "Delete Entire Playlist"),
     "rename_playlist": ("Playlists", "Rename Playlist (R)"),
     "clone_playlist": ("Playlists", "Clone / Copy Playlist (Y)"),
+    "playlist_settings": ("Playlists", "Playlist Settings (S)"),
     "open_spotify_auth": ("Integrations", "Spotify Menu & Login"),
     "nav_search": ("Navigation", "Switch to Search"),
     "nav_playlist": ("Navigation", "Switch to Playlists"),
@@ -1799,6 +1803,152 @@ class ClonePlaylistModal(SafeModalScreen[Optional[str]]):
         self.dismiss(None)
 
 
+class VisibilityToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, PlaylistSettingsModal):
+            self.screen.toggle_visibility()
+
+
+class PlaylistField(Vertical):
+    """A text field in normal mode: focusable as a row, edited only after enter/i."""
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, PlaylistSettingsModal):
+            self.screen.start_editing(self)
+
+
+class PlaylistSaveRow(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, PlaylistSettingsModal):
+            self.screen.action_save()
+
+
+class PlaylistSettingsModal(SafeModalScreen[Optional[Dict[str, Any]]]):
+    """Name, description, and visibility for one playlist. Returns the edited values.
+
+    Vim-style: normal mode moves between rows with j/k; enter or i edits a text
+    field, and esc or enter leaves the field again.
+    """
+    ROW_IDS = ["plset-name-field", "plset-desc-field", "plset-visibility", "plset-save"]
+
+    def __init__(self, playlist: Dict[str, Any], linked: bool, followed: bool):
+        super().__init__()
+        self.playlist = playlist
+        self.linked = linked
+        self.followed = followed
+        self.public = bool(playlist.get("public", False))
+
+    def compose(self) -> ComposeResult:
+        if self.followed:
+            where = "Someone else's playlist, so changes stay in Spoff."
+        elif self.linked:
+            where = "Changes are saved to Spotify too."
+        else:
+            where = "Not on Spotify yet. These apply when it syncs."
+        with Vertical(id="plset-dialog"):
+            with Horizontal(id="plset-header"):
+                yield Static("PLAYLIST SETTINGS", id="plset-title")
+                yield Static("[dim]esc[/dim]", id="plset-close")
+            yield Static(f"[#888888]{escape(where)}[/]", id="plset-where")
+            with PlaylistField(id="plset-name-field", classes="plset-field"):
+                yield Static("NAME", classes="settings-section")
+                yield Input(value=str(self.playlist.get("name") or ""), max_length=100,
+                            id="plset-name", classes="plset-input")
+            with PlaylistField(id="plset-desc-field", classes="plset-field"):
+                yield Static("DESCRIPTION", classes="settings-section")
+                yield Input(value=str(self.playlist.get("description") or ""), placeholder="Optional",
+                            max_length=300, id="plset-desc", classes="plset-input")
+            yield VisibilityToggle(id="plset-visibility", classes="setting-toggle-item")
+            yield PlaylistSaveRow("Save changes", id="plset-save", classes="setting-toggle-item")
+            yield Static("", id="plset-error")
+            yield Static("[dim]j/k move · enter edit · space public/private · w save · esc cancel[/dim]",
+                         id="plset-footer")
+
+    def on_mount(self) -> None:
+        for inp in self.query(Input):
+            inp.can_focus = False  # normal mode: rows take focus, not the text boxes
+        self._render_visibility()
+        self.query_one("#plset-name-field", PlaylistField).focus()
+
+    def _render_visibility(self) -> None:
+        label = "public" if self.public else "private"
+        note = "anyone with the link can find it" if self.public else "only you can see it"
+        self.query_one("#plset-visibility", Static).update(
+            SettingsModal._row("Visibility", label, on=self.public or None) + f"  [#5a5a5a]{note}[/]"
+        )
+
+    def toggle_visibility(self) -> None:
+        self.public = not self.public
+        self._render_visibility()
+
+    def start_editing(self, field: "PlaylistField") -> None:
+        inp = field.query_one(Input)
+        inp.can_focus = True
+        inp.focus()
+        inp.cursor_position = len(inp.value)
+
+    def stop_editing(self) -> None:
+        inp = self.focused
+        if isinstance(inp, Input):
+            field = inp.parent
+            inp.can_focus = False
+            if isinstance(field, PlaylistField):
+                field.focus()
+
+    def _move(self, step: int) -> None:
+        current = self.focused.id if self.focused is not None else None
+        idx = self.ROW_IDS.index(current) if current in self.ROW_IDS else 0
+        self.query_one(f"#{self.ROW_IDS[(idx + step) % len(self.ROW_IDS)]}").focus()
+
+    def on_key(self, event: events.Key) -> None:
+        key = event.key
+        focused = self.focused
+        if isinstance(focused, Input):
+            # Edit mode: only esc leaves; everything else is typing (enter is handled on submit).
+            if key == "escape":
+                self.stop_editing()
+            else:
+                return
+        elif key in ("j", "down", "tab"):
+            self._move(1)
+        elif key in ("k", "up", "shift+tab"):
+            self._move(-1)
+        elif key in ("g", "home"):
+            self.query_one(f"#{self.ROW_IDS[0]}").focus()
+        elif key in ("G", "end"):
+            self.query_one(f"#{self.ROW_IDS[-1]}").focus()
+        elif isinstance(focused, PlaylistField) and key in ("enter", "i", "a"):
+            self.start_editing(focused)
+        elif focused is not None and focused.id == "plset-visibility" and key in ("enter", "space", "h", "l", "left", "right"):
+            self.toggle_visibility()
+        elif (focused is not None and focused.id == "plset-save" and key == "enter") or key == "w":
+            self.action_save()
+        elif key in ("escape", "q"):
+            self.dismiss(None)
+        else:
+            return
+        event.prevent_default()
+        event.stop()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        self.stop_editing()
+
+    def action_save(self) -> None:
+        name = self.query_one("#plset-name", Input).value.strip()
+        if not name:
+            self.query_one("#plset-error", Static).update("[#e06c75]Give the playlist a name.[/]")
+            self.query_one("#plset-name-field", PlaylistField).focus()
+            return
+        description = " ".join(self.query_one("#plset-desc", Input).value.split())
+        self.dismiss({"name": name, "description": description, "public": self.public})
+
+
 class DeletePlaylistModal(SafeModalScreen[bool]):
     """Modal requiring explicit typing of the playlist name to permanently delete."""
     BINDINGS = [
@@ -2021,10 +2171,11 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
     def compose(self) -> ComposeResult:
         with Vertical(id="spotify-dialog"):
             is_connected = bool(self.auth_session and (self.auth_session.get("access_token") or self.auth_session.get("refresh_token")))
-            if self.first_run and not is_connected:
-                yield Static("WELCOME TO SPOFF - SPOTIFY SETUP", id="spotify-title")
-            else:
-                yield Static("SPOTIFY ACCOUNT", id="spotify-title")
+            title = "Connect Spotify" if (self.first_run and not is_connected) else "Spotify Account"
+            with Horizontal(id="spotify-header-bar"):
+                yield Static(title, id="spotify-title")
+                yield Static("[dim]esc[/dim]", id="spotify-close-hint")
+
             if is_connected:
                 user = self.auth_session.get("user", {})
                 name = user.get("display_name") or user.get("id") or "Spotify User"
@@ -2032,20 +2183,20 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
                 plan = user.get("product", "free").capitalize()
                 u_id = user.get("id") or ""
 
-                user_line = f"User: [bold #ffffff]{escape(str(name))}[/]"
+                user_line = f"User    [#e2e2e2]{escape(str(name))}[/]"
                 if email:
-                    user_line += f"  [#767676]({escape(str(email))})[/]"
+                    user_line += f"  [#555555]({escape(str(email))})[/]"
                 elif u_id and u_id != name:
-                    user_line += f"  [#767676](@{escape(str(u_id))})[/]"
+                    user_line += f"  [#555555](@{escape(str(u_id))})[/]"
 
                 yield Static(user_line, id="spotify-user-info")
-                yield Static(f"Plan: [bold #569f68]Spotify {escape(str(plan))}[/]", id="spotify-desc")
+                yield Static(f"Plan    [#e2e2e2]Spotify {escape(str(plan))}[/]", id="spotify-desc")
 
                 can_modify = has_modify_scopes()
                 if can_modify:
-                    yield Static("[bold #569f68]● Two-way synchronization active[/]  [dim](changes sync to your Spotify account)[/dim]", id="spotify-status")
+                    yield Static("[#6cc483]● Sync active[/]  [dim]Changes sync to your Spotify account[/dim]", id="spotify-status")
                 else:
-                    yield Static("[bold #c4a768]▲ Permissions update available[/]  [dim](re-link once to enable two-way sync)[/dim]", id="spotify-status")
+                    yield Static("[#c4a768]▲ Permissions update available[/]  [dim]Re-link once to enable two-way sync[/dim]", id="spotify-status")
 
                 is_adv = getattr(self.app, "advanced_mode", False)
                 with Horizontal(id="spotify-actions"):
@@ -2067,10 +2218,10 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
                     yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff, and enable two-way synchronization. You can also skip and use local offline playback anytime.", id="spotify-desc")
                 else:
                     yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff, and enable two-way synchronization.", id="spotify-desc")
-                yield Static("[dim]Status: Not connected[/dim]", id="spotify-status")
+                yield Static("[dim]Not connected[/dim]", id="spotify-status")
 
                 with Horizontal(id="spotify-actions"):
-                    yield Button("Browser Login" if is_adv else r"\[Enter] Browser Login", variant="primary", id="btn-login")
+                    yield Button("Log In" if is_adv else r"\[Enter] Log In", variant="primary", id="btn-login")
                     if is_adv:
                         close_label = "Skip" if self.first_run else "Cancel"
                     else:
@@ -2103,9 +2254,9 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
                                 save_spotify_auth(current)
                             name = prof.get("display_name") or prof.get("id") or "Spotify User"
                             email = prof.get("email") or ""
-                            line = f"User: [bold #ffffff]{escape(str(name))}[/]"
+                            line = f"User    [#e2e2e2]{escape(str(name))}[/]"
                             if email:
-                                line += f"  [#767676]({escape(str(email))})[/]"
+                                line += f"  [#555555]({escape(str(email))})[/]"
                             def _update():
                                 if not self.is_mounted:
                                     return
@@ -2162,7 +2313,7 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
             self.dismiss("logged_out")
 
         self.app.push_screen(
-            ConfirmModal("LOG OUT OF SPOTIFY", "Log out? Your library stays in Spoff; sync stops until you log in again.", confirm_label="Log Out"),
+            ConfirmModal("Log out of Spotify", "Log out? Your library stays in Spoff; sync stops until you log in again.", confirm_label="Log Out"),
             _on_confirm,
         )
 
@@ -2232,10 +2383,10 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
         auth_url, state = build_auth_url(self.pkce_verifier)
 
         try:
-            self.query_one("#spotify-status", Static).update("[bold #c4a768]Waiting for authorization in browser...[/]")
+            self.query_one("#spotify-status", Static).update("[#c4a768]Waiting for authorization in browser...[/]")
             inst = self.query_one("#spotify-instruction", Static)
             inst.update(
-                f"[dim]If your browser did not open, visit:[/dim]\n[#569f68]{auth_url}[/]"
+                f"[dim]If your browser did not open, visit:[/dim]\n[#4f8a5e]{auth_url}[/]"
             )
             inst.display = True
             hint = self.query_one("#spotify-hint", Static)
@@ -2248,7 +2399,7 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
             if err:
                 def _show_err():
                     try:
-                        self.query_one("#spotify-status", Static).update(f"[bold #c47676]Login failed: {err}[/]")
+                        self.query_one("#spotify-status", Static).update(f"[#c47676]Login failed: {err}[/]")
                     except Exception:
                         pass
                     self.is_logging_in = False
@@ -2264,7 +2415,7 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
         except Exception as e:
             logger.error(f"Failed to start OAuth server: {e}")
             try:
-                self.query_one("#spotify-status", Static).update(f"[bold #c47676]Could not bind port {SPOTIFY_PORT}: {e}[/]")
+                self.query_one("#spotify-status", Static).update(f"[#c47676]Could not bind port {SPOTIFY_PORT}: {e}[/]")
             except Exception:
                 pass
             self.is_logging_in = False
@@ -2299,7 +2450,7 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
                     return
                 if not tokens or not tokens.get("access_token"):
                     try:
-                        self.query_one("#spotify-status", Static).update("[bold #c47676]Token exchange failed. Please try again.[/]")
+                        self.query_one("#spotify-status", Static).update("[#c47676]Token exchange failed. Please try again.[/]")
                     except Exception:
                         pass
                     self.is_logging_in = False
@@ -2485,6 +2636,7 @@ class HelpModal(SafeModalScreen[None]):
             (f"{k_add}, +", "Add track to playlist"),
             (f"{k_ren_pl}, F2", "Rename selected playlist"),
             (f"{k_cln_pl}, Alt+c", "Clone / copy playlist"),
+            (format_key_display(kb.get("playlist_settings", "S")), "Playlist settings (name, public)"),
             (f"{k_share_pl}", "Copy playlist link to clipboard"),
             (f"{k_imp}", "New playlist / import link"),
             (f"{k_spot}", "Spotify login & sync"),
@@ -4735,6 +4887,79 @@ class SpoffTUI(App):
 
     #settings-footer {
         height: 1;
+        color: #555555;
+    }
+
+    /* MODAL: PLAYLIST SETTINGS */
+    PlaylistSettingsModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.75);
+    }
+
+    #plset-where {
+        margin-bottom: 1;
+    }
+
+    #plset-dialog {
+        width: 74;
+        max-width: 96%;
+        height: auto;
+        background: #141414;
+        border: solid #2a2a2a;
+        padding: 1 2;
+    }
+
+    #plset-header {
+        height: 2;
+        border-bottom: solid #222222;
+        margin-bottom: 1;
+    }
+
+    #plset-title {
+        width: 1fr;
+        text-style: bold;
+        color: #ffffff;
+    }
+
+    #plset-close {
+        width: auto;
+    }
+
+    .plset-input {
+        background: #101010;
+        border: tall #262626;
+        color: #e2e2e2;
+        margin-bottom: 0;
+    }
+
+    .plset-input:focus {
+        border: tall #569f68;
+    }
+
+    .plset-field {
+        height: auto;
+        padding-left: 1;
+        border-left: outer transparent;
+    }
+
+    /* Same focus bar as the settings rows; the input's own border shows edit mode. */
+    .plset-field:focus {
+        border-left: outer #569f68;
+        background: #1a1a1a;
+    }
+
+    #plset-save {
+        margin-top: 1;
+        color: #6cc483;
+    }
+
+    #plset-error {
+        height: auto;
+        margin-top: 1;
+    }
+
+    #plset-footer {
+        height: auto;
         color: #555555;
     }
 
@@ -8436,6 +8661,52 @@ class SpoffTUI(App):
             handle_rename_submit
         )
 
+    def action_playlist_settings(self):
+        if isinstance(self.focused, Input):
+            return
+        on_sidebar = bool(self.focused and getattr(self.focused, "id", None) == "side-table")
+        if self.active_tab == "liked" and not on_sidebar:
+            self.notify_user("Liked Songs has no playlist settings.")
+            return
+        if self.active_tab != "playlist" and not on_sidebar:
+            self.notify_user("Select a playlist in the sidebar first.")
+            return
+        _, target_pl = self._get_target_playlist()
+        if not target_pl or not target_pl.get("id"):
+            self.notify_user("No playlist selected.")
+            return
+
+        pl_id = str(target_pl["id"])
+        remote_id = extract_spotify_playlist_id(target_pl)
+        me = ((load_spotify_auth() or {}).get("user") or {}).get("id")
+        owner = target_pl.get("owner_id")
+        followed = bool(remote_id and owner and me and owner != me)
+
+        def _on_done(result: Optional[Dict[str, Any]]) -> None:
+            if not result:
+                return
+            current = {"name": target_pl.get("name") or "", "description": target_pl.get("description") or "",
+                       "public": bool(target_pl.get("public", False))}
+            changes = {k: v for k, v in result.items() if current.get(k) != v}
+            if not changes:
+                return
+            update_playlist_details(pl_id, changes)
+            self.playlists = load_saved_playlists()
+            self.refresh_side_table()
+            name = result["name"]
+            if not remote_id or followed:
+                self.notify_user(f"Saved settings for '{name}'.")
+                return
+            self.notify_user(f"Saved settings for '{name}'. Updating Spotify…")
+
+            def _push():
+                ok, msg = update_spotify_playlist_details(pl_id, remote_id=remote_id, **changes)
+                text = f"'{name}' updated on Spotify." if ok else f"Saved in Spoff, but Spotify said: {msg}"
+                self._on_ui(self.notify_user, text, force=True)
+            self._submit_spotify_job(_push)
+
+        self.push_screen(PlaylistSettingsModal(target_pl, linked=bool(remote_id), followed=followed), _on_done)
+
     def action_clone_playlist(self):
         if isinstance(self.focused, Input):
             return
@@ -8872,7 +9143,9 @@ class SpoffTUI(App):
                     pl_del = self.keybindings.get("delete_playlist", "D")
                     del_hint = f"{format_key_display(pl_del)}: del  |  " if pl_del else ""
                     pl_share = self.keybindings.get("share_playlist", "y")
-                    share_hint = f"{ren_hint}{cln_hint}{del_hint}" + (f"{format_key_display(pl_share)}: share pl  |  " if pl_share else "")
+                    pl_set = self.keybindings.get("playlist_settings", "S")
+                    set_hint = f"{format_key_display(pl_set)}: settings  |  " if pl_set else ""
+                    share_hint = f"{set_hint}{ren_hint}{cln_hint}{del_hint}" + (f"{format_key_display(pl_share)}: share pl  |  " if pl_share else "")
                 else:
                     share_bound = self.keybindings.get("share_track", "")
                     share_hint = f"{format_key_display(share_bound)}: share  |  " if share_bound else ""

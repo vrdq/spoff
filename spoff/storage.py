@@ -1246,6 +1246,14 @@ def move_saved_playlist(playlist_id: str, delta: int) -> bool:
     return True
 
 @transactional
+def update_playlist_details(playlist_id: str, changes: Dict[str, Any]) -> bool:
+    """Saves name/description/visibility edits for a playlist."""
+    allowed = {k: v for k, v in changes.items() if k in ("name", "description", "public")}
+    if not allowed:
+        return False
+    return mutate_playlist(playlist_id, lambda p: p.update(allowed))
+
+@transactional
 def mutate_playlist(playlist_id: str, mutate: Callable[[Dict[str, Any]], None]) -> bool:
     """Atomically loads, mutates, and saves a playlist by ID."""
     playlists = load_saved_playlists()

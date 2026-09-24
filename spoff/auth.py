@@ -1,4 +1,5 @@
 import re
+import html
 import json
 import time
 import base64
@@ -502,7 +503,9 @@ def fetch_user_playlists(token: str) -> Optional[List[Dict[str, Any]]]:
                 "name": item.get("name", "Untitled"),
                 "description": item.get("description", ""),
                 "url": item.get("external_urls", {}).get("spotify", ""),
-                "tracks_count": item.get("tracks", {}).get("total", 0)
+                "tracks_count": item.get("tracks", {}).get("total", 0),
+                "public": item.get("public"),
+                "owner_id": (item.get("owner") or {}).get("id"),
             })
         url = res.get("next")
     return playlists
@@ -867,6 +870,7 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
                     if p.get("id") != p_id and not p.get("spotify_id"):
                         p["spotify_id"] = p_id
                     p["in_spotify_library"] = True
+                    _apply_remote_details(p, pl)
                     found = True
                     break
             if not found:
@@ -880,6 +884,7 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
                         "tracks": tracks,
                         "in_spotify_library": True,
                     })
+                    _apply_remote_details(current_playlists[-1], pl)
             synced_count += 1
 
         # Playlists deleted (or unfollowed) on Spotify leave Spoff too. Only
@@ -1109,10 +1114,65 @@ def resolve_spotify_track_info(track: Dict[str, Any], token: Optional[str] = Non
     return None
 
 
+def _apply_remote_details(local: Dict[str, Any], remote: Dict[str, Any]) -> None:
+    """Copies visibility, description, and owner from a fetched Spotify playlist."""
+    if remote.get("public") is not None:
+        local["public"] = bool(remote["public"])
+    if remote.get("description"):
+        # Spotify returns descriptions HTML-escaped (&#x27; and so on).
+        local["description"] = html.unescape(str(remote["description"]))
+    if remote.get("owner_id"):
+        local["owner_id"] = remote["owner_id"]
+
+def _local_playlist_details(playlist_id: str) -> Tuple[bool, str]:
+    """(public, description) chosen for a local playlist before it reaches Spotify."""
+    pl = next((p for p in load_saved_playlists() if p.get("id") == playlist_id), None) or {}
+    return bool(pl.get("public", False)), str(pl.get("description") or "")
+
+def update_spotify_playlist_details(
+    playlist_id: str,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    public: Optional[bool] = None,
+    token: Optional[str] = None,
+    remote_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """Pushes a playlist's name, description, and/or visibility to Spotify."""
+    body: Dict[str, Any] = {}
+    if name is not None:
+        body["name"] = name
+    if description is not None:
+        body["description"] = description
+    if public is not None:
+        body["public"] = bool(public)
+    if not body:
+        return True, "Nothing to update"
+    if not token:
+        token = get_valid_token()
+    if not token:
+        return False, "Not logged in to Spotify"
+    if not has_modify_scopes():
+        return False, "Spotify permission required: re-link your account (press L)"
+    target = remote_id or extract_spotify_playlist_id(playlist_id)
+    if not target:
+        pl = next((p for p in load_saved_playlists() if p.get("id") == playlist_id), None)
+        target = extract_spotify_playlist_id(pl) if pl else None
+    if not target:
+        return False, "Playlist isn't on Spotify yet"
+    ok, _, err = spotify_api_request(f"/playlists/{target}", method="PUT", body=body, token=token)
+    if ok:
+        return True, "Updated on Spotify"
+    if "404" in str(err) or "not found" in str(err).lower():
+        return False, "It was deleted on Spotify"
+    if "403" in str(err) or "forbidden" in str(err).lower():
+        return False, "Only the playlist's owner can change it on Spotify"
+    return False, err or "Spotify rejected the change"
+
 def create_spotify_playlist(
     playlist_name: str,
     token: Optional[str] = None,
-    description: str = "Synced from Spoff"
+    description: str = "",
+    public: bool = False,
 ) -> Tuple[bool, Optional[str], str]:
     """Creates a new playlist on the user's Spotify account."""
     if not token:
@@ -1126,7 +1186,7 @@ def create_spotify_playlist(
     create_body = {
         "name": clean_name,
         "description": description,
-        "public": False
+        "public": bool(public)
     }
     ok_create, pl_data, err = spotify_api_request("/me/playlists", method="POST", body=create_body, token=token)
     if not ok_create or not pl_data or "id" not in pl_data:
@@ -1275,7 +1335,8 @@ def add_track_to_spotify_account(
 
     # 3. If not found, create the playlist on Spotify and sync all tracks
     if not target_spotify_pl_id:
-        ok_create, new_sp_id, err = create_spotify_playlist(playlist_name, token=token)
+        is_public, desc = _local_playlist_details(playlist_id)
+        ok_create, new_sp_id, err = create_spotify_playlist(playlist_name, token=token, description=desc, public=is_public)
         if not ok_create or not new_sp_id:
             return False, f"Failed to create playlist on Spotify: {err}"
         target_spotify_pl_id = new_sp_id
@@ -1467,7 +1528,8 @@ def sync_playlist_tracks_to_spotify(
 
     was_unlinked = not bool(target_spotify_pl_id)
     if was_unlinked:
-        ok_cr, new_id, cr_err = create_spotify_playlist(pl_name, token=token)
+        is_public, desc = _local_playlist_details(playlist_id)
+        ok_cr, new_id, cr_err = create_spotify_playlist(pl_name, token=token, description=desc, public=is_public)
         if not ok_cr or not new_id:
             return False, f"Failed to create playlist on Spotify: {cr_err}"
         target_spotify_pl_id = new_id
@@ -1607,7 +1669,8 @@ def rename_spotify_playlist(
                 break
 
     if not target_spotify_pl_id:
-        ok_cr, new_id, err_cr = create_spotify_playlist(new_name, token=token)
+        is_public, desc = _local_playlist_details(playlist_id)
+        ok_cr, new_id, err_cr = create_spotify_playlist(new_name, token=token, description=desc, public=is_public)
         if ok_cr and new_id:
             mutate_playlist(playlist_id, lambda p: p.update(spotify_id=new_id, name=new_name))
             sync_playlist_tracks_to_spotify(playlist_id, token=token)
