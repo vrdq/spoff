@@ -533,3 +533,56 @@ def get_ytmusic_search_suggestions(query: str) -> List[str]:
     except Exception as e:
         logger.debug(f"YTM suggestions failed: {e}")
     return []
+
+
+def fetch_ytmusic_radio(video_id: str, limit: int = 25) -> List[Dict[str, Any]]:
+    """Fetches a radio / recommendations playlist based on a video ID using ytmusicapi."""
+    v_id = str(video_id or "").strip()
+    if not v_id:
+        return []
+    ytm = get_ytmusic_client()
+    if not ytm:
+        return []
+    try:
+        data = ytm.get_watch_playlist(videoId=v_id, limit=limit)
+        items = data.get("tracks", []) if isinstance(data, dict) else []
+        results: List[Dict[str, Any]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_vid = item.get("videoId")
+            if not item_vid:
+                continue
+            title = item.get("title") or "Unknown Track"
+            artists_list = item.get("artists", [])
+            artists_str = ", ".join(a.get("name", "") if isinstance(a, dict) else str(a) for a in artists_list) if artists_list else "Unknown Artist"
+            dur_raw = item.get("length")
+            dur_ms = 0
+            if dur_raw and isinstance(dur_raw, str) and ":" in dur_raw:
+                try:
+                    parts = [int(p) for p in dur_raw.split(":")]
+                    if len(parts) == 2:
+                        dur_ms = (parts[0] * 60 + parts[1]) * 1000
+                    elif len(parts) == 3:
+                        dur_ms = (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000
+                except Exception:
+                    pass
+            thumbs = item.get("thumbnail", [])
+            thumb_url = thumbs[-1].get("url") if thumbs and isinstance(thumbs[-1], dict) else f"https://img.youtube.com/vi/{item_vid}/hqdefault.jpg"
+            results.append({
+                "id": item_vid,
+                "title": title,
+                "artist": artists_str,
+                "duration_ms": dur_ms,
+                "url": f"https://www.youtube.com/watch?v={item_vid}",
+                "art_url": thumb_url,
+                "thumbnail": thumb_url,
+                "source": "ytmusic",
+            })
+            if len(results) >= limit:
+                break
+        return results
+    except Exception as e:
+        logger.debug(f"ytmusic get_watch_playlist failed for {v_id}: {e}")
+        return []
+

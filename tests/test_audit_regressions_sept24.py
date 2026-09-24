@@ -187,3 +187,78 @@ def test_search_and_resolve_stream_video_fallback(monkeypatch):
     assert res is not None
     assert res.get("stream_url") == "https://stream.url/audio.m4a"
 
+
+def test_fetch_spotify_recommendations(monkeypatch):
+    from spoff import auth
+
+    def mock_request(url, method="GET", token=None):
+        assert "/recommendations?seed_tracks=7gSWo5ym0jyT0tIQOpBDEK" in url
+        data = {
+            "tracks": [
+                {
+                    "id": "rec1",
+                    "name": "Satisfaction - Push Push Push",
+                    "artists": [{"name": "Eibell"}],
+                    "duration_ms": 162000,
+                    "uri": "spotify:track:rec1",
+                    "album": {"name": "Remix EP", "images": [{"url": "https://img.url"}]},
+                    "external_urls": {"spotify": "https://open.spotify.com/track/rec1"},
+                }
+            ]
+        }
+        return True, data, ""
+
+    monkeypatch.setattr(auth, "spotify_api_request", mock_request)
+    ok, recs, err = auth.fetch_spotify_recommendations("7gSWo5ym0jyT0tIQOpBDEK", token="fake_token")
+    assert ok
+    assert len(recs) == 1
+    assert recs[0]["id"] == "rec1"
+    assert recs[0]["title"] == "Satisfaction - Push Push Push"
+    assert recs[0]["artist"] == "Eibell"
+    assert recs[0]["source"] == "spotify"
+
+
+def test_fetch_ytmusic_radio(monkeypatch):
+    from spoff import ytmusic
+    mock_ytm = Mock()
+    mock_ytm.get_watch_playlist.return_value = {
+        "tracks": [
+            {
+                "videoId": "vid_rad_1",
+                "title": "Radio Track 1",
+                "artists": [{"name": "Radio Artist"}],
+                "length": "3:45",
+                "thumbnail": [{"url": "https://img.yt/1.jpg"}],
+            }
+        ]
+    }
+    monkeypatch.setattr(ytmusic, "get_ytmusic_client", lambda: mock_ytm)
+    recs = ytmusic.fetch_ytmusic_radio("vid_seed", limit=10)
+    assert len(recs) == 1
+    assert recs[0]["id"] == "vid_rad_1"
+    assert recs[0]["title"] == "Radio Track 1"
+    assert recs[0]["artist"] == "Radio Artist"
+    assert recs[0]["duration_ms"] == (3 * 60 + 45) * 1000
+
+
+def test_action_song_radio_tunes_and_loads(monkeypatch):
+    seed_track = {"id": "seed123456789012345678", "title": "Seed Song", "artist": "Seed Artist", "source": "spotify"}
+    fake = SimpleNamespace(
+        _is_ready=True,
+        focused=None,
+        active_tab="search",
+        _get_current_view_tracks=lambda: [seed_track],
+        player=Mock(current_track=None),
+        notify_user=Mock(),
+        _start_song_radio=lambda track: None,
+    )
+    # Mock table query
+    fake_tt = Mock(cursor_row=0, id="track-table")
+    fake.query_one = lambda sel, cls=None: fake_tt
+
+    # Test that action_song_radio locates the track and starts song radio
+    with patch.object(fake, "_start_song_radio") as mock_start:
+        SpoffTUI.action_song_radio(fake)
+        mock_start.assert_called_once_with(seed_track)
+
+

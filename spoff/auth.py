@@ -988,6 +988,61 @@ def search_spotify_tracks(query: str, limit: int = 25, token: Optional[str] = No
 
     return True, tracks, ""
 
+
+def fetch_spotify_recommendations(
+    seed_track_id: str,
+    limit: int = 25,
+    token: Optional[str] = None,
+) -> Tuple[bool, List[Dict[str, Any]], str]:
+    """
+    Fetches recommended tracks from Spotify seeded by a track ID.
+    Returns (success, list_of_tracks, status_message).
+    """
+    clean_id = str(seed_track_id or "").strip()
+    if clean_id.startswith("spotify:track:"):
+        clean_id = clean_id.split(":")[-1]
+    if not clean_id or len(clean_id) != 22:
+        return False, [], "Invalid Spotify track ID for recommendations."
+
+    if not token:
+        token = get_valid_token()
+    if not token:
+        return False, [], "Not logged in to Spotify. Press Shift+L or click Spotify to log in."
+
+    url = f"/recommendations?seed_tracks={urllib.parse.quote(clean_id)}&limit={limit}"
+    ok, data, err = spotify_api_request(url, method="GET", token=token)
+    if not ok or not data:
+        return False, [], err or "Failed to fetch Spotify recommendations."
+
+    items = data.get("tracks", [])
+    tracks: List[Dict[str, Any]] = []
+    for item in items:
+        if not item or not isinstance(item, dict):
+            continue
+        t_id = item.get("id")
+        title = item.get("name") or "Unknown Track"
+        artists = ", ".join(a.get("name", "Unknown") for a in item.get("artists", []))
+        duration_ms = item.get("duration_ms", 0)
+        uri = item.get("uri") or (f"spotify:track:{t_id}" if t_id else "")
+        album_info = item.get("album") or {}
+        album_name = album_info.get("name")
+        images = album_info.get("images") or []
+        art_url = images[0].get("url") if images and isinstance(images[0], dict) else None
+        tracks.append({
+            "id": t_id,
+            "title": title,
+            "artist": artists,
+            "duration_ms": duration_ms,
+            "uri": uri,
+            "album": album_name,
+            "art_url": art_url,
+            "url": item.get("external_urls", {}).get("spotify", f"https://open.spotify.com/track/{t_id}" if t_id else ""),
+            "source": "spotify"
+        })
+
+    return True, tracks, ""
+
+
 def search_spotify_track(
     title: str,
     artist: str = "",

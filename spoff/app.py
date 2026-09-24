@@ -453,6 +453,7 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "vol_mute": "f1",
     "toggle_shuffle": "s",
     "toggle_repeat": "r",
+    "song_radio": "ctrl+r",
     "focus_search": "slash",
     "download_offline": "b",
     "bulk_download_playlist": "B",
@@ -506,6 +507,7 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "vol_mute": ("Volume", "Mute / Unmute (F1)"),
     "toggle_shuffle": ("Playback", "Toggle Shuffle"),
     "toggle_repeat": ("Playback", "Cycle Repeat Mode"),
+    "song_radio": ("Playback", "Song Radio / Recommendations (Ctrl+R)"),
     "focus_search": ("Navigation", "Focus Search Bar"),
     "download_offline": ("Library", "Download Song / Playlist Offline (b)"),
     "bulk_download_playlist": ("Library", "Bulk Download Playlist Offline (B)"),
@@ -2584,6 +2586,7 @@ class HelpModal(SafeModalScreen[None]):
         ]
 
         k_dl = kcap("download_offline", "b")
+        k_radio = kcap("song_radio", "ctrl+r")
         k_vis_cycle = kcap("toggle_visualizer", "v")
         k_vis_toggle = kcap("toggle_vis_on_off", "V")
 
@@ -2592,6 +2595,7 @@ class HelpModal(SafeModalScreen[None]):
             (k_shuf, "Toggle shuffle mode"),
             (k_rep, "Cycle repeat (off / all / 1)"),
             (f"{k_prev}{sep}{k_next}{comma}{cap('F7/F9')}", "Previous / next track"),
+            (k_radio, "Song Radio / Recommended tracks"),
             (k_dl, "Download song / playlist offline"),
             (k_share, "Copy track link to clipboard"),
             (f"{cap('Left')}{sep}{cap('Right')}", "Seek -/+ 5 seconds"),
@@ -5064,6 +5068,8 @@ class SpoffTUI(App):
         Binding("y", "share_playlist", "Share Playlist"),
         Binding("s", "toggle_shuffle", "Shuffle"),
         Binding("r", "toggle_repeat", "Repeat"),
+        Binding("ctrl+r", "song_radio", "Radio"),
+        Binding("alt+r", "song_radio", "Radio", show=False),
         Binding("L", "open_spotify_auth", "Spotify", show=False),
         Binding("shift+l", "open_spotify_auth", "Spotify", show=False),
         Binding("u", "check_update", "Update", show=False),
@@ -8158,6 +8164,105 @@ class SpoffTUI(App):
         else:
             self.notify_user(f"Share link: {share_url}")
 
+    def action_song_radio(self):
+        if not getattr(self, "_is_ready", False):
+            return
+        f = None
+        try:
+            f = self.focused
+            if isinstance(f, Input):
+                return
+        except Exception:
+            f = None
+
+        row_idx = None
+        if isinstance(f, DataTable) and f.id == "track-table":
+            row_idx = f.cursor_row
+        elif self.active_tab in ("search", "playlist", "liked", "offline"):
+            try:
+                tt = self.query_one("#track-table", DataTable)
+                if tt.cursor_row is not None:
+                    row_idx = tt.cursor_row
+            except Exception:
+                pass
+
+        tracks = self._get_current_view_tracks() or []
+        track = None
+        if row_idx is not None and 0 <= row_idx < len(tracks) and f and f.id == "track-table":
+            track = tracks[row_idx]
+        elif getattr(self, "player", None) and self.player.current_track:
+            track = self.player.current_track
+        elif row_idx is not None and 0 <= row_idx < len(tracks):
+            track = tracks[row_idx]
+
+        if not track:
+            self.notify_user("No track selected or playing for Song Radio.")
+            return
+
+        self._start_song_radio(track)
+
+    @work(thread=True)
+    def _start_song_radio(self, track: Dict[str, Any]):
+        title = track.get("title") or "Unknown Track"
+        artist = track.get("artist") or "Unknown Artist"
+        self.notify_user(f"Tuning Song Radio for '{title}'...")
+
+        recs: List[Dict[str, Any]] = []
+        source_name = "Spotify"
+
+        # 1. Try Spotify recommendations if Spotify ID is available
+        sp_id = str(track.get("id") or "").strip() if track.get("source") == "spotify" or len(str(track.get("id") or "")) == 22 else str(track.get("spotify_id") or "").strip()
+        if sp_id and len(sp_id) == 22:
+            try:
+                from .auth import fetch_spotify_recommendations
+            except ImportError:
+                from auth import fetch_spotify_recommendations
+            ok, sp_recs, _ = fetch_spotify_recommendations(sp_id, limit=25)
+            if ok and sp_recs:
+                recs = sp_recs
+
+        # 2. Fall back to YouTube Music radio
+        if not recs:
+            try:
+                from .ytmusic import fetch_ytmusic_radio, get_ytmusic_client
+            except ImportError:
+                from ytmusic import fetch_ytmusic_radio, get_ytmusic_client
+
+            yt_id = track.get("id") if (track.get("source") in ("ytmusic", "youtube") or (len(str(track.get("id") or "")) == 11 and not str(track.get("id")).startswith("local_"))) else None
+            if not yt_id:
+                ytm = get_ytmusic_client()
+                if ytm:
+                    try:
+                        matches = ytm.search(f"{artist} {title}", filter="songs", limit=5)
+                        if matches and matches[0].get("videoId"):
+                            yt_id = matches[0]["videoId"]
+                    except Exception:
+                        pass
+            if yt_id:
+                yt_recs = fetch_ytmusic_radio(yt_id, limit=25)
+                if yt_recs:
+                    recs = [r for r in yt_recs if r.get("id") != track.get("id")]
+                    source_name = "YouTube Music"
+
+        if not recs:
+            self.notify_user(f"Could not find recommendations for '{title}'.", force=True)
+            return
+
+        combined = [track] + [r for r in recs if r.get("id") != track.get("id")]
+
+        def _publish_radio():
+            self.search_results = combined
+            self.active_tab = "search"
+            self.render_tracks(combined, select_row=0)
+            self._queue_origin = {"tab": "search", "playlist_id": None}
+            try:
+                self.query_one("#track-table", DataTable).focus()
+            except Exception:
+                pass
+            self.notify_user(f"Loaded Song Radio: {len(combined)} tracks based on '{title}' ({source_name}). Press Enter to play.", force=True)
+
+        self.call_from_thread(_publish_radio)
+
     def action_share_playlist(self):
         if not getattr(self, "_is_ready", False):
             return
@@ -9255,6 +9360,26 @@ class SpoffTUI(App):
             results = [direct_track]
             engine_name = "Direct Link"
             fallback_msg = f"Resolved direct track: '{direct_track.get('title', 'Track')}' by {direct_track.get('artist', 'Artist')}."
+            dt_id = str(direct_track.get("id") or "").strip()
+            recs = []
+            if direct_track.get("source") == "spotify" or len(dt_id) == 22:
+                try:
+                    from .auth import fetch_spotify_recommendations
+                except ImportError:
+                    from auth import fetch_spotify_recommendations
+                ok, sp_recs, _ = fetch_spotify_recommendations(dt_id, limit=24)
+                if ok and sp_recs:
+                    recs = sp_recs
+            elif direct_track.get("source") in ("ytmusic", "youtube") or len(dt_id) == 11:
+                try:
+                    from .ytmusic import fetch_ytmusic_radio
+                except ImportError:
+                    from ytmusic import fetch_ytmusic_radio
+                recs = fetch_ytmusic_radio(dt_id, limit=24)
+
+            if recs:
+                results = [direct_track] + [r for r in recs if r.get("id") != direct_track.get("id")]
+                fallback_msg = f"Resolved '{direct_track.get('title', 'Track')}' with {len(results)} Song Radio tracks. Press Enter to play."
         elif query.strip().startswith(("https://", "http://", "spotify:")):
             fallback_msg = "Could not resolve that track link. Check the link and try again."
         elif engine == "spotify":
@@ -9315,9 +9440,24 @@ class SpoffTUI(App):
             self.notify_user("Fetching tracks from Spotify link...")
             if parsed_sp and parsed_sp[0] == "track":
                 single = fetch_spotify_track(url)
-                pl = ({"id": f"local_spotify_track_{parsed_sp[1]}",
-                       "name": single.get("title") or "Imported Track",
-                       "tracks": [single]} if single else None)
+                if single:
+                    recs = []
+                    try:
+                        from .auth import fetch_spotify_recommendations
+                    except ImportError:
+                        from auth import fetch_spotify_recommendations
+                    recs_ok, sp_recs, _ = fetch_spotify_recommendations(parsed_sp[1], limit=25)
+                    if recs_ok and sp_recs:
+                        recs = sp_recs
+                    combined_tracks = [single] + [r for r in recs if r.get('id') != single.get('id')]
+                    t_title = single.get("title") or "Imported Track"
+                    pl = {
+                        "id": f"local_spotify_radio_{parsed_sp[1]}",
+                        "name": f"{t_title} (Radio)" if recs else t_title,
+                        "tracks": combined_tracks,
+                    }
+                else:
+                    pl = None
             elif parsed_sp and parsed_sp[0] == "album":
                 pl = fetch_spotify_album(url)
                 if pl:
@@ -9338,13 +9478,25 @@ class SpoffTUI(App):
             if parsed_yt and parsed_yt[0] == "album":
                 pl = fetch_ytmusic_album(url)
             elif parsed_yt and parsed_yt[0] == "track":
-                pl = fetch_ytmusic_track(url)
-                if pl:
-                    tracks = [pl]
-                    name = pl.get("title", "YouTube Track")
-                    pid = pl.get("id", "pl_" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:12])
-            else:
-                pl = fetch_ytmusic_playlist(url)
+                single = fetch_ytmusic_track(url)
+                if single:
+                    recs = []
+                    try:
+                        from .ytmusic import fetch_ytmusic_radio
+                    except ImportError:
+                        from ytmusic import fetch_ytmusic_radio
+                    yt_recs = fetch_ytmusic_radio(parsed_yt[1], limit=25)
+                    if yt_recs:
+                        recs = yt_recs
+                    combined_tracks = [single] + [r for r in recs if r.get('id') != single.get('id')]
+                    t_title = single.get("title") or "YouTube Track"
+                    pl = {
+                        "id": f"local_yt_radio_{parsed_yt[1]}",
+                        "name": f"{t_title} (Radio)" if recs else t_title,
+                        "tracks": combined_tracks,
+                    }
+                else:
+                    pl = None
 
             if pl and not tracks:
                 tracks = pl.get("tracks", [])
