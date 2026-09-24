@@ -8259,6 +8259,10 @@ class SpoffTUI(App):
                                         dur_ms = int(float(t.get("duration_ms") or 0))
                                     except (ValueError, TypeError):
                                         dur_ms = 0
+                                    try:
+                                        size_bytes = c.stat().st_size
+                                    except OSError:
+                                        continue
                                     idx[tid] = {
                                         **(entry or {}),
                                         "id": tid,
@@ -8266,7 +8270,7 @@ class SpoffTUI(App):
                                         "artist": t.get("artist", "Unknown"),
                                         "duration_ms": dur_ms,
                                         "filepath": str(c.resolve()),
-                                        "size_bytes": c.stat().st_size,
+                                        "size_bytes": size_bytes,
                                         "is_offline": True,
                                     }
                                     idx_changed = True

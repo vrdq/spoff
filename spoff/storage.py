@@ -1284,52 +1284,53 @@ def _reconcile_offline_cache(index: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str
             try:
                 if not p.is_file() or p.is_symlink():
                     continue
-                if p.suffix.lower() not in CACHE_EXTENSIONS or p.stat().st_size == 0:
+                file_size = p.stat().st_size
+                if p.suffix.lower() not in CACHE_EXTENSIONS or file_size == 0:
                     continue
                 val_id = p.stem
                 validate_track_id(val_id)
+
+                if val_id not in index:
+                    if known_meta is None:
+                        known_meta = {}
+                        try:
+                            for pl in load_saved_playlists():
+                                for t in pl.get("tracks", []):
+                                    if t.get("id"):
+                                        known_meta[t["id"]] = t
+                            for t in load_liked_songs():
+                                if t.get("id") and t["id"] not in known_meta:
+                                    known_meta[t["id"]] = t
+                        except Exception:
+                            pass
+
+                    m = known_meta.get(val_id, {})
+                    title = m.get("title") or f"Offline Track ({val_id[:11]})"
+                    artist = m.get("artist") or "Offline Library"
+                    dur = m.get("duration_ms") or 0
+                    entry = dict(m)
+                    entry.update({
+                        "id": val_id,
+                        "title": str(title),
+                        "artist": str(artist),
+                        "duration_ms": int(dur),
+                        "filepath": str(p.resolve()),
+                        "size_bytes": file_size,
+                        "is_offline": True,
+                    })
+                    index[val_id] = entry
+                    changed = True
+                else:
+                    entry = index[val_id]
+                    resolved_p = str(p.resolve())
+                    if entry.get("filepath") != resolved_p:
+                        entry["filepath"] = resolved_p
+                        changed = True
+                    if not entry.get("size_bytes"):
+                        entry["size_bytes"] = file_size
+                        changed = True
             except (ValueError, OSError):
                 continue
-
-            if val_id not in index:
-                if known_meta is None:
-                    known_meta = {}
-                    try:
-                        for pl in load_saved_playlists():
-                            for t in pl.get("tracks", []):
-                                if t.get("id"):
-                                    known_meta[t["id"]] = t
-                        for t in load_liked_songs():
-                            if t.get("id") and t["id"] not in known_meta:
-                                known_meta[t["id"]] = t
-                    except Exception:
-                        pass
-
-                m = known_meta.get(val_id, {})
-                title = m.get("title") or f"Offline Track ({val_id[:11]})"
-                artist = m.get("artist") or "Offline Library"
-                dur = m.get("duration_ms") or 0
-                entry = dict(m)
-                entry.update({
-                    "id": val_id,
-                    "title": str(title),
-                    "artist": str(artist),
-                    "duration_ms": int(dur),
-                    "filepath": str(p.resolve()),
-                    "size_bytes": p.stat().st_size,
-                    "is_offline": True,
-                })
-                index[val_id] = entry
-                changed = True
-            else:
-                entry = index[val_id]
-                resolved_p = str(p.resolve())
-                if entry.get("filepath") != resolved_p:
-                    entry["filepath"] = resolved_p
-                    changed = True
-                if not entry.get("size_bytes"):
-                    entry["size_bytes"] = p.stat().st_size
-                    changed = True
     except Exception as e:
         logger.debug(f"Cache reconciliation error: {e}")
     return index, changed
@@ -1399,7 +1400,11 @@ def get_cached_track_path(track_id: str) -> Optional[Path]:
 def register_cached_track(track_id: str, meta: Dict[str, Any], filepath: Path):
     val_id = validate_track_id(track_id)
     filepath = Path(filepath)
-    if not filepath.is_file() or filepath.stat().st_size == 0:
+    try:
+        st_size = filepath.stat().st_size
+    except OSError as exc:
+        raise ValueError(f"Incomplete cached audio file: {filepath}") from exc
+    if not filepath.is_file() or st_size == 0:
         raise ValueError(f"Incomplete cached audio file: {filepath}")
     index = load_offline_index()
     try:
@@ -1413,7 +1418,7 @@ def register_cached_track(track_id: str, meta: Dict[str, Any], filepath: Path):
         "artist": meta.get("artist", "Unknown"),
         "duration_ms": dur_ms,
         "filepath": str(filepath.resolve()),
-        "size_bytes": filepath.stat().st_size
+        "size_bytes": st_size
     }
     # Keep source identity when an offline track is played or downloaded again.
     for key in ("url", "uri", "source", "album", "art_url", "thumbnail", "resolved_url", "resolved_title"):

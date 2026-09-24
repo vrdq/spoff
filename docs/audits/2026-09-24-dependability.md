@@ -23,12 +23,32 @@
   a join on an unstarted thread. A fault-injection test verifies process
   termination, stream/socket closure, and cleared playback state.
 
+- `spoff/player.py:345`, `:350-377`: `_watch_playback` left `owned` unassigned if
+  stream closure or teardown encountered an `OSError`, raising `UnboundLocalError`
+  at callback invocation, dropping socket cleanup, and failing to notify the UI.
+  Initialized `owned = False`, protected `stream.close()` and `sock.close()` in
+  `finally:`, and guarded `sock.close()` in `_close_playback_socket`.
+- `spoff/player.py:478`: `playback_to_join.join(timeout=0.5)` in `stop()` was not
+  guarded by `is_alive()` or `try/except`, risking unhandled errors if an unstarted
+  or errored thread was joined during teardown.
+- `spoff/app.py:8269`: during playlist bulk-download metadata repair, an unhandled
+  `FileNotFoundError`/`OSError` on `c.stat().st_size` for a transiently unlinked
+  file aborted the entire loop, skipping repairs for subsequent tracks and dropping
+  the offline index save. Guarded `c.stat().st_size` with a safe stat check.
+- `spoff/storage.py:1284-1332`, `:1402`: cache reconciliation and registration had
+  TOCTOU races where files could disappear between directory discovery and
+  `p.stat().st_size` or during redundant stats in registration. Wrapped the full
+  reconciliation entry construction in `try ... except (ValueError, OSError): continue`
+  and safely cached `st_size` in `register_cached_track`.
+
 ## Verification
 
-403 tests passed, 1 skipped, 4 subtests passed using an isolated home directory.
-The suite includes actual MPV rapid-switch/EOF/cleanup coverage, recording
-identity checks, and headless sidebar/status tests. `git diff --check` passed.
-The skip is the desktop-file installation check in the isolated home.
+410 tests passed, 1 skipped in 10.34s using an isolated temporary home directory.
+Targeted regression tests in `tests/test_audit_dependability_hardening.py` verify
+fault injection on stream closure, socket errors, dead/failing thread joins, and
+transient missing cache files during bulk download and reconciliation.
+`git diff --check` passed. The skip is the desktop-file installation check in the
+isolated home.
 
 The user's sidebar preferences remain: playlist names without counts or arrows,
 and a grey selection highlight only while the sidebar has focus. Network service

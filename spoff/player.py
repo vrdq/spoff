@@ -345,10 +345,14 @@ class MPVController:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
-            sock.close()
+            try:
+                sock.close()
+            except OSError:
+                pass
 
     def _watch_playback(self, sock, stream, entry_id, callback, deferred):
         reason = "error"
+        owned = False
         try:
             while True:
                 if deferred:
@@ -364,12 +368,18 @@ class MPVController:
         except (OSError, ValueError):
             logger.warning("mpv playback event connection lost")
         finally:
-            stream.close()
+            try:
+                stream.close()
+            except Exception:
+                pass
             with self._lock:
                 owned = self._playback_socket is sock
                 if owned:
                     self._close_playback_socket()
-            sock.close()
+            try:
+                sock.close()
+            except Exception:
+                pass
         if owned and callback is not None and reason in ("eof", "error"):
             try:
                 callback(reason)
@@ -465,8 +475,11 @@ class MPVController:
                 listener_to_join.join(timeout=0.5)
             except Exception:
                 pass
-        if playback_to_join and playback_to_join != threading.current_thread():
-            playback_to_join.join(timeout=0.5)
+        if playback_to_join and playback_to_join != threading.current_thread() and playback_to_join.is_alive():
+            try:
+                playback_to_join.join(timeout=0.5)
+            except Exception:
+                pass
 
     def __del__(self):
         try:
