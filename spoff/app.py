@@ -8683,14 +8683,8 @@ class SpoffTUI(App):
         )
 
     def action_playlist_settings(self):
-        if isinstance(self.focused, Input):
-            return
-        on_sidebar = bool(self.focused and getattr(self.focused, "id", None) == "side-table")
-        if self.active_tab == "liked" and not on_sidebar:
-            self.notify_user("Liked Songs has no playlist settings.")
-            return
-        if self.active_tab != "playlist" and not on_sidebar:
-            self.notify_user("Select a playlist in the sidebar first.")
+        # Only from the playlist list (sidebar); inside a playlist the key does nothing.
+        if not (self.focused and getattr(self.focused, "id", None) == "side-table"):
             return
         _, target_pl = self._get_target_playlist()
         if not target_pl or not target_pl.get("id"):

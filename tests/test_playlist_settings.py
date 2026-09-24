@@ -108,3 +108,32 @@ def test_hints_follow_the_key_hints_setting(tmp_path, monkeypatch):
 
     assert "esc done" in asyncio.run(footer_text(False))
     assert asyncio.run(footer_text(True)).strip() == ""
+
+
+def test_shift_s_only_opens_from_the_playlist_list(tmp_path, monkeypatch):
+    _isolate(tmp_path, monkeypatch)
+    storage.save_saved_playlists([{"id": "local_d", "name": "Mix",
+                                   "tracks": [{"id": "dQw4w9WgXcQ", "title": "T", "artist": "X"}]}])
+    from spoff.app import SpoffTUI, PlaylistSettingsModal
+
+    async def run():
+        app = SpoffTUI(visualizer_enabled=False, notifications_enabled=False)
+        with patch.object(app, "check_github_updates_bg"), \
+             patch.object(app, "backfill_playlists_art_bg"), \
+             patch.object(app.player, "start_mpv"), \
+             patch("spoff.app.is_first_launch", return_value=False):
+            async with app.run_test() as pilot:
+                await pilot.pause(0.8)
+                app.load_playlist_by_index(0, focus_tracks=True)   # inside the playlist
+                await pilot.pause(0.2)
+                assert app.focused.id == "track-table"
+                await pilot.press("S")
+                await pilot.pause(0.2)
+                assert not isinstance(app.screen, PlaylistSettingsModal)
+
+                app.query_one("#side-table").focus()               # the playlist list
+                await pilot.press("S")
+                await pilot.pause(0.2)
+                assert isinstance(app.screen, PlaylistSettingsModal)
+
+    asyncio.run(run())
