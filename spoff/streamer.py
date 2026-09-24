@@ -261,10 +261,9 @@ def _run_download_process(
         # An older file in a preferred extension must not shadow the replacement.
         superseded = [cache_dir / f"{val_id}{ext}" for ext in CACHE_EXTENSIONS
                       if ext != downloaded.suffix.lower() and (cache_dir / f"{val_id}{ext}").is_file()]
-        if superseded:
-            archive = Path(tempfile.mkdtemp(prefix=f".replaced-{val_id}-", dir=cache_dir))
-            for old in superseded:
-                old.replace(archive / old.name)
+        for old in superseded:
+            # The new file replaces it; archiving into .replaced-* dirs leaked disk forever.
+            old.unlink(missing_ok=True)
         meta_to_save = dict(track_meta) if track_meta else {"title": title, "artist": artist}
         meta_to_save["resolved_url"] = resolved.get("webpage_url")
         meta_to_save["resolved_title"] = resolved.get("resolved_title")

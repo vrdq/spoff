@@ -656,7 +656,9 @@ def merge_spotify_and_client_tracks(
     has_client_tracks = False
 
     for idx, t in enumerate(existing_tracks):
-        if is_client_side_track(t):
+        # A like that has not reached Spotify yet is kept like a client track,
+        # otherwise a sync fetched before the push would delete it.
+        if is_client_side_track(t) or t.get("spotify_sync_pending"):
             if idx in matched_ct_indices:
                 continue
             has_client_tracks = True
@@ -825,6 +827,15 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
             synced_count += 1
 
         save_saved_playlists(current_playlists)
+
+    # Push likes made while offline or before login.
+    if liked is not None and has_modify_scopes():
+        for t in load_liked_songs():
+            if t.get("spotify_sync_pending") and not is_client_side_track(t):
+                try:
+                    add_track_to_spotify_account("liked", "Liked Songs", t, token=token)
+                except Exception as e:
+                    logger.debug(f"Failed to push pending like '{t.get('title')}': {e}")
 
     # Auto-sync any local playlists to Spotify if they are not yet linked to Spotify
     if has_modify_scopes():
@@ -1168,6 +1179,7 @@ def add_track_to_spotify_account(
                             current[idx]["spotify_id"] = spotify_track_id
                         if not current[idx].get("spotify_uri"):
                             current[idx]["spotify_uri"] = spotify_track_uri
+                        current[idx].pop("spotify_sync_pending", None)
                         save_liked_songs(current)
             except Exception as e:
                 logger.debug(f"Failed to persist resolved spotify track info to liked songs: {e}")

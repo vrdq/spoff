@@ -12,6 +12,14 @@ depends=(
     'python-rich'
     'yt-dlp'
     'mpv'
+    'python-ytmusicapi'
+    'python-pydbus'
+    'python-gobject'
+)
+optdepends=(
+    'cava: audio spectrum visualizer'
+    'ffmpeg: verify cached audio integrity and duration'
+    'wl-clipboard: copy share links on Wayland'
 )
 makedepends=(
     'python-build'

@@ -102,7 +102,7 @@ try:
     from .lyrics import fetch_lyrics, get_active_lyric_index
     from .mpris import MPRISService
     from .visualizer import VisualizerWidget, CavaVisualizer
-    from .updater import check_for_updates, perform_update, run_cli_update
+    from .updater import check_for_updates, perform_update, run_cli_update, is_git_checkout
     from .art import resolve_track_artwork, get_cached_artwork
 except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url
@@ -154,7 +154,7 @@ except ImportError:
     from lyrics import fetch_lyrics, get_active_lyric_index
     from mpris import MPRISService
     from visualizer import VisualizerWidget, CavaVisualizer
-    from updater import check_for_updates, perform_update, run_cli_update
+    from updater import check_for_updates, perform_update, run_cli_update, is_git_checkout
     from art import resolve_track_artwork, get_cached_artwork
 
 logger = logging.getLogger("spoff")
@@ -6222,6 +6222,14 @@ class SpoffTUI(App):
                 except Exception:
                     pass
 
+        # Right in the sidebar opens the playlist, as the sidebar hint says.
+        # Without this, the default seek_fwd binding on "right" wins and seeks.
+        if event.key == "right" and self.focused and self.focused.id == "side-table":
+            self.action_focus_tracks()
+            event.prevent_default()
+            event.stop()
+            return
+
         # 6. Dynamic match against self.keybindings
         matched_action = None
         for act_id, bound_key in self.keybindings.items():
@@ -7401,7 +7409,9 @@ class SpoffTUI(App):
             info = check_for_updates()
             if info and info.get("has_update"):
                 self.update_info = info
-                if self.auto_update:
+                # Never auto-pull a git working clone: it rebases the developer's
+                # checkout (and uncommitted work) behind their back. Notify instead.
+                if self.auto_update and not is_git_checkout():
                     def _auto_start():
                         try:
                             self.query_one("#update-pill", Static).update("[bold #c4a768]▲ Updating...[/]")
@@ -9540,6 +9550,32 @@ def main():
 
     app: Optional[SpoffTUI] = None
 
+    # Saved so a signal exit can undo Textual's raw mode; os._exit skips the
+    # driver's own teardown and would otherwise leave the shell unusable.
+    try:
+        import termios
+        saved_tty = termios.tcgetattr(sys.stdin.fileno())
+    except Exception:
+        termios = None
+        saved_tty = None
+
+    def _restore_terminal():
+        try:
+            # Leave alt screen, show cursor, stop mouse tracking and bracketed paste,
+            # pop the kitty keyboard protocol.
+            sys.stdout.write(
+                "\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l"
+                "\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[<u"
+            )
+            sys.stdout.flush()
+        except Exception:
+            pass
+        if termios is not None and saved_tty is not None:
+            try:
+                termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, saved_tty)
+            except Exception:
+                pass
+
     def _signal_handler(sig, frame):
         try:
             signal.signal(sig, signal.SIG_IGN)
@@ -9556,6 +9592,8 @@ def main():
                 app._cleanup_on_exit()
             except Exception:
                 pass
+        if sig != signal.SIGHUP:
+            _restore_terminal()
         os._exit(0 if sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT) else (128 + sig))
 
     for sig in (signal.SIGHUP, signal.SIGTERM, signal.SIGINT, signal.SIGQUIT):

@@ -202,7 +202,8 @@ def test_replacement_in_another_format_does_not_leave_bad_cache_preferred(tmp_pa
         result=streamer._run_download_process('song','Song','Artist',track_meta={'duration_ms':259000})
         assert result.read_bytes() == b'correct'
         assert storage.get_cached_track_path('song') == result
-        assert list(tmp_path.glob('.replaced-song-*/song.m4a'))[0].read_bytes() == b'wrong'
+        assert not (tmp_path / 'song.m4a').exists()
+        assert not list(tmp_path.glob('.replaced-*'))
 
 
 def test_lyrics_search_rejects_unrelated_first_result(tmp_path):

@@ -194,7 +194,10 @@ class TestSpotifyLikedSongsSync(unittest.TestCase):
         with patch.object(SpoffTUI, "focused", new_callable=PropertyMock, return_value=mock_table), \
              patch("spoff.app.remove_track_from_spotify_account", return_value=(True, "Removed from Spotify Liked Songs")) as mock_rm_sp:
             app.action_like_track()
-            mock_rm_sp.assert_called_once_with("liked", "Liked Songs", yt_track)
+            mock_rm_sp.assert_called_once()
+            args = mock_rm_sp.call_args.args
+            self.assertEqual(args[:2], ("liked", "Liked Songs"))
+            self.assertEqual(args[2]["id"], yt_track["id"])
             self.assertFalse(storage.is_track_liked(yt_track))
 
 

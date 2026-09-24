@@ -749,6 +749,8 @@ def add_track_to_liked_songs(track: Dict[str, Any]) -> bool:
     existing = load_liked_songs()
     if liked_index(existing, norm) is not None:
         return False
+    # Cleared once Spotify confirms the like; until then sync keeps the track.
+    norm["spotify_sync_pending"] = True
     existing.insert(0, norm)
     save_liked_songs(existing)
     logger.info(f"Added track to Liked Songs: {norm.get('title')}")

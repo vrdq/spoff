@@ -168,6 +168,24 @@ def check_for_updates() -> Optional[Dict[str, Any]]:
         "date": date_str
     }
 
+def is_git_checkout() -> bool:
+    """True when Spoff runs from a git working clone (a developer checkout)."""
+    repo_root = Path(__file__).resolve().parent.parent
+    if not (repo_root / "pyproject.toml").exists():
+        return False
+    try:
+        top_level = subprocess.check_output(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=_SAFE_SUBPROCESS_ENV,
+            timeout=5
+        ).decode().strip()
+    except Exception:
+        return False
+    return Path(top_level).resolve() == repo_root.resolve()
+
 def perform_update() -> Tuple[bool, str]:
     """
     Pulls latest code from GitHub and synchronizes the running installation.

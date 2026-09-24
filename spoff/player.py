@@ -32,6 +32,16 @@ def get_direct_hardware_audio_device() -> Optional[str]:
                 for parts in [line.split() for line in lines] if len(parts) >= 2
             )
             if has_filter_sink:
+                # Prefer the user's default output when it is real hardware;
+                # the first listed ALSA sink may be the wrong device (HDMI vs DAC).
+                try:
+                    default = subprocess.run(
+                        ["pactl", "get-default-sink"], capture_output=True, text=True, timeout=0.5
+                    ).stdout.strip()
+                except (OSError, subprocess.SubprocessError):
+                    default = ""
+                if default.startswith(("alsa_output.", "bluez_output.", "bluez_sink.")):
+                    return f"pulse/{default}"
                 for line in lines:
                     parts = line.split()
                     if len(parts) >= 2 and (parts[1].startswith("bluez_output.") or parts[1].startswith("bluez_sink.")):
