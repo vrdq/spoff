@@ -18,7 +18,9 @@ from typing import Callable, List, Optional, Tuple
 
 logger = logging.getLogger("youtube_account")
 
-LOGIN_URL = ("https://accounts.google.com/ServiceLogin?service=youtube"
+# Google's account chooser: lists every signed-in account (and "Use another
+# account"), so the user picks the one with YouTube Music Premium.
+LOGIN_URL = ("https://accounts.google.com/AccountChooser?service=youtube"
              "&continue=https%3A%2F%2Fmusic.youtube.com%2F")
 LOGIN_COOKIES = ("SAPISID", "__Secure-3PAPISID", "LOGIN_INFO")
 # A song that has YouTube Music's Premium-only high-quality stream.
@@ -96,13 +98,34 @@ def find_logged_in_browser() -> Optional[BrowserSpec]:
     return None
 
 
-def wait_for_login(timeout: float = 300.0, interval: float = 3.0,
+def _cookie_db_mtime(spec: BrowserSpec) -> float:
+    """When the browser last wrote its cookie store (0 if unknown)."""
+    browser, profile, _ = spec
+    roots = [Path(profile)] if profile else []
+    if browser == "firefox":
+        roots.append(_HOME / ".mozilla/firefox")
+    newest = 0.0
+    for root in roots:
+        for name in ("Cookies", "Network/Cookies", "cookies.sqlite"):
+            for path in root.glob(f"**/{name}") if browser == "firefox" else [root / name]:
+                try:
+                    newest = max(newest, path.stat().st_mtime)
+                except OSError:
+                    pass
+    return newest
+
+
+def wait_for_login(timeout: float = 300.0, interval: float = 3.0, since: float = 0.0,
                    cancelled: Callable[[], bool] = lambda: False) -> Optional[BrowserSpec]:
-    """Polls until some browser has a YouTube login, or the timeout passes."""
+    """Polls until some browser has a YouTube login, or the timeout passes.
+
+    With since set, only a login the browser saved after that time counts, so
+    an account picked in the chooser wins over the one that was already there.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline and not cancelled():
         spec = find_logged_in_browser()
-        if spec:
+        if spec and (not since or _cookie_db_mtime(spec) >= since or not _cookie_db_mtime(spec)):
             return spec
         time.sleep(interval)
     return None
@@ -110,9 +133,11 @@ def wait_for_login(timeout: float = 300.0, interval: float = 3.0,
 
 def has_premium_audio(spec: BrowserSpec) -> bool:
     """Whether this login gets YouTube Music's high-quality (~256 kbps) stream."""
+    import shutil
     import yt_dlp
     opts = {"quiet": True, "no_warnings": True, "noprogress": True, "skip_download": True,
-            "cookiesfrombrowser": (spec[0], spec[1], spec[2], None), "logger": _QuietLogger()}
+            "cookiesfrombrowser": (spec[0], spec[1], spec[2], None), "logger": _QuietLogger(),
+            "js_runtimes": {n: {} for n in ("deno", "node", "bun") if shutil.which(n)}}
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(PROBE_URL, download=False) or {}

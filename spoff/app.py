@@ -5963,17 +5963,16 @@ class SpoffTUI(App):
         def _say(text: str) -> None:
             self._on_ui(self.notify_user, text, force=True)
 
-        existing = youtube_account.find_logged_in_browser()
-        if existing is None:
-            try:
-                open_in_browser(youtube_account.LOGIN_URL)
-            except Exception:
-                logger.exception("Could not open the Google sign-in page")
-            self.notify_user("Sign in with Google in your browser. Spoff picks it up automatically.", force=True)
+        # Always show Google's account chooser so the user picks which account
+        # (e.g. the one with YouTube Music Premium), then wait for the browser
+        # to write that sign-in before checking it.
+        opened_at = time.time()
+        open_in_browser(youtube_account.LOGIN_URL)
+        self.notify_user("Pick your Google account in the browser. Spoff picks it up automatically.", force=True)
 
         def _worker() -> None:
-            spec = existing or youtube_account.wait_for_login(
-                cancelled=lambda: getattr(self, "_closing", False))
+            spec = youtube_account.wait_for_login(
+                since=opened_at, cancelled=lambda: getattr(self, "_closing", False))
             if not spec:
                 _say("Didn't see a YouTube sign-in in your browser. Try again from Settings.")
                 return

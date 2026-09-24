@@ -27,6 +27,7 @@ dependencies = [
     "ytmusicapi>=1.12.0",
     "pydbus>=0.6.0",
     "secretstorage>=3.3",
+    "yt-dlp-ejs>=0.8.0",
 ]
 
 [project.scripts]

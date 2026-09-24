@@ -96,7 +96,32 @@ def _youtube_cookies() -> Optional[io.StringIO]:
         return io.StringIO(_cookie_text)
 
 
-def get_base_ydl_opts(extra_opts=None):
+def _js_runtimes() -> Dict[str, Dict[str, Any]]:
+    """JavaScript runtimes yt-dlp may use. Signed-in requests go through YouTube's
+    web clients, whose stream links can only be unscrambled with one of these."""
+    import shutil
+    return {name: {} for name in ("deno", "node", "bun") if shutil.which(name)}
+
+
+def _restricted_mode(exc: BaseException) -> bool:
+    # On www.youtube.com links YouTube reports Restricted Mode blocks as a plain
+    # "Video unavailable"; signed out, the same song usually plays.
+    text = str(exc)
+    return "Restricted Mode" in text or "Video unavailable" in text
+
+
+def _for_login(url: str) -> str:
+    """Signed in, YouTube Music Premium's 256 kbps streams are only offered on
+    music.youtube.com links, so plain watch links are moved there."""
+    if not _youtube_login:
+        return url
+    parts = urlsplit(url)
+    if (parts.hostname or "").lower() in ("www.youtube.com", "youtube.com", "m.youtube.com") and parts.path == "/watch":
+        return parts._replace(netloc="music.youtube.com").geturl()
+    return url
+
+
+def get_base_ydl_opts(extra_opts=None, use_login: bool = True):
     opts = {
         "format": BEST_AUDIO,
         "quiet": True,
@@ -110,8 +135,9 @@ def get_base_ydl_opts(extra_opts=None):
         "fragment_retries": 2,
         "extractor_retries": 1,
     }
-    cookies = _youtube_cookies()
+    cookies = _youtube_cookies() if use_login else None
     if cookies is not None:
+        opts["js_runtimes"] = _js_runtimes()
         # Signed in: the browser's YouTube login goes with each request, which
         # also unlocks YouTube Premium's high-quality stream.
         opts["cookiefile"] = cookies
@@ -277,7 +303,15 @@ def search_and_resolve_stream(track_title: str, artist: str, direct_url: Optiona
             item = None
             for query, identity_verified in queries:
                 try:
-                    res = ydl.extract_info(query, download=False)
+                    try:
+                        res = ydl.extract_info(_for_login(query), download=False)
+                    except Exception as exc:
+                        # The signed-in account can have Restricted Mode (locked on
+                        # for teen accounts); play those songs signed out instead.
+                        if not (_youtube_login and _restricted_mode(exc)):
+                            raise
+                        with yt_dlp.YoutubeDL(cast(Any, get_base_ydl_opts(use_login=False))) as plain:
+                            res = plain.extract_info(query, download=False)
                     if not res:
                         continue
                     entries = res.get("entries")
@@ -356,16 +390,23 @@ def _run_download_process(
 
     cache_dir = getattr(storage, "_get_cache_dir", lambda: storage.CACHE_DIR)()
     with tempfile.TemporaryDirectory(prefix=f".{val_id}-", dir=cache_dir) as stage:
-        opts = get_base_ydl_opts({
+        download_opts = {
             "format": BEST_AUDIO,
             "outtmpl": str(Path(stage) / "audio.%(ext)s"),
             "overwrites": True,
-        })
+        }
         try:
-            with yt_dlp.YoutubeDL(cast(Any, opts)) as ydl:
-                if ydl.download([query]) != 0:
-                    invalidate_stream_cache(title, artist, direct_url=direct_url)
-                    raise RuntimeError("Audio download failed")
+            try:
+                with yt_dlp.YoutubeDL(cast(Any, get_base_ydl_opts(download_opts))) as ydl:
+                    failed = ydl.download([_for_login(query)]) != 0
+            except Exception as exc:
+                if not (_youtube_login and _restricted_mode(exc)):
+                    raise
+                with yt_dlp.YoutubeDL(cast(Any, get_base_ydl_opts(download_opts, use_login=False))) as plain:
+                    failed = plain.download([query]) != 0
+            if failed:
+                invalidate_stream_cache(title, artist, direct_url=direct_url)
+                raise RuntimeError("Audio download failed")
         except Exception:
             invalidate_stream_cache(title, artist, direct_url=direct_url)
             raise

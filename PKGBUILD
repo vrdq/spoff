@@ -16,8 +16,10 @@ depends=(
     'python-pydbus'
     'python-gobject'
     'python-secretstorage'
+    'python-yt-dlp-ejs'
 )
 optdepends=(
+    'nodejs: unscrambles signed-in YouTube streams (or deno/bun)'
     'cava: audio spectrum visualizer'
     'ffmpeg: verify cached audio integrity and duration'
     'wl-clipboard: copy share links on Wayland'
