@@ -1,5 +1,10 @@
 # spoff
 
+[![PyPI version](https://img.shields.io/pypi/v/spoff.svg?style=flat-square&color=blue)](https://pypi.org/project/spoff/)
+[![Awesome TUI](https://img.shields.io/badge/Awesome%20TUI-verified%20maintainer-brightgreen?style=flat-square)](https://awesometui.com/spoff)
+[![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg?style=flat-square)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg?style=flat-square)](https://www.python.org/downloads/)
+
 Terminal audio player for Linux that streams from YouTube Music and syncs Spotify metadata with local caching, synchronized LRC lyrics, and a CAVA spectrum visualizer.
 
 ![spoff library view](assets/spoff-library.png)
