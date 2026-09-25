@@ -907,7 +907,7 @@ class RebindKeyModal(SafeModalScreen[Optional[str]]):
         def_disp = format_key_display(self.default_key) if self.default_key else "[dim]None[/dim]"
         with Vertical(id="rebind-dialog"):
             with Horizontal(id="rebind-header"):
-                yield Static("REBIND SHORTCUT", id="rebind-title")
+                yield Static("Rebind shortcut", id="rebind-title")
                 yield Static("[dim]Esc to unbind  |  Ctrl+C to cancel[/dim]", id="rebind-close-hint")
 
             yield Static(f"Action: [#ffffff]{escape(str(self.action_title))}[/]  [dim]({escape(str(self.action_category))})[/dim]", id="rebind-action-info")
@@ -1035,31 +1035,31 @@ class SettingsModal(SafeModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="settings-dialog"):
             with Horizontal(id="settings-header"):
-                yield Static("SETTINGS", id="settings-title")
+                yield Static("Settings", id="settings-title")
                 yield Static("[dim]esc[/dim]", id="settings-close-hint")
 
             with Vertical(id="settings-options-container"):
-                yield Static("INTERFACE", classes="settings-section")
+                yield Static("Interface", classes="settings-section")
                 yield AdvModeToggle(id="adv-mode-toggle", classes="setting-toggle-item")
                 yield NotificationsToggle(id="notifications-toggle", classes="setting-toggle-item")
                 yield TransparencyToggle(id="transparency-toggle", classes="setting-toggle-item")
-                yield Static("SEARCH & UPDATES", classes="settings-section")
+                yield Static("Search & updates", classes="settings-section")
                 yield SearchEngineToggle(id="engine-toggle", classes="setting-toggle-item")
                 yield InstantSearchToggle(id="instant-search-toggle", classes="setting-toggle-item")
                 yield AutoUpdateToggle(id="auto-update-toggle", classes="setting-toggle-item")
-                yield Static("VISUALIZER", classes="settings-section")
+                yield Static("Visualizer", classes="settings-section")
                 yield VisualizerToggle(id="vis-toggle", classes="setting-toggle-item")
                 yield VisualizerStyleToggle(id="vis-style-toggle", classes="setting-toggle-item")
                 yield VisualizerColorToggle(id="vis-color-toggle", classes="setting-toggle-item")
-                yield Static("PLAYBACK", classes="settings-section")
+                yield Static("Playback", classes="settings-section")
                 yield SpotifyAudioToggle(id="spotify-audio-toggle", classes="setting-toggle-item")
                 yield LoudnessToggle(id="loudness-toggle", classes="setting-toggle-item")
                 yield EQSettingsNavToggle(id="eq-settings-nav-toggle", classes="setting-toggle-item")
-                yield Static("YOUTUBE MUSIC", classes="settings-section")
+                yield Static("YouTube Music", classes="settings-section")
                 yield YouTubeAccountToggle(id="youtube-account-toggle", classes="setting-toggle-item")
                 yield YTMusicSyncToggle(id="ytmusic-sync-toggle", classes="setting-toggle-item")
 
-            yield Static("KEYS", id="settings-table-title")
+            yield Static("Keys", id="settings-table-title")
             yield DataTable(id="settings-table", cursor_type="row", show_header=False)
             yield Static("", id="settings-status-line")
             yield Static(f"[dim]{self.SETTINGS_HINT}[/dim]", id="settings-footer")
@@ -1571,10 +1571,10 @@ class AddToPlaylistModal(SafeModalScreen[Optional[Tuple[str, str]]]):
         title = self.track.get("title", "Unknown")
         artist = self.track.get("artist", "Unknown")
         with Vertical(id="modal-dialog"):
-            yield Static("ADD TO PLAYLIST", id="modal-title")
+            yield Static("Add to playlist", id="modal-title")
             yield Static(f"Track: [bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]", id="modal-track-info")
             yield Input(placeholder="Create new playlist: type name...", id="modal-input")
-            yield Static("OR CHOOSE EXISTING PLAYLIST", id="modal-subtitle")
+            yield Static("Or choose an existing playlist", id="modal-subtitle")
             yield DataTable(id="modal-table", cursor_type="row", show_header=False)
             hint_text = "" if getattr(self.app, "advanced_mode", False) else "[dim]j/k: select playlist  |  i/Tab: new name  |  Enter: confirm  |  Esc: cancel[/dim]"
             yield Static(hint_text, id="modal-hint")
@@ -1856,7 +1856,7 @@ class RenamePlaylistModal(SafeModalScreen[Optional[str]]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="rename-dialog"):
-            yield Static("RENAME PLAYLIST", id="rename-title")
+            yield Static("Rename playlist", id="rename-title")
             yield Static(f"Current: [bold #ffffff]{escape(self.current_name)}[/]", id="rename-sub")
             yield Input(value=self.current_name, placeholder="Enter new playlist name...", id="rename-input")
             hint_text = "" if getattr(self.app, "advanced_mode", False) else "[dim]Enter: save name  |  Esc: cancel[/dim]"
@@ -1899,7 +1899,7 @@ class ClonePlaylistModal(SafeModalScreen[Optional[str]]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="clone-dialog"):
-            yield Static("CLONE / COPY PLAYLIST", id="clone-title")
+            yield Static("Copy playlist", id="clone-title")
             yield Static(
                 f"Source: [bold #ffffff]{escape(self.original_name)}[/]  [dim]({self.track_count} tracks)[/dim]",
                 id="clone-sub"
@@ -1972,7 +1972,7 @@ class PlaylistSettingsModal(SafeModalScreen[Optional[Dict[str, Any]]]):
             where = "local · applied when it syncs"
         with Vertical(id="plset-dialog"):
             with Horizontal(id="plset-header"):
-                yield Static("PLAYLIST", id="plset-title")
+                yield Static("Playlist", id="plset-title")
                 yield Static(f"[#5a5a5a]{where}[/]", id="plset-where")
             with PlaylistField(id="plset-name-field", classes="plset-field"):
                 yield Static("Name", classes="plset-label")
@@ -2072,11 +2072,11 @@ class DeletePlaylistModal(SafeModalScreen[bool]):
         super().__init__()
         self.playlist_name = playlist_name.strip() or "Playlist"
         self.track_count = track_count
-        self.modal_title = "DELETE PLAYLIST"
+        self.modal_title = "Delete playlist"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="delete-playlist-dialog"):
-            yield Static("DELETE PLAYLIST", id="delete-playlist-title")
+            yield Static("Delete playlist", id="delete-playlist-title")
             tracks_str = f" ({self.track_count} tracks)" if self.track_count else ""
             yield Static(
                 f"This will permanently delete '[bold #ff5555]{escape(self.playlist_name)}[/]'{tracks_str} from your library and Spotify.",
@@ -2153,7 +2153,7 @@ class DuplicateTrackModal(SafeModalScreen[Optional[str]]):
         t_artist = str(self.track.get("artist") or "Unknown Artist")
         track_num = self.track_index + 1
         with Vertical(id="duplicate-dialog"):
-            yield Static("ALREADY IN PLAYLIST", id="rename-title")
+            yield Static("Already in playlist", id="rename-title")
             yield Static(
                 f"[bold #ffffff]{escape(t_title)}[/] by [#abb2bf]{escape(t_artist)}[/]\nis already in [bold #61afef]{escape(self.playlist_name)}[/] at position [bold #e5c07b]#{track_num}[/].\n",
                 id="rename-sub"
@@ -2194,7 +2194,7 @@ class FilterTracksModal(SafeModalScreen[Optional[int]]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="filter-dialog"):
-            yield Static(f"FIND IN {self.view_name.upper()}", id="rename-title")
+            yield Static(f"Find in {self.view_name}", id="rename-title")
             yield Input(placeholder="Type song title or artist...", id="filter-input")
             yield DataTable(id="filter-table", cursor_type="row", show_header=False)
             yield Static("[dim]Type to filter  |  Enter: jump to song  |  Esc: cancel[/dim]", id="rename-hint")
@@ -2597,7 +2597,7 @@ class UpdateModal(SafeModalScreen[bool]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="update-dialog"):
-            yield Static("SPOFF UPDATE AVAILABLE", id="update-title")
+            yield Static("Spoff update available", id="update-title")
             cur_sha = self.update_info.get("local_sha", "unknown")
             new_sha = self.update_info.get("remote_sha", "latest")
             msg = self.update_info.get("message", "")
@@ -2856,7 +2856,7 @@ class EqualizerModal(SafeModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="eq-dialog"):
             with Horizontal(id="eq-header-bar"):
-                yield Static("EQUALIZER", id="eq-title")
+                yield Static("Equalizer", id="eq-title")
                 yield Static("", id="eq-status-pill")
                 yield Static("[dim]esc[/dim]", id="eq-close-hint")
 
@@ -3343,7 +3343,7 @@ class EQSettingsModal(SafeModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="eq-settings-dialog"):
             with Horizontal(id="eq-settings-header"):
-                yield Static("EQUALIZER SETTINGS", id="eq-settings-title")
+                yield Static("Equalizer settings", id="eq-settings-title")
                 yield Static("", id="eq-settings-pill")
                 yield Static("[dim]esc[/dim]", id="eq-settings-close-hint")
 
@@ -3352,17 +3352,17 @@ class EQSettingsModal(SafeModalScreen[None]):
 
             with Vertical(id="eq-settings-options-container"):
                 yield EQTargetProfileToggle(id="eq-opt-target-profile", classes="eq-setting-item")
-                yield Static("PROCESSING", classes="eq-settings-section-title")
+                yield Static("Processing", classes="eq-settings-section-title")
                 yield EQSampleRateToggle(id="eq-opt-sample-rate", classes="eq-setting-item")
                 yield EQPrecisionToggle(id="eq-opt-precision", classes="eq-setting-item")
-                yield Static("CLIPPING PROTECTION", classes="eq-settings-section-title")
+                yield Static("Clipping protection", classes="eq-settings-section-title")
                 yield EQAutoHeadroomToggle(id="eq-opt-auto-headroom", classes="eq-setting-item")
                 yield EQHeadroomMarginToggle(id="eq-opt-headroom-margin", classes="eq-setting-item")
                 yield EQIntersampleGuardToggle(id="eq-opt-intersample-guard", classes="eq-setting-item")
-                yield Static("CURVE", classes="eq-settings-section-title")
+                yield Static("Curve", classes="eq-settings-section-title")
                 yield EQCurveStyleToggle(id="eq-opt-curve-style", classes="eq-setting-item")
                 yield EQCurveRangeToggle(id="eq-opt-curve-range", classes="eq-setting-item")
-                yield Static("ACTIONS", classes="eq-settings-section-title")
+                yield Static("Actions", classes="eq-settings-section-title")
                 yield EQOpenLiveEditorAction(id="eq-act-open-live-editor", classes="eq-setting-item")
                 yield EQImportClipboardAction(id="eq-act-import-clipboard", classes="eq-setting-item")
                 yield EQExportClipboardAction(id="eq-act-export-clipboard", classes="eq-setting-item")
@@ -5161,7 +5161,7 @@ class SpoffTUI(App):
         margin-top: 1;
     }
     """
-    TITLE = "SPOFF"
+    TITLE = "spoff"
 
     BINDINGS = [
         Binding("space", "toggle_play", "Play/Pause"),
@@ -5809,7 +5809,7 @@ class SpoffTUI(App):
 
         with Horizontal(id="main-layout"):
             with Vertical(id="sidebar"):
-                yield Static("PLAYLISTS", classes="pane-title")
+                yield Static("Playlists", classes="pane-title")
                 yield Input(placeholder="Create a playlist or paste a link", id="sidebar-import-input", classes="action-input")
                 yield DataTable(id="side-table", cursor_type="row", show_header=False, show_cursor=False)
                 yield Static("" if self.advanced_mode else "[dim]Enter: open  |  Del: delete[/dim]", id="sidebar-hint")
@@ -5841,9 +5841,9 @@ class SpoffTUI(App):
 
     def on_mount(self) -> None:
         self._thread_id = threading.get_ident()
-        self.title = "SPOFF"
+        self.title = "spoff"
         try:
-            sys.stdout.write("\033]0;SPOFF\007")
+            sys.stdout.write("\033]0;spoff\007")
             sys.stdout.flush()
         except Exception:
             pass
@@ -6894,18 +6894,18 @@ class SpoffTUI(App):
         artist = curr.get("artist", "Unknown")
 
         if self.current_lyrics is None:
-            lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]  [dim #767676]FETCHING LYRICS...[/dim]")
+            lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]  [dim #767676]finding lyrics…[/dim]")
             lt.clear()
             lt.add_row("", "[dim]Searching synchronized lyrics on LRCLIB...[/dim]")
             return
 
         lyr = self.current_lyrics
         if lyr.get("synced"):
-            tag = "[bold #569f68]SYNCED[/]"
+            tag = "[#569f68]synced[/]"
         elif lyr.get("instrumental"):
-            tag = "[dim #d08770]INSTRUMENTAL[/dim]"
+            tag = "[dim #d08770]instrumental[/dim]"
         else:
-            tag = "[dim]PLAIN[/dim]"
+            tag = "[dim]unsynced[/dim]"
 
         lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]  {tag}")
 
@@ -7048,7 +7048,7 @@ class SpoffTUI(App):
         if not tracks:
             self.notify_user("Current view has no tracks to find.", force=True)
             return
-        view_label = "Playlist" if self.active_tab == "playlist" else ("Liked Songs" if self.active_tab == "liked" else "Tracks")
+        view_label = "playlist" if self.active_tab == "playlist" else ("Liked Songs" if self.active_tab == "liked" else "songs")
 
         def handle_find_result(target_idx: Optional[int]):
             if target_idx is not None and 0 <= target_idx < len(tracks):
@@ -9293,7 +9293,7 @@ class SpoffTUI(App):
 
                 self.push_screen(
                     ConfirmModal(
-                        title="REMOVE TRACK",
+                        title="Remove song",
                         message=f"Remove '[bold #ffffff]{escape(t_title)}[/]' from playlist '[bold #ffffff]{escape(pl_name)}[/]'?\n[dim]To delete the entire playlist, press Shift+D[/dim]",
                         confirm_label="Remove"
                     ),
@@ -9354,7 +9354,7 @@ class SpoffTUI(App):
 
                 self.push_screen(
                     ConfirmModal(
-                        title="REMOVE LIKED SONG",
+                        title="Remove liked song",
                         message=f"Remove '[bold #ffffff]{escape(t_title)}[/]' from your Liked Songs?",
                         confirm_label="Remove"
                     ),
@@ -9493,14 +9493,14 @@ class SpoffTUI(App):
         is_paused = self.player.is_paused if curr else False
 
         # Update shuffle & repeat indicators
-        shuf_badge = "[#ffffff]SHUF[/]" if self.shuffle_mode else ""
+        shuf_badge = "[#ffffff]shuffle[/]" if self.shuffle_mode else ""
         self.query_one("#shuf-pill", Static).update(shuf_badge)
 
         rep_badge = ""
         if self.repeat_mode == "all":
-            rep_badge = "[#ffffff]REP[/]"
+            rep_badge = "[#ffffff]repeat[/]"
         elif self.repeat_mode == "one":
-            rep_badge = "[#ffffff]REP-1[/]"
+            rep_badge = "[#ffffff]repeat one[/]"
         self.query_one("#rep-pill", Static).update(rep_badge)
 
         # Update synced lyrics tracking
@@ -9537,7 +9537,7 @@ class SpoffTUI(App):
 
         if self.advanced_mode:
             if is_scrubbing:
-                stat_text = "[bold #c4a768]SEEKING[/]"
+                stat_text = "[#c4a768]seeking[/]"
             else:
                 eq_pill = "  [#ffffff]EQ[/]" if (hasattr(self, "eq_engine") and not self.eq_engine.bypassed) else ""
                 q_text = f"  Q: {queue_pos}" if queue_pos else ""

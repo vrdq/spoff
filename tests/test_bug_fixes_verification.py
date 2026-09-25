@@ -217,14 +217,14 @@ class TestAppLikedTabActions(unittest.TestCase):
         self.assertEqual(self.app.playlists, initial_playlists)
         # Should not push delete playlist modal
         for scr, _ in self.app.pushed_screens:
-            self.assertNotEqual(getattr(scr, "title", ""), "DELETE PLAYLIST")
+            self.assertNotEqual(getattr(scr, "title", ""), "Delete playlist")
 
     def test_delete_item_on_liked_tab_targets_liked_track(self):
         self.mock_focused.return_value = Mock(id="track-table", cursor_row=0)
         self.app.action_delete_item()
         self.assertEqual(len(self.app.pushed_screens), 1)
         scr, _ = self.app.pushed_screens[0]
-        self.assertEqual(getattr(scr, "modal_title", ""), "REMOVE LIKED SONG")
+        self.assertEqual(getattr(scr, "modal_title", ""), "Remove liked song")
 
 
 class TestEnterKeyPlaybackBehavior(unittest.TestCase):

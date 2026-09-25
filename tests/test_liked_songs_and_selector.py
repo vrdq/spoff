@@ -550,12 +550,12 @@ class TestDeckTrackFormatting(unittest.TestCase):
         self.app.shuffle_mode = True
         self.app.repeat_mode = "all"
         self.app.update_player_hud()
-        self.assertEqual(widgets["#shuf-pill"].update.call_args[0][0], "[#ffffff]SHUF[/]")
-        self.assertEqual(widgets["#rep-pill"].update.call_args[0][0], "[#ffffff]REP[/]")
+        self.assertEqual(widgets["#shuf-pill"].update.call_args[0][0], "[#ffffff]shuffle[/]")
+        self.assertEqual(widgets["#rep-pill"].update.call_args[0][0], "[#ffffff]repeat[/]")
 
         self.app.repeat_mode = "one"
         self.app.update_player_hud()
-        self.assertEqual(widgets["#rep-pill"].update.call_args[0][0], "[#ffffff]REP-1[/]")
+        self.assertEqual(widgets["#rep-pill"].update.call_args[0][0], "[#ffffff]repeat one[/]")
 
     def test_deck_line_3_omits_queue_empty_and_duplicate_hints(self):
         from collections import defaultdict

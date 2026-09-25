@@ -109,7 +109,7 @@ SUCCESS_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <div class="card">
-    <div class="badge">SPOFF CONNECTED</div>
+    <div class="badge">Spoff connected</div>
     <h2>Logged in to Spotify</h2>
     <p>Your account is now linked. You can close this browser tab and return to Spoff in your terminal.</p>
   </div>
