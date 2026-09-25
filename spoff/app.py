@@ -1051,12 +1051,13 @@ class SettingsModal(SafeModalScreen[None]):
                 yield VisualizerToggle(id="vis-toggle", classes="setting-toggle-item")
                 yield VisualizerStyleToggle(id="vis-style-toggle", classes="setting-toggle-item")
                 yield VisualizerColorToggle(id="vis-color-toggle", classes="setting-toggle-item")
-                yield Static("AUDIO", classes="settings-section")
-                yield YouTubeAccountToggle(id="youtube-account-toggle", classes="setting-toggle-item")
-                yield YTMusicSyncToggle(id="ytmusic-sync-toggle", classes="setting-toggle-item")
+                yield Static("PLAYBACK", classes="settings-section")
                 yield SpotifyAudioToggle(id="spotify-audio-toggle", classes="setting-toggle-item")
                 yield LoudnessToggle(id="loudness-toggle", classes="setting-toggle-item")
                 yield EQSettingsNavToggle(id="eq-settings-nav-toggle", classes="setting-toggle-item")
+                yield Static("YOUTUBE MUSIC", classes="settings-section")
+                yield YouTubeAccountToggle(id="youtube-account-toggle", classes="setting-toggle-item")
+                yield YTMusicSyncToggle(id="ytmusic-sync-toggle", classes="setting-toggle-item")
 
             yield Static("KEYS", id="settings-table-title")
             yield DataTable(id="settings-table", cursor_type="row", show_header=False)
@@ -1148,11 +1149,11 @@ class SettingsModal(SafeModalScreen[None]):
 
             yt_login = get_saved_youtube_login()
             self.query_one("#youtube-account-toggle", Static).update(
-                self._row("YouTube account", youtube_account.browser_label(yt_login) if yt_login else "sign in with Google",
+                self._row("Account", f"signed in · {youtube_account.browser_label(yt_login)}" if yt_login else "sign in with Google",
                           on=True if yt_login else None))
             copying = get_saved_ytmusic_playlist_sync()
             self.query_one("#ytmusic-sync-toggle", Static).update(
-                self._row("Copy playlists to YouTube Music",
+                self._row("Copy my playlists",
                           ("on" if copying else "off") if yt_login else "sign in first",
                           on=(copying if yt_login else False)))
 
@@ -1163,7 +1164,7 @@ class SettingsModal(SafeModalScreen[None]):
             player = getattr(app, "player", None)
             loud = bool(getattr(player, "loudness_normalization", True))
             self.query_one("#loudness-toggle", Static).update(
-                self._row("Even out loudness", "on" if loud else "off", on=loud))
+                self._row("Loudness levelling", "on" if loud else "off", on=loud))
 
             eq_eng = getattr(app, "eq_engine", None)
             p_name = eq_eng.preset_name if eq_eng else "AKG Reference"
@@ -1371,11 +1372,11 @@ class SettingsModal(SafeModalScreen[None]):
             "vis-toggle",
             "vis-style-toggle",
             "vis-color-toggle",
-            "youtube-account-toggle",
-            "ytmusic-sync-toggle",
             "spotify-audio-toggle",
             "loudness-toggle",
             "eq-settings-nav-toggle",
+            "youtube-account-toggle",
+            "ytmusic-sync-toggle",
         ]
         focused_id = self.focused.id if self.focused else None
         if focused_id in toggle_ids:
@@ -1436,7 +1437,7 @@ class SettingsModal(SafeModalScreen[None]):
 
     def on_key(self, event: events.Key) -> None:
         table = self.query_one("#settings-table", DataTable)
-        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "youtube-account-toggle", "ytmusic-sync-toggle", "spotify-audio-toggle", "loudness-toggle", "eq-settings-nav-toggle"]
+        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "spotify-audio-toggle", "loudness-toggle", "eq-settings-nav-toggle", "youtube-account-toggle", "ytmusic-sync-toggle"]
         focused_id = self.focused.id if self.focused else None
 
         if focused_id in toggle_ids:
