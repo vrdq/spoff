@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Spoff
+GenericName=Terminal Music Player
+Comment=Terminal audio player streaming from YouTube Music and syncing Spotify metadata
+Icon=dev.vrdq.spoff
+Exec=spoff
+Terminal=true
+Categories=AudioVideo;Audio;Player;ConsoleOnly;
+Keywords=spotify;youtube;music;player;tui;cli;terminal;cava;audio;
+StartupNotify=false

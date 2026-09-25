@@ -1,0 +1,52 @@
+app-id: dev.vrdq.spoff
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+command: spoff
+
+finish-args:
+  # Network access for YouTube Music audio and Spotify metadata
+  - --share=network
+  # Audio playback through PipeWire / PulseAudio
+  - --socket=pulseaudio
+  # D-Bus MPRIS 2 interface for media keys & bar widgets
+  - --socket=session-bus
+  - --talk-name=org.mpris.MediaPlayer2.*
+  - --talk-name=org.freedesktop.secrets
+  # Persistent cache and configuration directories
+  - --filesystem=xdg-data/spoff:create
+  - --filesystem=xdg-config/spoff:create
+
+modules:
+  # System backend: mpv (compiled with lua and pipewire audio output)
+  - name: mpv
+    buildsystem: meson
+    config-opts:
+      - -Dlibmpv=true
+      - -Dcplayer=true
+      - -Dalsa=enabled
+      - -Dpulse=enabled
+      - -Dpipewire=enabled
+    sources:
+      - type: git
+        url: https://github.com/mpv-player/mpv.git
+        tag: v0.38.0
+
+  # Spoff Python Application and CLI entrypoint
+  - name: spoff
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-index --find-links="file://${PWD}" --prefix=${FLATPAK_DEST} spoff
+      - install -Dm644 dev.vrdq.spoff.desktop /app/share/applications/dev.vrdq.spoff.desktop
+      - install -Dm644 dev.vrdq.spoff.svg /app/share/icons/hicolor/scalable/apps/dev.vrdq.spoff.svg
+      - install -Dm644 dev.vrdq.spoff.metainfo.xml /app/share/metainfo/dev.vrdq.spoff.metainfo.xml
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/source/s/spoff/spoff-0.1.0.tar.gz
+        sha256: 3288956b7e44b2e300abacd455ea59c244bcddcddd45d5702d969e16ad79c502
+      - type: file
+        path: dev.vrdq.spoff.desktop
+      - type: file
+        path: dev.vrdq.spoff.svg
+      - type: file
+        path: dev.vrdq.spoff.metainfo.xml

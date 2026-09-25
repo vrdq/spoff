@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1b1b1b"/>
+      <stop offset="100%" stop-color="#111111"/>
+    </linearGradient>
+  </defs>
+  <!-- Background icon squircle -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#bg)" stroke="#2e2e2e" stroke-width="2"/>
+  
+  <!-- Terminal Prompt Symbol >_ -->
+  <path d="M 26 36 L 40 48 L 26 60" fill="none" stroke="#777777" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="46" y1="60" x2="60" y2="60" stroke="#777777" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Audio Spectrum Bars (CAVA-style green accent) -->
+  <rect x="30" y="76" width="8" height="24" rx="3" fill="#9bff7f"/>
+  <rect x="44" y="68" width="8" height="32" rx="3" fill="#9bff7f"/>
+  <rect x="58" y="58" width="8" height="42" rx="3" fill="#9bff7f"/>
+  <rect x="72" y="64" width="8" height="36" rx="3" fill="#9bff7f"/>
+  <rect x="86" y="72" width="8" height="28" rx="3" fill="#9bff7f"/>
+  <rect x="100" y="82" width="8" height="18" rx="3" fill="#9bff7f"/>
+</svg>

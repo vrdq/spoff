@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>dev.vrdq.spoff</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Spoff</name>
+  <summary>Terminal audio player streaming from YouTube Music with Spotify metadata sync</summary>
+  <developer_name>vrdq</developer_name>
+
+  <description>
+    <p>
+      Spoff is a fast, low-memory terminal audio player for Linux that streams tracks from YouTube Music while syncing your Spotify libraries and playlists without requiring Spotify Premium.
+    </p>
+    <p>Key Features:</p>
+    <ul>
+      <li>Zero Spotify Premium requirement — audio streams cleanly via background mpv playback.</li>
+      <li>Extremely lightweight — idles under 50MB RAM compared to heavy Electron desktop apps.</li>
+      <li>Automatic local audio caching for instant offline playback.</li>
+      <li>Real-time 60 FPS PCM audio spectrum visualizer via CAVA.</li>
+      <li>Interactive synchronized LRC lyrics with click-to-seek timestamp navigation.</li>
+      <li>Full Vim keybindings (hjkl) and intuitive keyboard navigation.</li>
+      <li>Native D-Bus MPRIS 2 integration with Waybar, lockscreens, and hardware media keys.</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">dev.vrdq.spoff.desktop</launchable>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/vrdq/spoff/main/assets/spoff-library.png</image>
+      <caption>Browsing tracks and playlists in Spoff TUI</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/vrdq/spoff/main/assets/spoff-lyrics.png</image>
+      <caption>Synchronized LRC lyrics and CAVA spectrum visualizer</caption>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://github.com/vrdq/spoff</url>
+  <url type="bugtracker">https://github.com/vrdq/spoff/issues</url>
+  <url type="vcs-browser">https://github.com/vrdq/spoff</url>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-09-25">
+      <description>
+        <p>Initial release of spoff: terminal music streaming, Spotify sync, CAVA visualizer, and MPRIS 2 controls.</p>
+      </description>
+    </release>
+  </releases>
+</component>
