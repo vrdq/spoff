@@ -108,14 +108,16 @@ def _privacy(playlist: Dict[str, Any]) -> str:
 
 
 def _ok(result: Any) -> bool:
-    """ytmusicapi returns a status string on success and a response dict on failure."""
-    return isinstance(result, str) and "SUCCEEDED" in result
+    """ytmusicapi reports success as a status string, or (for adds) a dict with a status."""
+    status = result.get("status") if isinstance(result, dict) else result
+    return isinstance(status, str) and "SUCCEEDED" in status
 
 
 def _sync_one(yt: Any, playlist: Dict[str, Any], entry: Optional[Dict[str, Any]],
               wanted: List[str]) -> Optional[Dict[str, Any]]:
     """Brings one copy up to date and returns its new record (None on failure)."""
-    name = str(playlist.get("name") or "Untitled playlist")
+    # YouTube Music rejects titles containing angle brackets.
+    name = re.sub(r"[<>]", "", str(playlist.get("name") or ""))[:150].strip() or "Untitled playlist"
     description = _clean_description(playlist.get("description"))
     privacy = _privacy(playlist)
 

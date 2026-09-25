@@ -1824,7 +1824,7 @@ class ConfirmModal(SafeModalScreen[bool]):
 
     def on_click(self, event: events.Click) -> None:
         try:
-            target = event.target
+            target = event.widget
             target_id = getattr(target, "id", "")
             if target_id == "confirm-hint":
                 w = getattr(target, "size", None)
@@ -2288,7 +2288,7 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
                 yield Static("[dim]esc[/dim]", id="spotify-close-hint")
 
             if is_connected:
-                user = self.auth_session.get("user", {})
+                user = self.auth_session.get("user") or {}
                 name = user.get("display_name") or user.get("id") or "Spotify User"
                 email = user.get("email") or ""
                 plan = user.get("product", "free").capitalize()
@@ -9871,6 +9871,8 @@ class SpoffTUI(App):
                     }
                 else:
                     pl = None
+            else:
+                pl = fetch_ytmusic_playlist(url)
 
             if pl and not tracks:
                 tracks = pl.get("tracks", [])

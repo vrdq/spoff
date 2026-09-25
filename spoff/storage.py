@@ -1124,7 +1124,8 @@ _playlist_listeners: List[Callable[[], None]] = []
 
 def on_playlists_saved(listener: Callable[[], None]) -> None:
     """Calls listener after every playlist save (e.g. to copy them elsewhere)."""
-    _playlist_listeners.append(listener)
+    if listener not in _playlist_listeners:
+        _playlist_listeners.append(listener)
 
 
 def save_saved_playlists(playlists: List[Dict[str, Any]]) -> None:

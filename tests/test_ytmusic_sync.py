@@ -28,7 +28,7 @@ class FakeYTM:
 
     def add_playlist_items(self, pid, video_ids, duplicates=False):
         self.playlists[pid]["tracks"] += [self._track(v) for v in video_ids]
-        return "STATUS_SUCCEEDED"
+        return {"status": "STATUS_SUCCEEDED", "playlistEditResults": []}   # a dict, like ytmusicapi
 
     def remove_playlist_items(self, pid, videos):
         gone = {v["setVideoId"] for v in videos}
@@ -130,3 +130,20 @@ def test_songs_youtube_hasnt_listed_yet_stay_recorded_as_spoffs(tmp_path):
     pl["tracks"] = []
     _run(fake, [pl], tmp_path)
     assert fake.videos("PL1") == []                            # still removed once dropped in Spoff
+
+
+def test_real_add_result_counts_as_success_and_songs_stay_tracked(tmp_path):
+    fake = FakeYTM()
+    pl = {"id": "p", "name": "x", "tracks": []}
+    _run(fake, [pl], tmp_path)
+    pl["tracks"] = [_yt_track("a", "AAAAAAAAAAA")]
+    _run(fake, [pl], tmp_path)                                  # added via add_playlist_items (dict result)
+    pl["tracks"] = []
+    _run(fake, [pl], tmp_path)
+    assert fake.videos("PL1") == []                             # it was recorded as Spoff's, so it's removed
+
+
+def test_angle_brackets_are_dropped_from_titles(tmp_path):
+    fake = FakeYTM()
+    _run(fake, [{"id": "p", "name": "<3 Songs", "tracks": []}], tmp_path)
+    assert fake.playlists["PL1"]["title"] == "3 Songs"
