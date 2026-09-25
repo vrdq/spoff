@@ -41,7 +41,7 @@ sudo dnf install mpv cava python3
 ### Install with pipx
 
 ```bash
-pipx install git+https://github.com/vrdq/spoff.git
+pipx install spoff
 ```
 
 To update:
