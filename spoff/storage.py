@@ -558,6 +558,19 @@ def save_auto_update(enabled: bool):
         logger.error(f"Error saving auto update setting: {e}")
         raise
 
+def get_saved_ytmusic_playlist_sync() -> bool:
+    """Whether playlists are copied to YouTube Music (off unless turned on)."""
+    try:
+        return bool(load_config().get("ytmusic_playlist_sync", False))
+    except Exception:
+        return False
+
+@transactional
+def save_ytmusic_playlist_sync(enabled: bool) -> None:
+    cfg = load_config()
+    cfg["ytmusic_playlist_sync"] = bool(enabled)
+    save_config(cfg)
+
 def get_saved_loudness_normalization() -> bool:
     """Whether songs are levelled to a common loudness, defaulting to True (like Spotify)."""
     try:
@@ -1106,8 +1119,21 @@ def load_saved_playlists() -> List[Dict[str, Any]]:
         save_saved_playlists(valid_playlists)
     return valid_playlists
 
+_playlist_listeners: List[Callable[[], None]] = []
+
+
+def on_playlists_saved(listener: Callable[[], None]) -> None:
+    """Calls listener after every playlist save (e.g. to copy them elsewhere)."""
+    _playlist_listeners.append(listener)
+
+
 def save_saved_playlists(playlists: List[Dict[str, Any]]) -> None:
     _atomic_json_dump(_get_playlists_file(), playlists)
+    for listener in list(_playlist_listeners):
+        try:
+            listener()
+        except Exception:
+            logger.exception("Playlist save listener failed")
 
 @transactional
 def add_saved_playlist(playlist: Dict[str, Any]):

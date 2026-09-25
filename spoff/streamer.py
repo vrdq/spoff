@@ -65,6 +65,20 @@ def set_youtube_login(spec: Optional[Tuple[str, Optional[str], Optional[str]]]) 
         _stream_cache.clear()  # cached stream URLs were resolved without the login
 
 
+def youtube_login_cookies() -> Dict[str, str]:
+    """The signed-in YouTube cookies as name -> value (empty when signed out).
+
+    Kept in memory only, like the yt-dlp cookie text they come from.
+    """
+    text = _youtube_cookies()
+    cookies: Dict[str, str] = {}
+    for line in (text.getvalue().splitlines() if text else []):
+        fields = line.split("\t")
+        if len(fields) == 7 and fields[0].lstrip(".").endswith("youtube.com"):
+            cookies[fields[5]] = fields[6]
+    return cookies
+
+
 def _youtube_cookies() -> Optional[io.StringIO]:
     """An in-memory Netscape cookie file holding only the YouTube/Google login.
 

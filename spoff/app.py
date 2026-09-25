@@ -74,6 +74,7 @@ try:
         get_saved_loudness_normalization, save_loudness_normalization, migrate_eq_to_native_rate,
         get_saved_spotify_audio, save_spotify_audio, _spotify_track_id_of,
         get_saved_youtube_login, save_youtube_login,
+        get_saved_ytmusic_playlist_sync, save_ytmusic_playlist_sync, on_playlists_saved,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
@@ -112,6 +113,7 @@ try:
     from .art import resolve_track_artwork, get_cached_artwork
     from .spotify_audio import SpotifyAudio, librespot_path
     from . import youtube_account
+    from . import ytmusic_sync
 except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url
     from ytmusic import (
@@ -133,6 +135,7 @@ except ImportError:
         get_saved_loudness_normalization, save_loudness_normalization, migrate_eq_to_native_rate,
         get_saved_spotify_audio, save_spotify_audio, _spotify_track_id_of,
         get_saved_youtube_login, save_youtube_login,
+        get_saved_ytmusic_playlist_sync, save_ytmusic_playlist_sync, on_playlists_saved,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
@@ -171,6 +174,7 @@ except ImportError:
     from art import resolve_track_artwork, get_cached_artwork
     from spotify_audio import SpotifyAudio, librespot_path
     import youtube_account
+    import ytmusic_sync  # type: ignore
 
 logger = logging.getLogger("spoff")
 
@@ -847,6 +851,13 @@ class LoudnessToggle(Static):
         if isinstance(self.screen, SettingsModal):
             self.screen.toggle_loudness()
 
+class YTMusicSyncToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_ytmusic_sync()
+
 class YouTubeAccountToggle(Static):
     can_focus = True
 
@@ -1042,6 +1053,7 @@ class SettingsModal(SafeModalScreen[None]):
                 yield VisualizerColorToggle(id="vis-color-toggle", classes="setting-toggle-item")
                 yield Static("AUDIO", classes="settings-section")
                 yield YouTubeAccountToggle(id="youtube-account-toggle", classes="setting-toggle-item")
+                yield YTMusicSyncToggle(id="ytmusic-sync-toggle", classes="setting-toggle-item")
                 yield SpotifyAudioToggle(id="spotify-audio-toggle", classes="setting-toggle-item")
                 yield LoudnessToggle(id="loudness-toggle", classes="setting-toggle-item")
                 yield EQSettingsNavToggle(id="eq-settings-nav-toggle", classes="setting-toggle-item")
@@ -1138,6 +1150,11 @@ class SettingsModal(SafeModalScreen[None]):
             self.query_one("#youtube-account-toggle", Static).update(
                 self._row("YouTube account", youtube_account.browser_label(yt_login) if yt_login else "sign in with Google",
                           on=True if yt_login else None))
+            copying = get_saved_ytmusic_playlist_sync()
+            self.query_one("#ytmusic-sync-toggle", Static).update(
+                self._row("Copy playlists to YouTube Music",
+                          ("on" if copying else "off") if yt_login else "sign in first",
+                          on=(copying if yt_login else False)))
 
             from_spotify = get_saved_spotify_audio()
             self.query_one("#spotify-audio-toggle", Static).update(
@@ -1169,6 +1186,11 @@ class SettingsModal(SafeModalScreen[None]):
             self.spoff_app.start_youtube_login()
             self.query_one("#settings-status-line", Static).update("Waiting for you to sign in with Google…")
         self.update_toggle_ui()
+
+    def toggle_ytmusic_sync(self) -> None:
+        status = self.spoff_app.toggle_ytmusic_sync()
+        self.update_toggle_ui()
+        self.query_one("#settings-status-line", Static).update(status)
 
     def toggle_spotify_audio(self) -> None:
         enabled = self.spoff_app.toggle_spotify_audio()
@@ -1350,6 +1372,7 @@ class SettingsModal(SafeModalScreen[None]):
             "vis-style-toggle",
             "vis-color-toggle",
             "youtube-account-toggle",
+            "ytmusic-sync-toggle",
             "spotify-audio-toggle",
             "loudness-toggle",
             "eq-settings-nav-toggle",
@@ -1386,6 +1409,8 @@ class SettingsModal(SafeModalScreen[None]):
             self.cycle_visualizer_color()
         elif focused_id == "youtube-account-toggle":
             self.toggle_youtube_account()
+        elif focused_id == "ytmusic-sync-toggle":
+            self.toggle_ytmusic_sync()
         elif focused_id == "spotify-audio-toggle":
             self.toggle_spotify_audio()
         elif focused_id == "loudness-toggle":
@@ -1411,7 +1436,7 @@ class SettingsModal(SafeModalScreen[None]):
 
     def on_key(self, event: events.Key) -> None:
         table = self.query_one("#settings-table", DataTable)
-        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "youtube-account-toggle", "spotify-audio-toggle", "loudness-toggle", "eq-settings-nav-toggle"]
+        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "youtube-account-toggle", "ytmusic-sync-toggle", "spotify-audio-toggle", "loudness-toggle", "eq-settings-nav-toggle"]
         focused_id = self.focused.id if self.focused else None
 
         if focused_id in toggle_ids:
@@ -1451,6 +1476,8 @@ class SettingsModal(SafeModalScreen[None]):
                     self.cycle_visualizer_color()
                 elif focused_id == "youtube-account-toggle":
                     self.toggle_youtube_account()
+                elif focused_id == "ytmusic-sync-toggle":
+                    self.toggle_ytmusic_sync()
                 elif focused_id == "spotify-audio-toggle":
                     self.toggle_spotify_audio()
                 elif focused_id == "loudness-toggle":
@@ -5843,6 +5870,10 @@ class SpoffTUI(App):
         self.check_github_updates_bg()
         self.spotify_audio: Optional[SpotifyAudio] = None
         set_youtube_login(get_saved_youtube_login())
+        self._ytmusic_sync_timer: Optional[threading.Timer] = None
+        self._ytmusic_sync_timer_lock = threading.Lock()
+        on_playlists_saved(self.schedule_ytmusic_sync)
+        self.schedule_ytmusic_sync()
         if get_saved_spotify_audio():
             self.enable_spotify_audio(quiet=True)
         self.backfill_playlists_art_bg()
@@ -5994,6 +6025,52 @@ class SpoffTUI(App):
             self._on_ui(self._refresh_settings_if_open)
 
         threading.Thread(target=_worker, daemon=True).start()
+
+    # ------------------------------------------------ YouTube Music playlist copies
+
+    YTMUSIC_SYNC_DELAY = 20.0  # wait for a burst of playlist edits to settle
+
+    def toggle_ytmusic_sync(self) -> str:
+        """Turns playlist copying on or off; returns the status line to show."""
+        if not self.youtube_signed_in():
+            return "Sign in to YouTube first, then turn this on."
+        enabled = not get_saved_ytmusic_playlist_sync()
+        save_ytmusic_playlist_sync(enabled)
+        if enabled:
+            self.schedule_ytmusic_sync(delay=0.0, announce=True)
+            return "Copying your playlists to YouTube Music…"
+        return "Playlists stay in Spoff. Copies already on YouTube Music are kept."
+
+    def schedule_ytmusic_sync(self, delay: Optional[float] = None, announce: bool = False) -> None:
+        """Copies playlists to YouTube Music after a quiet period (thread-safe)."""
+        if not (get_saved_ytmusic_playlist_sync() and self.youtube_signed_in()):
+            return
+        with self._ytmusic_sync_timer_lock:
+            if self._ytmusic_sync_timer is not None:
+                self._ytmusic_sync_timer.cancel()
+            timer = threading.Timer(self.YTMUSIC_SYNC_DELAY if delay is None else delay,
+                                    self._run_ytmusic_sync, kwargs={"announce": announce})
+            timer.daemon = True
+            self._ytmusic_sync_timer = timer
+            timer.start()
+
+    def _run_ytmusic_sync(self, announce: bool = False) -> None:
+        try:
+            counts = ytmusic_sync.sync_playlists(load_saved_playlists())
+        except Exception as exc:
+            logger.exception("Copying playlists to YouTube Music failed")
+            if announce:
+                self._on_ui(self.notify_user, f"Couldn't copy playlists to YouTube Music ({exc}).", force=True)
+            return
+        if not announce:
+            return
+        n = counts["playlists"]
+        text = f"Copied {n} {'playlist' if n == 1 else 'playlists'} to YouTube Music."
+        if counts["missing"]:
+            text += f" {counts['missing']} {'song isn' if counts['missing'] == 1 else 'songs aren'}'t on YouTube."
+        if counts["failed"]:
+            text += f" {counts['failed']} couldn't be copied; Spoff tries again on the next change."
+        self._on_ui(self.notify_user, text, force=True)
 
     def youtube_logout(self) -> None:
         save_youtube_login(None)
