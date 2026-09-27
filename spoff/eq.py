@@ -404,6 +404,24 @@ FREE_FIELD_PRESET = EQPreset(
     ]
 )
 
+MOONDROP_CHU_2_MAX_BASS_PRESET = EQPreset(
+    name="Moondrop Chu II Maximum Bass Impact",
+    description="Moondrop Chu II basshead tuning: skull-shaking sub-bass shelf, punchy kick slam, clean lower-mid tuck, tamed treble peaks, and crystal air",
+    preamp_db=-10.8,
+    bands=[
+        EQBand(1, FilterType.LOW_SHELF, 38.0, +10.5, 0.71, label="Sub-bass shelf"),
+        EQBand(2, FilterType.PEAKING, 72.0, +5.5, 1.10, label="Chest punch"),
+        EQBand(3, FilterType.PEAKING, 190.0, -3.0, 1.00, label="Anti-mud tuck"),
+        EQBand(4, FilterType.PEAKING, 650.0, +1.5, 1.20, label="Vocal body"),
+        EQBand(5, FilterType.PEAKING, 1500.0, -1.0, 1.80, label="Boxiness cut"),
+        EQBand(6, FilterType.PEAKING, 3000.0, -2.0, 2.20, label="Upper-mid smooth"),
+        EQBand(7, FilterType.PEAKING, 4400.0, +2.0, 2.50, label="Attack bite"),
+        EQBand(8, FilterType.PEAKING, 5800.0, -3.5, 3.20, label="Sibilance dip"),
+        EQBand(9, FilterType.PEAKING, 8200.0, -3.5, 3.50, label="Treble peak cut"),
+        EQBand(10, FilterType.HIGH_SHELF, 13000.0, +4.0, 0.71, label="Air shelf"),
+    ]
+)
+
 MOONDROP_CHU_2_REFERENCE_PRESET = EQPreset(
     name="Moondrop Chu II Audiophile Reference",
     description="Moondrop Chu II: a little more sub-bass, less mud, tamed 5.8k and 8.2k peaks, more air",
@@ -423,6 +441,7 @@ MOONDROP_CHU_2_REFERENCE_PRESET = EQPreset(
 )
 
 BUILTIN_PRESETS: List[EQPreset] = [
+    MOONDROP_CHU_2_MAX_BASS_PRESET,
     MOONDROP_CHU_2_REFERENCE_PRESET,
     SAMSUNG_AKG_AUDIOPHILE_PRO_PRESET,
     SAMSUNG_AKG_REFERENCE_PRESET,

@@ -87,7 +87,7 @@ try:
         record_deleted_spotify_playlist_id, liked_index, storage_transaction,
         update_playlist_details, is_low_quality_cache
     )
-    from .streamer import set_youtube_login, is_on_youtube, search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
+    from .streamer import set_youtube_login, signed_in_playback_available, is_on_youtube, search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from .search import live_search_tracks, resolve_direct_track_url
     from .player import MPVController
     from .eq import (
@@ -148,7 +148,7 @@ except ImportError:
         record_deleted_spotify_playlist_id, liked_index, storage_transaction,
         update_playlist_details, is_low_quality_cache
     )
-    from streamer import set_youtube_login, is_on_youtube, search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
+    from streamer import set_youtube_login, signed_in_playback_available, is_on_youtube, search_and_resolve_stream, download_track_to_cache, invalidate_stream_cache, cached_audio_matches_duration
     from search import live_search_tracks, resolve_direct_track_url
     from player import MPVController
     from eq import (
@@ -6018,7 +6018,10 @@ class SpoffTUI(App):
             save_youtube_login(spec)
             set_youtube_login(spec)
             where = youtube_account.browser_label(spec)
-            if youtube_account.has_premium_audio(spec):
+            if not signed_in_playback_available():
+                _say(f"Signed in to YouTube via {where}, but high-quality audio needs node, deno "
+                     "or bun installed (e.g. sudo pacman -S nodejs). Songs play signed out until then.")
+            elif youtube_account.has_premium_audio(spec):
                 _say(f"Signed in to YouTube via {where}. High-quality (256 kbps) audio is on.")
             else:
                 _say(f"Signed in to YouTube via {where}. This account doesn't get the high-quality "

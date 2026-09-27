@@ -39,9 +39,10 @@ def test_premium_files_and_unknown_bitrate_are_kept(tmp_path):
 
 def test_signing_in_turns_upgrades_on():
     from spoff import streamer
-    streamer.set_youtube_login(("brave", None, None))
-    try:
-        assert storage._hq_upgrades
-    finally:
-        streamer.set_youtube_login(None)
+    with patch.object(streamer, "_js_runtimes", return_value={"node": {}}):
+        streamer.set_youtube_login(("brave", None, None))
+        try:
+            assert storage._hq_upgrades
+        finally:
+            streamer.set_youtube_login(None)
     assert not storage._hq_upgrades

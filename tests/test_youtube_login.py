@@ -90,3 +90,18 @@ def test_the_account_picked_in_the_chooser_wins_over_the_old_login(tmp_path):
     with patch.object(youtube_account, "find_logged_in_browser", return_value=spec):
         assert youtube_account.wait_for_login(timeout=0.3, interval=0.05, since=old + 60) is None   # nothing picked yet
         assert youtube_account.wait_for_login(timeout=0.3, interval=0.05, since=old - 1) == spec
+
+
+def test_without_a_js_runtime_playback_stays_signed_out():
+    from unittest.mock import patch
+    from spoff import streamer, storage
+    with patch.object(streamer, "_js_runtimes", return_value={}), \
+         patch.object(streamer, "_youtube_cookies") as cookies:
+        streamer.set_youtube_login(("brave", None, None))
+        try:
+            opts = streamer.get_base_ydl_opts()
+            assert "cookiefile" not in opts and "js_runtimes" not in opts
+            cookies.assert_not_called()
+            assert not storage._hq_upgrades        # no pointless re-downloads either
+        finally:
+            streamer.set_youtube_login(None)

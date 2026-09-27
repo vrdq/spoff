@@ -26,21 +26,25 @@ Terminal audio player for Linux that streams from YouTube Music and syncs Spotif
 
 - Python 3.10+
 - `mpv` (playback engine)
+- `ffmpeg` (checks and repairs saved songs)
 - `cava` (visualizer, optional)
+- `node`, `deno` or `bun` (optional; needed for 256 kbps audio when signed in to YouTube Music Premium)
+
+The AppImage bundles Python and every Python package, but not these system programs.
 
 On Arch Linux:
 ```bash
-sudo pacman -S mpv cava python
+sudo pacman -S mpv ffmpeg cava python nodejs
 ```
 
 On Debian / Ubuntu:
 ```bash
-sudo apt install mpv cava python3 python3-pip
+sudo apt install mpv ffmpeg cava python3 python3-pip nodejs
 ```
 
 On Fedora:
 ```bash
-sudo dnf install mpv cava python3
+sudo dnf install mpv ffmpeg cava python3 nodejs
 ```
 
 ### Install with pipx

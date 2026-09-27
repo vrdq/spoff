@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Spoff
+GenericName=Terminal Music Player
+Comment=Terminal music player streaming from YouTube Music and syncing Spotify
+Icon=spoff
+Exec=spoff
+Terminal=true
+Categories=AudioVideo;Audio;Player;ConsoleOnly;

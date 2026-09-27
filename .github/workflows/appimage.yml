@@ -21,21 +21,24 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install build tools and python-appimage
+      - name: Install build tools
         run: |
-          python -m pip install --upgrade pip build wheel
-          pip install python-appimage
+          python -m pip install --upgrade pip build python-appimage
+          sudo apt-get update && sudo apt-get install -y librsvg2-bin
 
       - name: Build wheel
-        run: |
-          python -m build --wheel
+        run: python -m build --wheel
 
       - name: Build AppImage
         run: |
-          WHEEL=$(ls dist/*.whl | head -n 1)
-          python -m python_appimage build app -p 3.11 "$WHEEL"
-          # Find generated AppImage and standardize name
-          mv spoff-*.AppImage spoff-x86_64.AppImage
+          # python-appimage builds from a recipe folder, not from a wheel.
+          RECIPE="$RUNNER_TEMP/recipe"
+          mkdir -p "$RECIPE"
+          cp packaging/appimage/entrypoint.sh packaging/appimage/spoff.desktop "$RECIPE/"
+          rsvg-convert -w 256 -h 256 packaging/flatpak/dev.vrdq.spoff.svg -o "$RECIPE/spoff.png"
+          ls "$PWD"/dist/*.whl > "$RECIPE/requirements.txt"
+          python -m python_appimage build app -p 3.12 "$RECIPE"
+          mv Spoff-x86_64.AppImage spoff-x86_64.AppImage
 
       - name: Upload AppImage Artifact
         uses: actions/upload-artifact@v4

@@ -8,6 +8,7 @@ from spoff.eq import (
     SAMSUNG_AKG_REFERENCE_PRESET,
     HARMAN_IN_EAR_2019_PRESET,
     MOONDROP_CHU_2_REFERENCE_PRESET,
+    MOONDROP_CHU_2_MAX_BASS_PRESET,
     BUILTIN_PRESETS,
     format_gain_bar,
     render_braille_curve,
@@ -579,6 +580,7 @@ class TestEQEngineAdvancedSettings(unittest.TestCase):
         self.assertIn("IEF Neutral 2020", names)
         self.assertIn("Diffuse Field (DF)", names)
         self.assertIn("Moondrop Chu II Audiophile Reference", names)
+        self.assertIn("Moondrop Chu II Maximum Bass Impact", names)
         self.assertIn("Free Field (FF)", names)
 
         for p in BUILTIN_PRESETS:
@@ -596,6 +598,23 @@ class TestEQEngineAdvancedSettings(unittest.TestCase):
         for f in range(20, 20001, 50):
             mag = engine.get_magnitude_at_freq(float(f))
             self.assertLess(mag, 0.0, f"Clipping detected at {f}Hz with magnitude {mag} dB")
+
+    def test_moondrop_chu_2_max_bass_preset_dsp_integrity(self):
+        preset = MOONDROP_CHU_2_MAX_BASS_PRESET
+        self.assertEqual(len(preset.bands), 10)
+        self.assertEqual(preset.preamp_db, -10.8)
+
+        engine = ParametricEQEngine(preset)
+        self.assertEqual(len(engine.bands), 10)
+        # Verify 0 dBFS clipping immunity across audio band
+        for f in range(20, 20001, 50):
+            mag = engine.get_magnitude_at_freq(float(f))
+            self.assertLessEqual(mag, 0.0, f"Clipping detected at {f}Hz with magnitude {mag} dB")
+
+        # Verify massive bass response relative to 1kHz
+        mid_ref = engine.get_magnitude_at_freq(1000.0)
+        sub_bass_rel = engine.get_magnitude_at_freq(30.0) - mid_ref
+        self.assertGreaterEqual(sub_bass_rel, 7.5)
 
 
 class TestEQSettingsModalUI(unittest.TestCase):

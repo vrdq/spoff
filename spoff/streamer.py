@@ -58,7 +58,8 @@ COOKIE_REFRESH = 600.0  # re-read the browser's login every 10 minutes
 def set_youtube_login(spec: Optional[Tuple[str, Optional[str], Optional[str]]]) -> None:
     global _youtube_login, _cookie_text
     _youtube_login = tuple(spec) if spec else None  # type: ignore[assignment]
-    set_hq_upgrades(bool(spec))
+    # Re-downloading for 256 kbps only makes sense when signed-in audio works.
+    set_hq_upgrades(bool(spec) and bool(_js_runtimes()))
     with _cookie_lock:
         _cookie_text = None
     with _stream_cache_lock:
@@ -118,6 +119,22 @@ def _js_runtimes() -> Dict[str, Dict[str, Any]]:
     return {name: {} for name in ("deno", "node", "bun") if shutil.which(name)}
 
 
+_warned_no_js_runtime = False
+
+
+def _warn_no_js_runtime() -> None:
+    global _warned_no_js_runtime
+    if not _warned_no_js_runtime:
+        _warned_no_js_runtime = True
+        logger.warning("Signed in to YouTube, but no JavaScript runtime (node, deno or bun) "
+                       "is installed; playing signed out")
+
+
+def signed_in_playback_available() -> bool:
+    """Whether the YouTube login can be used for audio (it needs a JS runtime)."""
+    return bool(_js_runtimes())
+
+
 def _restricted_mode(exc: BaseException) -> bool:
     # On www.youtube.com links YouTube reports Restricted Mode blocks as a plain
     # "Video unavailable"; signed out, the same song usually plays.
@@ -150,9 +167,14 @@ def get_base_ydl_opts(extra_opts=None, use_login: bool = True):
         "fragment_retries": 2,
         "extractor_retries": 1,
     }
-    cookies = _youtube_cookies() if use_login else None
+    runtimes = _js_runtimes() if use_login and _youtube_login else {}
+    if use_login and _youtube_login and not runtimes:
+        _warn_no_js_runtime()
+    # Without a JavaScript runtime, signed-in requests fail outright ("format
+    # not available"), so playback stays signed out until one is installed.
+    cookies = _youtube_cookies() if runtimes else None
     if cookies is not None:
-        opts["js_runtimes"] = _js_runtimes()
+        opts["js_runtimes"] = runtimes
         # Signed in: the browser's YouTube login goes with each request, which
         # also unlocks YouTube Premium's high-quality stream.
         opts["cookiefile"] = cookies
