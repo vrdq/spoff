@@ -117,9 +117,12 @@ def check_for_updates() -> Optional[Dict[str, Any]]:
     Checks GitHub for the latest push to the main branch.
     Returns details if a new commit exists, otherwise None.
     """
+    if os.environ.get("FLATPAK_ID") or os.environ.get("APPIMAGE"):
+        return None  # Flatpak updates itself; an AppImage is replaced by a new file
     local_sha = get_local_commit()
     if not local_sha:
-        return None
+        # pipx / pip installs from PyPI carry no commit; compare versions instead.
+        return check_pypi_update()
 
     remote_sha = get_remote_commit_sha()
     if not remote_sha or remote_sha.lower() == local_sha.lower() or remote_sha.lower().startswith(local_sha.lower()) or local_sha.lower().startswith(remote_sha.lower()):
@@ -172,6 +175,46 @@ def check_for_updates() -> Optional[Dict[str, Any]]:
         "author": author,
         "date": date_str
     }
+
+PYPI_URL = "https://pypi.org/pypi/spoff/json"
+
+
+def _version_key(version: str) -> Tuple[int, ...]:
+    parts = []
+    for piece in version.split("."):
+        digits = "".join(ch for ch in piece if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+def check_pypi_update() -> Optional[Dict[str, Any]]:
+    """Update details when PyPI has a newer release than the installed one."""
+    try:
+        import importlib.metadata
+        installed = importlib.metadata.version("spoff")
+    except Exception:
+        return None
+    try:
+        req = urllib.request.Request(PYPI_URL, headers={"User-Agent": "spoff-updater"})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        logger.debug("PyPI update check failed", exc_info=True)
+        return None
+    latest = str((data.get("info") or {}).get("version") or "")
+    if not latest or _version_key(latest) <= _version_key(installed):
+        return None
+    files = (data.get("releases") or {}).get(latest) or []
+    return {
+        "has_update": True,
+        "local_sha": f"v{installed}",
+        "remote_sha": f"v{latest}",
+        "full_remote_sha": latest,
+        "message": f"Spoff {latest} is out",
+        "author": "vrdq",
+        "date": (files[0].get("upload_time") or "") if files else "",
+    }
+
 
 def is_git_checkout() -> bool:
     """True when Spoff runs from a git working clone (a developer checkout)."""

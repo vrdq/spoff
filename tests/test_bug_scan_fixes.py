@@ -123,3 +123,28 @@ def test_artwork_from_a_different_artist_is_rejected():
     right = {"results": [{"artistName": "Real Artist", "artworkUrl100": "https://x/100x100bb.jpg"}]}
     with patch("urllib.request.urlopen", return_value=Resp(json.dumps(right).encode())):
         assert art.fetch_itunes_art("Song", "Real Artist - Topic") == "https://x/600x600bb.jpg"
+
+
+def test_pypi_installs_are_told_about_new_releases():
+    import io, json
+    from unittest.mock import patch
+    from spoff import updater
+    page = json.dumps({"info": {"version": "0.2.0"},
+                       "releases": {"0.2.0": [{"upload_time": "2026-10-01T10:00:00"}]}}).encode()
+    class Resp(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    with patch.object(updater, "get_local_commit", return_value=None), \
+         patch("importlib.metadata.version", return_value="0.1.0"), \
+         patch.dict("os.environ", {}, clear=False), \
+         patch("urllib.request.urlopen", return_value=Resp(page)):
+        import os
+        os.environ.pop("FLATPAK_ID", None); os.environ.pop("APPIMAGE", None)
+        info = updater.check_for_updates()
+    assert info["has_update"] and info["remote_sha"] == "v0.2.0"
+    with patch.object(updater, "get_local_commit", return_value=None), \
+         patch("importlib.metadata.version", return_value="0.2.0"), \
+         patch("urllib.request.urlopen", return_value=Resp(page)):
+        assert updater.check_for_updates() is None
+    with patch.dict("os.environ", {"FLATPAK_ID": "dev.vrdq.spoff"}):
+        assert updater.check_for_updates() is None
