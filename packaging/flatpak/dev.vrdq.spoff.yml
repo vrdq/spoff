@@ -1,45 +1,168 @@
 app-id: dev.vrdq.spoff
-runtime: org.freedesktop.Platform
-runtime-version: '24.08'
-sdk: org.freedesktop.Sdk
+# GNOME rather than freedesktop: it ships PyGObject, which MPRIS (pydbus) needs.
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
 command: spoff
 
 finish-args:
-  # Network access for YouTube Music audio and Spotify metadata
   - --share=network
-  # Audio playback through PipeWire / PulseAudio
   - --socket=pulseaudio
-  # D-Bus MPRIS 2 interface for media keys & bar widgets
-  - --socket=session-bus
-  - --talk-name=org.mpris.MediaPlayer2.*
+  # MPRIS 2 (media keys, bar widgets); a second instance adds ".instance<pid>".
+  - --own-name=org.mpris.MediaPlayer2.spoff
+  - --own-name=org.mpris.MediaPlayer2.spoff.*
+  # Browser cookie keys for "Sign in with Google" (YouTube Music Premium).
   - --talk-name=org.freedesktop.secrets
-  # Persistent cache and configuration directories
+  - --talk-name=org.kde.kwalletd5
+  - --talk-name=org.kde.kwalletd6
+  # Library, cache and settings (shared with non-Flatpak installs).
   - --filesystem=xdg-data/spoff:create
-  - --filesystem=xdg-config/spoff:create
+  # Read-only: yt-dlp reads the YouTube login from the browser's cookie store.
+  - --filesystem=~/.config/BraveSoftware:ro
+  - --filesystem=~/.config/google-chrome:ro
+  - --filesystem=~/.config/chromium:ro
+  - --filesystem=~/.config/vivaldi:ro
+  - --filesystem=~/.config/microsoft-edge:ro
+  - --filesystem=~/.config/opera:ro
+  - --filesystem=~/.mozilla:ro
+  - --filesystem=~/.var/app/com.brave.Browser:ro
+  - --filesystem=~/.var/app/org.mozilla.firefox:ro
+  - --filesystem=~/.var/app/org.chromium.Chromium:ro
+  - --filesystem=~/.var/app/com.google.Chrome:ro
+
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /lib/cmake
+  - /share/man
+  - /share/doc
+  - '*.a'
+  - '*.la'
 
 modules:
-  # System backend: mpv (compiled with lua and pipewire audio output)
+  - python3-modules.yaml
+
+  # ffmpeg/ffprobe: Spoff checks and measures saved songs with them, and mpv
+  # links against these libraries.
+  - name: ffmpeg
+    config-opts:
+      - --enable-shared
+      - --disable-static
+      - --disable-doc
+      - --disable-debug
+      - --disable-ffplay
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-7.1.2.tar.xz
+        sha256: 089bc60fb59d6aecc5d994ff530fd0dcb3ee39aa55867849a2bbc4e555f9c304
+
+  - name: libass
+    config-opts:
+      - --disable-static
+    sources:
+      - type: archive
+        url: https://github.com/libass/libass/releases/download/0.17.5/libass-0.17.5.tar.xz
+        sha256: 2dca25c0e0c837ddf00b52011b3f82cac1e4ddd3ad018227806b0c2288864acc
+
+  - name: libplacebo
+    buildsystem: meson
+    config-opts:
+      - -Dvulkan=disabled
+      - -Dopengl=disabled
+      - -Dd3d11=disabled
+      - -Dglslang=disabled
+      - -Dshaderc=disabled
+      - -Dlcms=disabled
+      - -Ddemos=false
+      - -Dtests=false
+    sources:
+      - type: git
+        url: https://github.com/haasn/libplacebo.git
+        tag: v7.360.1
+        commit: cee9b076f2c63104ccfd497fa79c39a867293ec4
+
+  # Audio only: Spoff runs mpv with --no-video.
   - name: mpv
     buildsystem: meson
     config-opts:
-      - -Dlibmpv=true
+      - -Dlibmpv=false
       - -Dcplayer=true
-      - -Dalsa=enabled
+      - -Dlua=disabled
+      - -Djavascript=disabled
+      - -Dmanpage-build=disabled
       - -Dpulse=enabled
       - -Dpipewire=enabled
+      - -Dalsa=enabled
     sources:
-      - type: git
-        url: https://github.com/mpv-player/mpv.git
-        tag: v0.38.0
+      - type: archive
+        url: https://github.com/mpv-player/mpv/archive/refs/tags/v0.41.0.tar.gz
+        sha256: ee21092a5ee427353392360929dc64645c54479aefdb5babc5cfbb5fad626209
 
-  # Spoff Python Application and CLI entrypoint
+  # Visualizer.
+  - name: fftw
+    config-opts:
+      - --enable-shared
+      - --disable-static
+      - --enable-threads
+    sources:
+      - type: archive
+        url: https://www.fftw.org/fftw-3.3.10.tar.gz
+        sha256: 56c932549852cddcfafdab3820b0200c7742675be92179e59e6215b340e26467
+
+  - name: iniparser
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DBUILD_TESTING=OFF
+      - -DBUILD_EXAMPLES=OFF
+      - -DBUILD_DOCS=OFF
+    sources:
+      - type: archive
+        url: https://github.com/ndevilla/iniparser/archive/refs/tags/v4.3.0.tar.gz
+        sha256: 97375d6a3c481ebb27c47884aa57934599eed027a3015225e2f13173efd39643
+
+  - name: cava
+    build-options:
+      # iniparser 4.3 installs its header under include/iniparser/.
+      cflags: -I/app/include/iniparser
+    config-opts:
+      - --disable-input-alsa
+      - --disable-input-portaudio
+      - --disable-input-sndio
+      - --disable-input-jack
+      - --disable-output-sdl
+      - --disable-cava-font
+    sources:
+      - type: archive
+        url: https://github.com/karlstav/cava/archive/refs/tags/1.0.0.tar.gz
+        sha256: 2866cea11d0bd38406924ab2b47d5577f14909a7321ee928b6836391f375af7e
+      - type: script
+        dest-filename: autogen.sh
+        commands:
+          - autoreconf -fi
+
+  # JavaScript runtime: signed-in YouTube requests need one to unscramble
+  # stream links (256 kbps audio for YouTube Music Premium).
+  - name: deno
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 deno /app/bin/deno
+    sources:
+      - type: archive
+        only-arches: [x86_64]
+        url: https://github.com/denoland/deno/releases/download/v2.9.7/deno-x86_64-unknown-linux-gnu.zip
+        sha256: c6527f24f4b16031d3ae4fa9f658d5f11534c8d84ce7dc8502420280919c3490
+      - type: archive
+        only-arches: [aarch64]
+        url: https://github.com/denoland/deno/releases/download/v2.9.7/deno-aarch64-unknown-linux-gnu.zip
+        sha256: c832298b1ad4422481334855f6003e0f54145762c5a134f20a489511d2f65bbf
+
   - name: spoff
     buildsystem: simple
     build-commands:
-      - pip3 install --no-index --find-links="file://${PWD}" --prefix=${FLATPAK_DEST} spoff
-      - install -Dm644 dev.vrdq.spoff.desktop /app/share/applications/dev.vrdq.spoff.desktop
-      - install -Dm644 dev.vrdq.spoff.svg /app/share/icons/hicolor/scalable/apps/dev.vrdq.spoff.svg
-      - install -Dm644 dev.vrdq.spoff.metainfo.xml /app/share/metainfo/dev.vrdq.spoff.metainfo.xml
+      - pip3 install --no-index --no-build-isolation --find-links="file://${PWD}" --prefix=${FLATPAK_DEST} spoff
+      - install -Dm644 dev.vrdq.spoff.desktop ${FLATPAK_DEST}/share/applications/dev.vrdq.spoff.desktop
+      - install -Dm644 dev.vrdq.spoff.svg ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/dev.vrdq.spoff.svg
+      - install -Dm644 dev.vrdq.spoff.metainfo.xml ${FLATPAK_DEST}/share/metainfo/dev.vrdq.spoff.metainfo.xml
     sources:
       - type: file
         url: https://files.pythonhosted.org/packages/source/s/spoff/spoff-0.1.0.tar.gz
