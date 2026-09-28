@@ -377,10 +377,13 @@ def perform_update() -> Tuple[bool, str]:
                 except subprocess.TimeoutExpired:
                     return False, "uv tool upgrade timed out."
 
-        # Standard pip update fallback for this Python executable
+        # Standard pip update fallback for this Python executable. A pip install
+        # from git records its commit; one from PyPI doesn't, and upgrades from
+        # PyPI (no git needed, and no unreleased code from main).
+        target = f"git+https://github.com/{GITHUB_REPO}.git" if get_local_commit() else "spoff"
         try:
             pip_res = subprocess.run(
-                [python_bin, "-m", "pip", "install", "--upgrade", f"git+https://github.com/{GITHUB_REPO}.git"],
+                [python_bin, "-m", "pip", "install", "--upgrade", target],
                 stdin=subprocess.DEVNULL,
                 capture_output=True,
                 text=True,

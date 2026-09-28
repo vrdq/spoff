@@ -148,3 +148,23 @@ def test_pypi_installs_are_told_about_new_releases():
         assert updater.check_for_updates() is None
     with patch.dict("os.environ", {"FLATPAK_ID": "dev.vrdq.spoff"}):
         assert updater.check_for_updates() is None
+
+
+def test_pip_update_of_a_pypi_install_upgrades_from_pypi():
+    from unittest.mock import patch, MagicMock
+    from spoff import updater
+    run = MagicMock(return_value=MagicMock(returncode=0, stdout="", stderr=""))
+    with patch.object(updater, "get_local_commit", return_value=None), \
+         patch.object(updater, "is_git_checkout", return_value=False), \
+         patch.object(updater.sys, "prefix", "/usr"), \
+         patch.object(updater.subprocess, "run", run), \
+         patch.object(updater.subprocess, "check_output", side_effect=Exception("no git")):
+        ok, _ = updater.perform_update()
+    assert ok
+    assert run.call_args.args[0][-1] == "spoff"
+
+
+def test_eq_settings_bindings_have_actions():
+    from spoff.app import EQSettingsModal
+    for binding in EQSettingsModal.BINDINGS:
+        assert hasattr(EQSettingsModal, f"action_{binding.action}"), binding.action

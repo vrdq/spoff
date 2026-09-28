@@ -3589,6 +3589,19 @@ class EQSettingsModal(SafeModalScreen[None]):
             f"Reset to {escape(SAMSUNG_AKG_REFERENCE_PRESET.name)}."
         )
         
+    # Key bindings dispatch to action_<name>.
+    def action_open_live_editor(self) -> None:
+        self.open_live_editor()
+
+    def action_reset_to_reference(self) -> None:
+        self.reset_to_reference()
+
+    def action_import_from_clipboard(self) -> None:
+        self.import_from_clipboard()
+
+    def action_export_to_clipboard(self) -> None:
+        self.export_to_clipboard()
+
     def open_live_editor(self) -> None:
         self.dismiss(None)
         if not isinstance(self.app.screen, EqualizerModal):

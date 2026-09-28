@@ -115,8 +115,7 @@ class TestSpotifyParsingSafety(unittest.TestCase):
 
         res = spotify.fetch_spotify_playlist("37i9dQZF1DXcBWIGoYBM5M")
         self.assertIsNotNone(res)
-        self.assertEqual(len(res["tracks"]), 1)
-        self.assertEqual(res["tracks"][0]["id"], "")
+        self.assertEqual(res["tracks"], [])   # no track link: skipped instead of an empty id
 
     @patch("urllib.request.urlopen")
     def test_fetch_spotify_track_with_malformed_artist_uri(self, mock_urlopen):

@@ -54,6 +54,8 @@ def fetch_spotify_playlist(playlist_id_or_url: str) -> Optional[Dict[str, Any]]:
 
     tracks: List[Dict[str, Any]] = []
     for item in entity.get("trackList", []):
+        if not str(item.get("uri") or "").startswith("spotify:track:"):
+            continue  # local files and podcast episodes have no playable track id
         tracks.append({
             "id": str(item.get("uri") or "").replace("spotify:track:", ""),
             "title": item.get("title") or "Unknown Title",
@@ -106,6 +108,8 @@ def fetch_spotify_album(album_id_or_url: str) -> Optional[Dict[str, Any]]:
 
     tracks: List[Dict[str, Any]] = []
     for item in entity.get("trackList", []):
+        if not str(item.get("uri") or "").startswith("spotify:track:"):
+            continue  # local files and podcast episodes have no playable track id
         tracks.append({
             "id": str(item.get("uri") or "").replace("spotify:track:", ""),
             "title": item.get("title") or "Unknown Title",
