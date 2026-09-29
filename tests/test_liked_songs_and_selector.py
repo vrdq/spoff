@@ -392,13 +392,14 @@ class TestPlaylistSelectorAndLikedTabAppLogic(unittest.TestCase):
 
         nav_bar.update.assert_called_once()
         rendered_text = nav_bar.update.call_args[0][0]
-        parts = rendered_text.split("    ")
-        self.assertEqual(len(parts), 5)
+        parts = rendered_text.split("   ")
+        self.assertEqual(len(parts), 6)
         self.assertIn("Search", parts[0])
         self.assertIn("Playlists", parts[1])
         self.assertIn("Offline", parts[2])
         self.assertIn("Lyrics", parts[3])
         self.assertIn("Liked Songs", parts[4])
+        self.assertIn("Modded", parts[5])
 
     def test_action_like_track_toggle_and_sync(self):
         self.app.active_tab = "playlist"

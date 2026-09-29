@@ -114,6 +114,8 @@ try:
     from .spotify_audio import SpotifyAudio, librespot_path
     from . import youtube_account
     from . import ytmusic_sync
+    from . import mods
+    from .mods import Mod, PRESETS as MOD_PRESETS
 except ImportError:
     from spotify import fetch_spotify_playlist, fetch_spotify_album, fetch_spotify_track, parse_spotify_url
     from ytmusic import (
@@ -175,6 +177,8 @@ except ImportError:
     from spotify_audio import SpotifyAudio, librespot_path
     import youtube_account
     import ytmusic_sync  # type: ignore
+    import mods  # type: ignore
+    from mods import Mod, PRESETS as MOD_PRESETS  # type: ignore
 
 logger = logging.getLogger("spoff")
 
@@ -500,6 +504,8 @@ DEFAULT_KEYBINDINGS: Dict[str, str] = {
     "nav_offline": "3",
     "nav_lyrics": "4",
     "nav_liked": "5",
+    "nav_modded": "6",
+    "mod_track": "m",
     "find_in_view": "f",
     "open_settings": "comma",
     "show_help": "colon",
@@ -555,6 +561,8 @@ ACTION_INFO: Dict[str, Tuple[str, str]] = {
     "nav_offline": ("Navigation", "Switch to Offline"),
     "nav_lyrics": ("Navigation", "Synchronized Lyrics"),
     "nav_liked": ("Navigation", "Switch to Liked Songs"),
+    "nav_modded": ("Navigation", "Switch to Modded"),
+    "mod_track": ("Playback", "Mod Song: Slowed, Sped Up, Reverb (m)"),
     "find_in_view": ("Navigation", "Find Track in Playlist / View (f)"),
     "switch_engine": ("Navigation", "Switch Search Engine (YTM/Spotify)"),
     "toggle_visualizer": ("Visualizer", "Cycle Visualizer Style (v)"),
@@ -2061,6 +2069,158 @@ class PlaylistSettingsModal(SafeModalScreen[Optional[Dict[str, Any]]]):
         self.dismiss({"name": name, "description": description, "public": self.public})
 
 
+class ModModal(SafeModalScreen[Optional["Mod"]]):
+    """Slowed + reverb, sped up and friends, previewed live on the playing song.
+
+    Presets first; moving the cursor applies each one straight away. Right or l
+    opens the sliders for the highlighted preset. Esc saves (returns the mod),
+    q closes without saving, r resets to the original.
+    """
+
+    def __init__(self, track: Dict[str, Any]):
+        super().__init__()
+        self.track = track
+        self.mode = "presets"
+        self.preset_idx = 0
+        self.slider_idx = 0
+        self.custom = Mod()
+        self.mod = Mod()
+
+    SLIDERS = ("Speed", "Reverb", "Bass", "8D")
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="mod-dialog"):
+            with Horizontal(id="mod-header"):
+                yield Static("Mod", id="mod-title")
+                yield Static(f"[#5a5a5a]{escape(str(self.track.get('title') or ''))}[/]", id="mod-song")
+            with Vertical(id="mod-presets"):
+                for i, (name, _) in enumerate(MOD_PRESETS):
+                    yield Static(name, id=f"mod-preset-{i}", classes="mod-row")
+            with Vertical(id="mod-sliders"):
+                for i, _ in enumerate(self.SLIDERS):
+                    yield Static("", id=f"mod-slider-{i}", classes="mod-row")
+            yield Static("", id="mod-footer")
+
+    def on_mount(self) -> None:
+        self._redraw()
+
+    # ------------------------------------------------------------ rendering
+
+    SLIDER_WIDTH = 16
+
+    @classmethod
+    def _track(cls, values: tuple, current: Any) -> str:
+        """A plain slider, the same width for every setting so values line up."""
+        idx = values.index(current) if current in values else 0
+        pos = round(idx * (cls.SLIDER_WIDTH - 1) / max(1, len(values) - 1))
+        filled = "━" * pos
+        empty = "─" * (cls.SLIDER_WIDTH - 1 - pos)
+        return f"[#9a9a9a]{filled}[/][#ffffff]●[/][#3a3a3a]{empty}[/]  "
+
+    def _slider_text(self, i: int) -> str:
+        m = self.mod
+        if i == 0:
+            return f"{'Speed':<10}{self._track(mods.SPEEDS, m.speed)}{m.speed:g}×"
+        if i == 1:
+            return f"{'Reverb':<10}{self._track(mods.REVERBS, m.reverb)}{mods.REVERB_LABELS[m.reverb]}"
+        if i == 2:
+            return f"{'Bass':<10}{self._track(mods.BASS_STEPS, m.bass)}{'+' if m.bass else ''}{m.bass} dB"
+        return f"{'8D':<10}{self._track((False, True), m.eight_d)}{'on' if m.eight_d else 'off'}"
+
+    def _redraw(self) -> None:
+        in_presets = self.mode == "presets"
+        self.query_one("#mod-presets").display = in_presets
+        self.query_one("#mod-sliders").display = not in_presets
+        for i, (name, _) in enumerate(MOD_PRESETS):
+            row = self.query_one(f"#mod-preset-{i}", Static)
+            row.set_class(i == self.preset_idx, "-active")
+        for i, _ in enumerate(self.SLIDERS):
+            row = self.query_one(f"#mod-slider-{i}", Static)
+            row.update(self._slider_text(i))
+            row.set_class(i == self.slider_idx, "-active")
+        where = "" if in_presets else f"[#5a5a5a]{mods.describe(self.mod)}[/]"
+        self.query_one("#mod-song", Static).update(
+            where or f"[#5a5a5a]{escape(str(self.track.get('title') or ''))}[/]")
+        if getattr(self.app, "advanced_mode", False):
+            hints = ""
+        elif in_presets:
+            hints = "j/k preset · l adjust · r reset · esc save · q close"
+        else:
+            hints = "j/k slider · h/l change · tab back · r reset · esc save"
+        footer = self.query_one("#mod-footer", Static)
+        footer.update(f"[dim]{hints}[/dim]" if hints else "")
+        footer.set_class(bool(hints), "has-hints")
+
+    # ------------------------------------------------------------ behaviour
+
+    def _apply(self, mod: "Mod") -> None:
+        self.mod = mod
+        player = getattr(self.app, "player", None)
+        if player is not None:
+            player.set_mod(mods.live_filters(mod), mod.speed)
+        self._redraw()
+
+    def _select_preset(self, idx: int) -> None:
+        self.preset_idx = idx % len(MOD_PRESETS)
+        preset = MOD_PRESETS[self.preset_idx][1]
+        self._apply(self.custom if preset is None else preset)
+
+    def _change_slider(self, direction: int) -> None:
+        changers = (mods.with_speed, mods.with_reverb, mods.with_bass, mods.with_eight_d)
+        mod = changers[self.slider_idx](self.mod, direction)
+        self.custom = mod
+        # Keep the preset cursor honest: a slider change usually means "Custom".
+        match = next((i for i, (_, p) in enumerate(MOD_PRESETS) if p == mod), len(MOD_PRESETS) - 1)
+        self.preset_idx = match
+        self._apply(mod)
+
+    def reset(self) -> None:
+        self.custom = Mod()
+        self.mode = "presets"
+        self._select_preset(0)
+
+    def on_key(self, event: events.Key) -> None:
+        key = event.key
+        if key in ("escape",):
+            self.dismiss(None if self.mod.is_original else self.mod)
+        elif key in ("q", "ctrl+c"):
+            self.dismiss(None)
+        elif key == "r":
+            self.reset()
+        elif self.mode == "presets":
+            if key in ("j", "down"):
+                self._select_preset(self.preset_idx + 1)
+            elif key in ("k", "up"):
+                self._select_preset(self.preset_idx - 1)
+            elif key in ("g", "home"):
+                self._select_preset(0)
+            elif key in ("G", "end"):
+                self._select_preset(len(MOD_PRESETS) - 1)
+            elif key in ("l", "right", "enter", "tab"):
+                self.mode = "sliders"
+                self._redraw()
+            else:
+                return
+        else:
+            if key in ("j", "down"):
+                self.slider_idx = (self.slider_idx + 1) % len(self.SLIDERS)
+                self._redraw()
+            elif key in ("k", "up"):
+                self.slider_idx = (self.slider_idx - 1) % len(self.SLIDERS)
+                self._redraw()
+            elif key in ("l", "right"):
+                self._change_slider(1)
+            elif key in ("h", "left"):
+                self._change_slider(-1)
+            elif key in ("tab", "shift+tab", "backspace"):
+                self.mode = "presets"
+                self._redraw()
+            else:
+                return
+        event.prevent_default()
+        event.stop()
+
+
 class DeletePlaylistModal(SafeModalScreen[bool]):
     """Modal requiring explicit typing of the playlist name to permanently delete."""
     BINDINGS = [
@@ -2700,7 +2860,8 @@ class HelpModal(SafeModalScreen[None]):
         k_share = kcap("share_track", "c")
 
         nav_rows = [
-            (f"{k_s1} {k_s2} {k_s3} {k_s5}", "Search / Playlists / Offline / Liked"),
+            (f"{k_s1} {k_s2} {k_s3} {k_s5} {kcap('nav_modded', '6')}", "Search / Playlists / Offline / Liked / Modded"),
+            (kcap("mod_track", "m"), "Mod song: slowed + reverb, sped up, bass, 8D"),
             (k_s4, "Synchronized lyrics view"),
             (f"{cap('h')}{sep}{cap('→')}{comma}{cap('Tab')}", "Switch sidebar / main pane"),
             (f"{cap('j')}{sep}{cap('k')}{comma}{cap('Arrows')}", "Navigate table rows"),
@@ -5129,6 +5290,65 @@ class SpoffTUI(App):
         color: #555555;
     }
 
+    /* MODAL: SONG MOD */
+    ModModal {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.75);
+    }
+
+    #mod-dialog {
+        width: 64;
+        max-width: 96%;
+        height: auto;
+        background: #141414;
+        border: solid #2a2a2a;
+        padding: 1 2;
+    }
+
+    #mod-header {
+        height: 2;
+        border-bottom: solid #222222;
+        margin-bottom: 1;
+    }
+
+    #mod-title {
+        width: auto;
+        text-style: bold;
+        color: #ffffff;
+        margin-right: 2;
+    }
+
+    #mod-song {
+        width: 1fr;
+        text-align: right;
+    }
+
+    #mod-presets, #mod-sliders {
+        height: auto;
+    }
+
+    .mod-row {
+        height: 1;
+        padding: 0 1;
+        color: #9a9a9a;
+        border-left: outer transparent;
+    }
+
+    .mod-row.-active {
+        background: #1e1e1e;
+        color: #ffffff;
+        border-left: outer #569f68;
+    }
+
+    #mod-footer {
+        height: auto;
+        color: #555555;
+    }
+
+    #mod-footer.has-hints {
+        margin-top: 1;
+    }
+
     /* MODAL: UPDATE */
     UpdateModal {
         align: center middle;
@@ -5815,7 +6035,7 @@ class SpoffTUI(App):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-bar"):
-            yield Static(r"[bold #ffffff]\[1] Search[/]    [#555555]\[2] Playlists    \[3] Offline    \[4] Lyrics    \[5] Liked Songs[/]", id="nav-bar")
+            yield Static(r"[bold #ffffff]\[1] Search[/]   [#555555]\[2] Playlists   \[3] Offline   \[4] Lyrics   \[5] Liked Songs   \[6] Modded[/]", id="nav-bar")
             yield Static("", id="update-pill")
             yield Static("[#555555]L: Spotify[/]", id="spotify-pill")
             yield Static("[#555555],: Settings[/]", id="settings-pill")
@@ -6186,6 +6406,11 @@ class SpoffTUI(App):
                         break
             self.switch_view("offline", select_row=target_track_row if offline_tracks else None)
             tt.focus()
+        elif saved_tab == "modded":
+            modded = mods.load_modded()
+            target_track_row = next((i for i, t in enumerate(modded) if t.get("id") == saved_tid), 0)
+            self.switch_view("modded", select_row=target_track_row if modded else None)
+            tt.focus()
         elif saved_tab == "lyrics":
             self.switch_view("lyrics")
         elif saved_tab == "playlist":
@@ -6388,6 +6613,7 @@ class SpoffTUI(App):
                     ("offline", "nav_offline", "Offline"),
                     ("lyrics", "nav_lyrics", "Lyrics"),
                     ("liked", "nav_liked", "Liked Songs"),
+                    ("modded", "nav_modded", "Modded"),
                 ]
                 cur_x = 0
                 for mode, act_id, label in tabs:
@@ -6396,7 +6622,7 @@ class SpoffTUI(App):
                     else:
                         k = format_key_display(self.keybindings.get(act_id, ""))
                         lbl = f"[{k}] {label}"
-                    tab_w = len(lbl) + 4
+                    tab_w = len(lbl) + 3
                     if cur_x <= event.x < cur_x + tab_w:
                         self.switch_view(mode)
                         return
@@ -6737,6 +6963,7 @@ class SpoffTUI(App):
     def action_nav_search(self): self.switch_view("search")
     def action_nav_playlist(self): self.switch_view("playlist", focus_sidebar=True)
     def action_nav_liked(self): self.switch_view("liked")
+    def action_nav_modded(self): self.switch_view("modded")
     def action_nav_offline(self): self.switch_view("offline")
     def action_nav_lyrics(self): self.action_toggle_lyrics()
 
@@ -6859,13 +7086,19 @@ class SpoffTUI(App):
                 self.notify_user("Offline library is empty — cached tracks appear here")
             else:
                 self.notify_user("")
+        elif view == "modded":
+            modded = mods.load_modded()
+            self.render_tracks(modded, select_row=select_row, reset_cursor=(select_row is None))
+            if not (self.focused and self.focused.id == "side-table"):
+                track_table.focus()
+            self.notify_user("" if modded else "No modded songs yet. Pick a downloaded song and press m to mod it.")
         elif view == "lyrics":
             self.render_lyrics()
             if not (self.focused and self.focused.id == "side-table"):
                 lyrics_table.focus()
             self.notify_user("" if self.advanced_mode else "Lyrics: Enter or Click any line to jump to that moment")
 
-        if view in ("search", "playlist", "liked", "offline", "lyrics"):
+        if view in ("search", "playlist", "liked", "offline", "lyrics", "modded"):
             try:
                 save_last_tab(view, getattr(self, "current_playlist_id", None) if view == "playlist" else None)
             except Exception:
@@ -6878,6 +7111,7 @@ class SpoffTUI(App):
             ("offline", "nav_offline", "Offline"),
             ("lyrics", "nav_lyrics", "Lyrics"),
             ("liked", "nav_liked", "Liked Songs"),
+            ("modded", "nav_modded", "Modded"),
         ]
         parts = []
         for mode, act_id, label in tabs:
@@ -6891,7 +7125,7 @@ class SpoffTUI(App):
             else:
                 parts.append(f"[#555555]{display_label}[/]")
         try:
-            self.query_one("#nav-bar", Static).update("    ".join(parts))
+            self.query_one("#nav-bar", Static).update("   ".join(parts))
         except Exception:
             pass
 
@@ -7287,7 +7521,7 @@ class SpoffTUI(App):
             if idx is not None and 1 <= idx < len(self.current_liked_tracks):
                 SpoffTUI._reorder_liked_song(self, idx, -1)
                 return
-        elif self.active_tab in ("search", "offline"):
+        elif self.active_tab in ("search", "offline", "modded"):
             self.notify_user("Reordering songs is available in Playlists and Liked Songs.")
 
     def _reorder_liked_song(self, idx: int, delta: int) -> None:
@@ -7391,7 +7625,7 @@ class SpoffTUI(App):
             if idx is not None and 0 <= idx < len(self.current_liked_tracks) - 1:
                 SpoffTUI._reorder_liked_song(self, idx, 1)
                 return
-        elif self.active_tab in ("search", "offline"):
+        elif self.active_tab in ("search", "offline", "modded"):
             self.notify_user("Reordering songs is available in Playlists and Liked Songs.")
 
     def action_focus_bar(self):
@@ -7420,6 +7654,8 @@ class SpoffTUI(App):
             return list(self.current_liked_tracks if self.current_liked_tracks else load_liked_songs())
         elif self.active_tab == "offline":
             return list(load_offline_index().values())
+        elif self.active_tab == "modded":
+            return mods.load_modded()
         return []
 
     def _sync_table_cursor_to_index(self, idx: int):
@@ -8443,7 +8679,7 @@ class SpoffTUI(App):
         row_idx = None
         if isinstance(f, DataTable) and f.id == "track-table":
             row_idx = f.cursor_row
-        elif self.active_tab in ("search", "playlist", "liked", "offline"):
+        elif self.active_tab in ("search", "playlist", "liked", "offline", "modded"):
             try:
                 tt = self.query_one("#track-table", DataTable)
                 if tt.cursor_row is not None:
@@ -8460,6 +8696,8 @@ class SpoffTUI(App):
             tracks = getattr(self, "current_liked_tracks", None) or load_liked_songs()
         elif self.active_tab == "offline":
             tracks = list(load_offline_index().values())
+        elif self.active_tab == "modded":
+            tracks = mods.load_modded()
 
         track = None
         if row_idx is not None and 0 <= row_idx < len(tracks) and f and f.id == "track-table":
@@ -8504,7 +8742,7 @@ class SpoffTUI(App):
         row_idx = None
         if isinstance(f, DataTable) and f.id == "track-table":
             row_idx = f.cursor_row
-        elif self.active_tab in ("search", "playlist", "liked", "offline"):
+        elif self.active_tab in ("search", "playlist", "liked", "offline", "modded"):
             try:
                 tt = self.query_one("#track-table", DataTable)
                 if tt.cursor_row is not None:
@@ -9113,6 +9351,57 @@ class SpoffTUI(App):
             handle_rename_submit
         )
 
+    def action_mod_track(self):
+        """Opens the mod menu for the highlighted song (it must be downloaded)."""
+        if not getattr(self, "_is_ready", False) or isinstance(self.focused, Input):
+            return
+        tracks = self._get_current_view_tracks()
+        try:
+            row = self.query_one("#track-table", DataTable).cursor_row
+        except Exception:
+            row = None
+        if row is None or not (0 <= row < len(tracks)):
+            self.notify_user("Pick a song to mod first.", force=True)
+            return
+        track = tracks[row]
+        if track.get("mod_of"):
+            self.notify_user("That's already a mod. Mod the original song instead.", force=True)
+            return
+        track_id = stable_track_id(track)
+        source = get_cached_track_path(track_id)
+        if not source:
+            self.notify_user("Download this song first (b), then mod it.", force=True)
+            return
+
+        playing = getattr(self.player, "current_track", None)
+        if not playing or stable_track_id(playing) != track_id:
+            self.play_current_table_row(row)
+
+        def _on_done(mod: Optional[Mod]) -> None:
+            self.player.clear_mod()
+            if mod is None:
+                return
+            label = f"{track.get('title') or 'song'} ({mods.describe(mod)})"
+            self.notify_user(f"Saving '{label}'…", force=True)
+
+            def _worker() -> None:
+                try:
+                    saved = mods.render(track, source, mod)
+                except Exception as exc:
+                    logger.exception("Saving a song mod failed")
+                    self._on_ui(self.notify_user, f"Couldn't save '{label}': {exc}.", force=True)
+                    return
+
+                def _saved() -> None:
+                    self.notify_user(f"Saved '{saved['title']}' to Modded (6).", force=True)
+                    if self.active_tab == "modded":
+                        self.render_tracks(mods.load_modded())
+                self._on_ui(_saved)
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        self.push_screen(ModModal(track), _on_done)
+
     def action_playlist_settings(self):
         # Only from the playlist list (sidebar); inside a playlist the key does nothing.
         if not (self.focused and getattr(self.focused, "id", None) == "side-table"):
@@ -9235,6 +9524,29 @@ class SpoffTUI(App):
                 row_idx = getattr(tt, "cursor_row", None)
             except Exception:
                 row_idx = None
+
+        if self.active_tab == "modded":
+            modded = mods.load_modded()
+            if row_idx is None or not (0 <= row_idx < len(modded)):
+                self.notify_user("No modded song selected.", force=True)
+                return
+            t = modded[row_idx]
+
+            def _confirm_delete_mod(confirmed: Optional[bool]) -> None:
+                if not confirmed:
+                    return
+                mods.delete_modded(t["id"])
+                delete_cached_track(t["id"])
+                remaining = mods.load_modded()
+                self.render_tracks(remaining, select_row=max(0, min(row_idx, len(remaining) - 1)) if remaining else None)
+                self.notify_user(f"Deleted '{t.get('title', 'song')}'.", force=True)
+
+            self.push_screen(ConfirmModal(
+                title="Delete modded song",
+                message=f"Delete '{t.get('title', 'this song')}'? Its file is removed too.",
+                confirm_label="Delete",
+            ), _confirm_delete_mod)
+            return
 
         if self.active_tab in ("playlist", "liked", "offline", "search"):
             if self.active_tab == "playlist":
@@ -10106,8 +10418,8 @@ class SpoffTUI(App):
 
         # Asynchronously fetch synced lyrics in background
         def _fetch_lyr_bg():
-            if not is_current():
-                return
+            if not is_current() or track.get("mod_of"):
+                return  # a mod's changed speed would put synced lyrics out of time
             try:
                 dur_ms = track.get("duration_ms")
                 lyr = fetch_lyrics(title, artist, dur_ms)
@@ -10194,6 +10506,12 @@ class SpoffTUI(App):
             return
 
         if not is_current():
+            return
+
+        if track.get("mod_of"):
+            # A song mod only exists as its rendered file; there's nothing to stream.
+            self.notify_user(f"'{title}' is missing its file. Mod the original song again.", force=True)
+            self.call_from_thread(self._playback_failed, req_id, track)
             return
 
         self.notify_user(f"Connecting stream for '{title}'...")

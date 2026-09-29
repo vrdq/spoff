@@ -81,6 +81,8 @@ class MPVController:
         # Set when Spotify audio (librespot) is on; spotify:track: sources go there.
         self.spotify: Optional[Any] = None
         self._on_spotify = False
+        self.mod_filters: list = []  # live song-mod preview (see set_mod)
+        self.mod_speed = 1.0
 
     @property
     def playback_finished_callback(self) -> Optional[Callable]:
@@ -260,8 +262,11 @@ class MPVController:
     LOUDNORM = "loudnorm=I=-14:TP=-1.5:LRA=11"
 
     def _audio_filters(self) -> str:
-        """The mpv filter chain: EQ first, then loudness levelling."""
-        parts = []
+        """The mpv filter chain: song mod, then EQ, then loudness levelling.
+
+        The EQ corrects the headphones, so it comes after the mod.
+        """
+        parts = list(self.mod_filters)
         if self.eq_engine:
             eq_af = self.eq_engine.to_ffmpeg_af()
             if eq_af:
@@ -269,6 +274,20 @@ class MPVController:
         if self.loudness_normalization:
             parts.append(self.LOUDNORM)
         return ",".join(parts)
+
+    def set_mod(self, filters: list, speed: float) -> bool:
+        """Previews a song mod live. Speed is tape-style: pitch follows it."""
+        self.mod_filters = list(filters)
+        self.mod_speed = float(speed)
+        ok = self._send_command(["set_property", "af", self._audio_filters()])
+        self._send_command(["set_property", "audio-pitch-correction", self.mod_speed == 1.0])
+        self._send_command(["set_property", "speed", self.mod_speed])
+        return ok
+
+    def clear_mod(self) -> bool:
+        if not self.mod_filters and self.mod_speed == 1.0:
+            return True
+        return self.set_mod([], 1.0)
 
     def set_loudness_normalization(self, enabled: bool) -> bool:
         self.loudness_normalization = bool(enabled)

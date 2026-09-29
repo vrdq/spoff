@@ -72,6 +72,8 @@ def _video_id_from_url(url: Any) -> Optional[str]:
 def video_id_for(track: Dict[str, Any], state: Dict[str, Any], offline: Dict[str, Any]) -> Optional[str]:
     """The YouTube video for a track: its own link, the one its download came
     from, an earlier lookup, or a fresh YouTube Music search."""
+    if track.get("mod_of"):
+        return None  # a song mod only exists on this computer
     track_id = str(track.get("id") or "")
     for url in (track.get("url"), track.get("resolved_url"), (offline.get(track_id) or {}).get("resolved_url")):
         found = _video_id_from_url(url)

@@ -282,6 +282,8 @@ def is_low_quality_cache(path: Any) -> bool:
     produced them.
     """
     path = Path(str(path))
+    if path.name.startswith("mod_"):
+        return False  # a rendered song mod: there's nothing better to download
     if path.suffix.lower() in LOW_QUALITY_CACHE_EXTENSIONS:
         return True
     if not _hq_upgrades:
