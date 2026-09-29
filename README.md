@@ -18,16 +18,16 @@ A terminal music player for Linux. It plays audio from YouTube Music, keeps your
 
 ## What it does
 
-- **Plays YouTube Music audio through mpv.** Songs you play are saved to the cache and work offline afterwards. Spotify Premium isn't needed.
-- **256 kbps audio with YouTube Music Premium.** Sign in with Google from Settings and spoff uses your browser's login, so nothing is copied or stored. Songs saved earlier at lower quality are downloaded again at 256 kbps.
-- **Syncs your Spotify library.** Playlists and liked songs sync both ways. Songs you add from YouTube Music stay in spoff and never go to Spotify, and playlists you delete on Spotify stay deleted.
-- **Copies playlists to YouTube Music** (optional, off by default). Songs you add or remove in spoff follow, and songs you add in the YouTube Music app are left alone.
-- **Song mods.** Press `m` on a downloaded song for slowed + reverb, sped up, nightcore, bass boosted or 8D. Presets play live as you move through them, sliders adjust speed, reverb, bass and 8D, and saved mods go to their own Modded tab.
-- **Parametric EQ** with presets (Harman, diffuse field, Moondrop Chu II and more) and AutoEQ / EqualizerAPO import from the clipboard. Loudness levelling is optional.
-- **Synced lyrics** from LRCLIB, with click or Enter on any line to jump there.
-- **Visualizer** through cava, in several styles and colours.
-- **MPRIS 2**, so media keys, `playerctl`, Waybar and lockscreens can control it.
-- **Vim keys everywhere**, and every key can be rebound in Settings.
+- Plays YouTube Music audio through mpv. spoff saves every song you play, so it works offline afterwards, and you don't need Spotify Premium.
+- Gets 256 kbps audio if you have YouTube Music Premium. Sign in with Google from Settings and spoff uses your browser's login without copying or storing it. It also re-downloads songs you saved earlier at lower quality, this time at 256 kbps.
+- Syncs your Spotify playlists and liked songs both ways. Songs you add from YouTube Music stay in spoff and never go to Spotify, and playlists you delete on Spotify stay deleted.
+- Can copy your playlists to YouTube Music (off by default). Songs you add or remove in spoff follow, and spoff leaves alone anything you add in the YouTube Music app.
+- Makes slowed + reverb, sped up, nightcore, bass boosted and 8D versions of songs. Press `m` on a downloaded song. Each preset plays live as you move to it, sliders adjust speed, reverb, bass and 8D, and saved mods get their own Modded tab.
+- Has a parametric EQ with presets (Harman, diffuse field, Moondrop Chu II and more) and AutoEQ / EqualizerAPO import from the clipboard, plus optional loudness levelling.
+- Shows synced lyrics from LRCLIB. Click or press Enter on any line to jump there.
+- Draws a visualizer through cava, in several styles and colours.
+- Supports MPRIS 2, so media keys, `playerctl`, Waybar and lockscreens can control it.
+- Uses vim keys everywhere, and you can rebind every key in Settings.
 
 ## Install
 
@@ -49,7 +49,7 @@ spoff tells you when a new release is out; `pipx upgrade spoff` updates it.
 
 ### AppImage
 
-Download `spoff-x86_64.AppImage` from the [releases page](https://github.com/vrdq/spoff/releases), make it executable and run it. It bundles Python and all of spoff's Python packages, but not mpv or ffmpeg. AppImages are attached from the release after v0.1.0 on.
+Download `spoff-x86_64.AppImage` from the [releases page](https://github.com/vrdq/spoff/releases), make it executable and run it. It bundles Python and all of spoff's Python packages, but not mpv or ffmpeg. The first release with an AppImage will be the one after v0.1.0.
 
 ### Flatpak
 
