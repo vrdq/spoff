@@ -4482,7 +4482,7 @@ class SpoffTUI(App):
     /* MODAL: RENAME & CLONE PLAYLIST & DUPLICATE TRACK & FILTER & DELETE PLAYLIST */
     RenamePlaylistModal, ClonePlaylistModal, DuplicateTrackModal, FilterTracksModal, DeletePlaylistModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.3);
+        background: rgba(0, 0, 0, 0.75);
     }
 
     #rename-dialog, #clone-dialog, #duplicate-dialog, #filter-dialog, #delete-playlist-dialog {
@@ -4702,7 +4702,7 @@ class SpoffTUI(App):
     /* MODAL: HELP */
     HelpModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.3);
+        background: rgba(0, 0, 0, 0.75);
     }
 
     #help-dialog {
@@ -4764,7 +4764,7 @@ class SpoffTUI(App):
     /* MODAL: EQUALIZER */
     EqualizerModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.3);
+        background: rgba(0, 0, 0, 0.75);
     }
 
     #eq-dialog {
@@ -4837,7 +4837,7 @@ class SpoffTUI(App):
     /* MODAL: EQ SETTINGS */
     EQSettingsModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.3);
+        background: rgba(0, 0, 0, 0.75);
     }
 
     #eq-settings-dialog {
@@ -4906,7 +4906,7 @@ class SpoffTUI(App):
     /* MODAL: SPOTIFY AUTH */
     SpotifyAuthModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.3);
+        background: rgba(0, 0, 0, 0.75);
     }
 
     #spotify-dialog {
@@ -5101,7 +5101,7 @@ class SpoffTUI(App):
     /* MODAL: SETTINGS & KEYBINDS */
     RebindKeyModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.3);
+        background: rgba(0, 0, 0, 0.75);
     }
 
     #rebind-dialog {
@@ -5208,7 +5208,7 @@ class SpoffTUI(App):
 
     SettingsModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.3);
+        background: rgba(0, 0, 0, 0.75);
     }
 
     #settings-dialog {
@@ -5303,7 +5303,7 @@ class SpoffTUI(App):
     /* MODAL: PLAYLIST SETTINGS */
     PlaylistSettingsModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.3);
+        background: rgba(0, 0, 0, 0.75);
     }
 
     #plset-dialog {
@@ -5383,7 +5383,7 @@ class SpoffTUI(App):
     /* MODAL: SONG MOD */
     ModModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.3);
+        background: rgba(0, 0, 0, 0.75);
     }
 
     #mod-dialog {
@@ -5456,7 +5456,7 @@ class SpoffTUI(App):
     /* MODAL: UPDATE */
     UpdateModal {
         align: center middle;
-        background: rgba(0, 0, 0, 0.3);
+        background: rgba(0, 0, 0, 0.75);
     }
 
     #update-dialog {
