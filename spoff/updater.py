@@ -262,7 +262,7 @@ def install_kind() -> str:
 EXTERNAL_UPDATE_HINTS = {
     "flatpak": "Spoff updates through Flatpak: run 'flatpak update dev.vrdq.spoff'.",
     "appimage": "Download the new Spoff AppImage from github.com/vrdq/spoff/releases.",
-    "system": "Spoff was installed by your package manager; update it there (e.g. 'yay -Syu spoff').",
+    "system": "Spoff was installed by your package manager; update it there.",
 }
 
 

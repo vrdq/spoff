@@ -58,18 +58,15 @@ To update:
 pipx upgrade spoff
 ```
 
-### Arch Linux (AUR)
+### Arch Linux (makepkg)
 
-```bash
-yay -S spoff
-```
-
-Or build with makepkg:
+Spoff isn't on the AUR yet. The PKGBUILD in this repo builds the latest PyPI release as a normal pacman package:
 ```bash
 git clone https://github.com/vrdq/spoff.git
 cd spoff
 makepkg -si
 ```
+Pacman then owns the install, so update by pulling and running `makepkg -si` again; Spoff won't try to update itself.
 
 ### Build from Source
 
