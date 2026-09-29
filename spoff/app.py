@@ -5380,6 +5380,12 @@ class SpoffTUI(App):
         color: #555555;
     }
 
+    /* Transparent mode: a dimming overlay can't blend with the terminal's own
+       background, so it painted solid grey around popups. Let it show through. */
+    .transparent-mode SafeModalScreen {
+        background: transparent;
+    }
+
     /* MODAL: SONG MOD */
     ModModal {
         align: center middle;
