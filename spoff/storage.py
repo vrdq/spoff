@@ -641,6 +641,23 @@ def save_youtube_login(spec: Optional[Tuple[str, Optional[str], Optional[str]]])
         cfg.pop("youtube_login", None)
     save_config(cfg)
 
+def get_saved_song_list_style() -> Dict[str, Any]:
+    """How song lists look: source as dots or words, and whether to show albums."""
+    try:
+        cfg = load_config()
+    except Exception:
+        cfg = {}
+    style = cfg.get("song_source_style")
+    return {"source": style if style in ("dots", "words") else "dots",
+            "album": bool(cfg.get("show_album_column", False))}
+
+@transactional
+def save_song_list_style(source: str, album: bool) -> None:
+    cfg = load_config()
+    cfg["song_source_style"] = source if source in ("dots", "words") else "dots"
+    cfg["show_album_column"] = bool(album)
+    save_config(cfg)
+
 def get_saved_notifications_enabled() -> bool:
     """Retrieves whether in-app notifications are enabled, defaulting to True."""
     try:

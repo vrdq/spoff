@@ -71,6 +71,7 @@ try:
         get_saved_instant_search, save_instant_search,
         get_saved_auto_update, save_auto_update,
         get_saved_notifications_enabled, save_notifications_enabled,
+        get_saved_song_list_style, save_song_list_style,
         get_saved_loudness_normalization, save_loudness_normalization, migrate_eq_to_native_rate,
         get_saved_spotify_audio, save_spotify_audio, _spotify_track_id_of,
         get_saved_youtube_login, save_youtube_login,
@@ -134,6 +135,7 @@ except ImportError:
         get_saved_instant_search, save_instant_search,
         get_saved_auto_update, save_auto_update,
         get_saved_notifications_enabled, save_notifications_enabled,
+        get_saved_song_list_style, save_song_list_style,
         get_saved_loudness_normalization, save_loudness_normalization, migrate_eq_to_native_rate,
         get_saved_spotify_audio, save_spotify_audio, _spotify_track_id_of,
         get_saved_youtube_login, save_youtube_login,
@@ -622,6 +624,12 @@ def canonicalize_key(k: str) -> str:
     if s_lower in ("del", "delete"): return "delete"
     return s_lower
 
+def clip_text(text: str, limit: int) -> str:
+    """Song columns size to their content; a cap keeps one very long name from
+    pushing Time off the right edge."""
+    return text if len(text) <= limit else text[:limit - 1].rstrip() + "…"
+
+
 def format_key_display(k: str) -> str:
     if not k:
         return "[dim]Unbound[/dim]"
@@ -795,6 +803,20 @@ class AdvModeToggle(Static):
     def on_click(self) -> None:
         if isinstance(self.screen, SettingsModal):
             self.screen.toggle_advanced_mode()
+
+class SongSourceToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_song_source()
+
+class AlbumColumnToggle(Static):
+    can_focus = True
+
+    def on_click(self) -> None:
+        if isinstance(self.screen, SettingsModal):
+            self.screen.toggle_album_column()
 
 class NotificationsToggle(Static):
     can_focus = True
@@ -1050,6 +1072,8 @@ class SettingsModal(SafeModalScreen[None]):
                 yield Static("Interface", classes="settings-section")
                 yield AdvModeToggle(id="adv-mode-toggle", classes="setting-toggle-item")
                 yield NotificationsToggle(id="notifications-toggle", classes="setting-toggle-item")
+                yield SongSourceToggle(id="song-source-toggle", classes="setting-toggle-item")
+                yield AlbumColumnToggle(id="album-column-toggle", classes="setting-toggle-item")
                 yield TransparencyToggle(id="transparency-toggle", classes="setting-toggle-item")
                 yield Static("Search & updates", classes="settings-section")
                 yield SearchEngineToggle(id="engine-toggle", classes="setting-toggle-item")
@@ -1133,6 +1157,11 @@ class SettingsModal(SafeModalScreen[None]):
             notif = bool(getattr(app, "notifications_enabled", True))
             self.query_one("#notifications-toggle", Static).update(
                 self._row("Notifications", "on" if notif else "off", on=notif))
+            style = getattr(app, "song_list_style", {"source": "dots", "album": False})
+            self.query_one("#song-source-toggle", Static).update(
+                self._row("Song source", "dots" if style["source"] == "dots" else "words"))
+            self.query_one("#album-column-toggle", Static).update(
+                self._row("Album column", "on" if style["album"] else "off", on=style["album"]))
             trans = bool(getattr(app, "transparency", True))
             op_pct = int(round(getattr(app, "transparency_opacity", 0.85) * 100))
             self.query_one("#transparency-toggle", Static).update(
@@ -1212,6 +1241,17 @@ class SettingsModal(SafeModalScreen[None]):
         self.update_toggle_ui()
         self.query_one("#settings-status-line", Static).update(
             "Songs play at an even loudness." if new_state else "Songs play at their original loudness.")
+
+    def toggle_song_source(self) -> None:
+        source = self.spoff_app.set_song_list_style(toggle="source")
+        self.update_toggle_ui()
+        self.query_one("#settings-status-line", Static).update(
+            "Songs show a dot: filled = saved offline, green = Spotify, red = YouTube Music."
+            if source == "dots" else "Songs show where they're from in words, like Spotify | offline.")
+
+    def toggle_album_column(self) -> None:
+        self.spoff_app.set_song_list_style(toggle="album")
+        self.update_toggle_ui()
 
     def toggle_notifications(self) -> None:
         new_state = self.spoff_app.toggle_notifications()
@@ -1373,6 +1413,8 @@ class SettingsModal(SafeModalScreen[None]):
         toggle_ids = [
             "adv-mode-toggle",
             "notifications-toggle",
+            "song-source-toggle",
+            "album-column-toggle",
             "transparency-toggle",
             "engine-toggle",
             "instant-search-toggle",
@@ -1402,6 +1444,10 @@ class SettingsModal(SafeModalScreen[None]):
             self.toggle_advanced_mode()
         elif focused_id == "notifications-toggle":
             self.toggle_notifications()
+        elif focused_id == "song-source-toggle":
+            self.toggle_song_source()
+        elif focused_id == "album-column-toggle":
+            self.toggle_album_column()
         elif focused_id == "transparency-toggle":
             self.toggle_transparency()
         elif focused_id == "instant-search-toggle":
@@ -1445,7 +1491,7 @@ class SettingsModal(SafeModalScreen[None]):
 
     def on_key(self, event: events.Key) -> None:
         table = self.query_one("#settings-table", DataTable)
-        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "spotify-audio-toggle", "loudness-toggle", "eq-settings-nav-toggle", "youtube-account-toggle", "ytmusic-sync-toggle"]
+        toggle_ids = ["adv-mode-toggle", "notifications-toggle", "song-source-toggle", "album-column-toggle", "transparency-toggle", "engine-toggle", "instant-search-toggle", "auto-update-toggle", "vis-toggle", "vis-style-toggle", "vis-color-toggle", "spotify-audio-toggle", "loudness-toggle", "eq-settings-nav-toggle", "youtube-account-toggle", "ytmusic-sync-toggle"]
         focused_id = self.focused.id if self.focused else None
 
         if focused_id in toggle_ids:
@@ -1469,6 +1515,10 @@ class SettingsModal(SafeModalScreen[None]):
                     self.toggle_advanced_mode()
                 elif focused_id == "notifications-toggle":
                     self.toggle_notifications()
+                elif focused_id == "song-source-toggle":
+                    self.toggle_song_source()
+                elif focused_id == "album-column-toggle":
+                    self.toggle_album_column()
                 elif focused_id == "transparency-toggle":
                     self.toggle_transparency()
                 elif focused_id == "instant-search-toggle":
@@ -2960,6 +3010,7 @@ class HelpModal(SafeModalScreen[None]):
         k_quit = kcap("quit_app", "q")
 
         playlist_rows = [
+            ("[#569f68]●[/] [#569f68]○[/] [#e06c75]●[/] [#8a8a8a]●[/]", "Saved / streaming · Spotify, YTM, file"),
             (k_add, "Add song to a playlist"),
             (k_like, "Like / unlike"),
             (f"{cap('J')}{sep}{cap('K')}", "Move song or playlist"),
@@ -6173,12 +6224,8 @@ class SpoffTUI(App):
 
         tt = self.query_one("#track-table", DataTable)
         tt.cursor_foreground_priority = "renderable"
-        tt.add_column("Source", key="mark", width=17)
-        tt.add_column("Title", key="title")
-        tt.add_column("Artist", key="artist")
-        tt.add_column("Album", key="album")
-        tt.add_column("Time", key="time", width=5)
-        self.call_after_refresh(self._fit_track_columns)
+        self.song_list_style = get_saved_song_list_style()
+        self._setup_track_columns()
 
         lt = self.query_one("#lyrics-table", DataTable)
         lt.cursor_foreground_priority = "renderable"
@@ -6695,27 +6742,36 @@ class SpoffTUI(App):
 
     def on_resize(self, event: events.Resize) -> None:
         self._last_rendered_width = event.size.width
-        self.call_after_refresh(self._fit_track_columns)
 
-    def _fit_track_columns(self) -> None:
-        """Title and Artist share the table's width, so one long name can't push
-        the Time column off screen (auto-sized columns did)."""
-        try:
-            table = self.query_one("#track-table", DataTable)
-            width = table.size.width
-            if width <= 0 or "title" not in table.columns:
-                return
-            # 5 columns x 2 cells of padding, the source and time columns, the scrollbar.
-            free = max(24, width - 10 - 17 - 5 - 2)
-            title = int(free * 0.42)
-            artist = int(free * 0.30)
-            for key, w in (("title", title), ("artist", artist), ("album", free - title - artist)):
-                col = table.columns[key]
-                col.auto_width = False
-                col.width = w
-            table.refresh()
-        except Exception:
-            logger.debug("Could not fit track columns", exc_info=True)
+    SOURCE_WIDTH = {"dots": 1, "words": 17}
+
+    def _setup_track_columns(self) -> None:
+        """(Re)builds the song table's columns from the song list settings."""
+        style = getattr(self, "song_list_style", {"source": "dots", "album": False})
+        table = self.query_one("#track-table", DataTable)
+        table.clear(columns=True)
+        table.add_column("" if style["source"] == "dots" else "Source", key="mark",
+                         width=self.SOURCE_WIDTH[style["source"]])
+        table.add_column("Title", key="title")
+        table.add_column("Artist", key="artist")
+        table.add_column("Time", key="time", width=5)
+        if style["album"]:
+            # Last: it's the least important, so it's what runs off a narrow window.
+            table.add_column("Album", key="album")
+
+    def set_song_list_style(self, toggle: str) -> str:
+        style = dict(getattr(self, "song_list_style", {"source": "dots", "album": False}))
+        if toggle == "source":
+            style["source"] = "words" if style["source"] == "dots" else "dots"
+        else:
+            style["album"] = not style["album"]
+        self.song_list_style = style
+        save_song_list_style(style["source"], style["album"])
+        self._setup_track_columns()
+        if self.active_tab != "lyrics":
+            self.render_tracks(self._get_current_view_tracks())
+        return style["source"]
+
 
     def on_key(self, event: events.Key) -> None:
         try:
@@ -7297,6 +7353,16 @@ class SpoffTUI(App):
         table = self.query_one("#track-table", DataTable)
         old_cursor = table.cursor_row
         table.clear()
+        style = getattr(self, "song_list_style", {"source": "dots", "album": False})
+        # Roomy caps on a wide window; on a narrow one they shrink so Time stays
+        # on screen (source, time, scrollbar and cell padding come off first).
+        try:
+            pane = int(table.size.width)
+        except (TypeError, ValueError):
+            pane = 0
+        room = pane - (3 if style["source"] == "dots" else 19) - 7 - 2 - 4 if pane > 0 else 80
+        title_cap = max(12, min(48, int(room * 0.6)))
+        artist_cap = max(10, min(32, room - title_cap))
         curr_track = getattr(getattr(self, "player", None), "current_track", None)
         curr_id = curr_track.get("id") if curr_track else None
         playing_idx: Optional[int] = None
@@ -7305,18 +7371,27 @@ class SpoffTUI(App):
             t_id = stable_track_id(t)
             is_cached = get_cached_track_path(t_id) is not None if t_id else False
             raw_src = str(t.get("source", "")).lower()
-            if raw_src == "local" or str(t.get("filepath", "")).startswith("/"):
-                src = "local"
-            elif raw_src == "spotify" or (not raw_src and t_id and len(t_id) == 22 and not t.get("url")):
+            # Where the song is from wins over "has a file on disk": downloaded
+            # Spotify songs (Offline, Liked, Search) were showing as local files.
+            if raw_src == "spotify" or (not raw_src and t_id and len(t_id) == 22 and not t.get("url")):
                 src = "spotify"
+            elif raw_src == "local" or (not raw_src and str(t.get("filepath", "")).startswith("/")):
+                src = "local"
             elif raw_src in ("ytmusic", "youtube") or (not raw_src and (len(t_id) == 11 or "youtube.com" in str(t.get("url", "")) or "youtu.be" in str(t.get("url", "")))) or self.active_tab == "search":
                 src = "ytmusic"
             else:
                 src = raw_src or "remote"
 
+            if style["source"] == "dots":
+                # Fill = saved offline or streaming; colour = where it's from
+                # (green Spotify, which syncs; red YouTube Music, local-only; grey files).
+                colour = {"spotify": "#569f68", "ytmusic": "#e06c75"}.get(src, "#8a8a8a")
+                type_tag = f"[{colour}]{'●' if is_cached or src == 'local' else '○'}[/]"
             sep = "[#555555] | [/]"
             status = "[#569f68]offline[/]" if is_cached else "[#c4a768]stream[/]"
-            if src == "local":
+            if style["source"] == "dots":
+                pass
+            elif src == "local":
                 type_tag = "[#569f68]Local disk[/]"
             elif src == "spotify":
                 type_tag = f"[#569f68]Spotify[/]{sep}{status}"
@@ -7330,7 +7405,7 @@ class SpoffTUI(App):
             except (ValueError, TypeError):
                 dur_ms = 0.0
             dur = format_time(dur_ms / 1000.0)
-            safe_title = escape(str(t.get("title") or ""))
+            safe_title = escape(clip_text(str(t.get("title") or ""), title_cap))
 
             is_playing = False
             if curr_track:
@@ -7345,9 +7420,11 @@ class SpoffTUI(App):
             title_col = safe_title
             # Brightness follows importance: title, then artist, album, time.
             # Text objects, not markup: no escaping needed and they align with the headers.
-            table.add_row(type_tag, title_col, Text(str(t.get("artist") or ""), style="#9a9a9a"),
-                          Text(str(t.get("album") or ""), style="#6a6a6a"),
-                          Text(dur, style="#6a6a6a"), key=str(idx))
+            cells = [type_tag, title_col, Text(clip_text(str(t.get("artist") or ""), artist_cap), style="#9a9a9a")]
+            cells.append(Text(dur, style="#6a6a6a"))
+            if style["album"]:
+                cells.append(Text(clip_text(str(t.get("album") or ""), 30), style="#6a6a6a"))
+            table.add_row(*cells, key=str(idx))
         if tracks:
             if select_row is not None:
                 target = max(0, min(select_row, len(tracks) - 1))
