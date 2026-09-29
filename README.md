@@ -1,162 +1,173 @@
+<p align="center">
+  <img src="assets/brand/spoff-icon.svg" alt="spoff icon: visualizer bars drawn as terminal cells" width="112">
+</p>
+
 # spoff
 
 [![PyPI version](https://img.shields.io/pypi/v/spoff.svg?style=flat-square&color=blue)](https://pypi.org/project/spoff/)
 [![Awesome TUI](https://img.shields.io/badge/Awesome%20TUI-verified%20maintainer-brightgreen?style=flat-square)](https://awesometui.com/spoff)
+[![Discord](https://img.shields.io/badge/discord-join-5865F2?style=flat-square)](https://discord.gg/9xHrMRTwwZ)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg?style=flat-square)](https://www.python.org/downloads/)
 
-Terminal audio player for Linux that streams from YouTube Music and syncs Spotify metadata with local caching, synchronized LRC lyrics, and a CAVA spectrum visualizer.
+A terminal music player for Linux. It plays audio from YouTube Music, keeps your Spotify playlists in sync, saves songs for offline listening, and shows synced lyrics and a spectrum visualizer.
 
 ![spoff library view](assets/spoff-library.png)
 
 ![spoff synchronized lyrics view](assets/spoff-lyrics.png)
 
-## Architecture
+## What it does
 
-- Playback: streams audio via YouTube Music through a background `mpv` process over a local Unix domain socket. Played tracks save automatically to `~/.local/share/spoff/cache/` for offline playback without requiring Spotify Premium.
-- Spectrum visualizer: connects to a `cava` FIFO pipe to read raw PCM audio data and renders spectrum bars at 60 FPS in the terminal.
-- Search and library: queries YouTube Music for audio streams and syncs with Spotify user libraries (`Ctrl+E` toggles between search backends).
-- Synced lyrics: parses LRC timestamps with click-to-seek and keyboard navigation.
-- MPRIS 2 interface: registers on D-Bus for integration with `playerctl`, Waybar, lockscreens, and hardware media keys.
-- Interface: built with Textual, with full vim keybindings (`h`/`j`/`k`/`l`).
+- **Plays YouTube Music audio through mpv.** Songs you play are saved to the cache and work offline afterwards. Spotify Premium isn't needed.
+- **256 kbps audio with YouTube Music Premium.** Sign in with Google from Settings and spoff uses your browser's login, so nothing is copied or stored. Songs saved earlier at lower quality are downloaded again at 256 kbps.
+- **Syncs your Spotify library.** Playlists and liked songs sync both ways. Songs you add from YouTube Music stay in spoff and never go to Spotify, and playlists you delete on Spotify stay deleted.
+- **Copies playlists to YouTube Music** (optional, off by default). Songs you add or remove in spoff follow, and songs you add in the YouTube Music app are left alone.
+- **Song mods.** Press `m` on a downloaded song for slowed + reverb, sped up, nightcore, bass boosted or 8D. Presets play live as you move through them, sliders adjust speed, reverb, bass and 8D, and saved mods go to their own Modded tab.
+- **Parametric EQ** with presets (Harman, diffuse field, Moondrop Chu II and more) and AutoEQ / EqualizerAPO import from the clipboard. Loudness levelling is optional.
+- **Synced lyrics** from LRCLIB, with click or Enter on any line to jump there.
+- **Visualizer** through cava, in several styles and colours.
+- **MPRIS 2**, so media keys, `playerctl`, Waybar and lockscreens can control it.
+- **Vim keys everywhere**, and every key can be rebound in Settings.
 
-## Installation
+## Install
 
-### Dependencies
+You need `mpv` and `ffmpeg`. `cava` is optional (visualizer), and so is `nodejs`, `deno` or `bun`, which you only need for 256 kbps audio when signed in to YouTube Music Premium.
 
-- Python 3.10+
-- `mpv` (playback engine)
-- `ffmpeg` (checks and repairs saved songs)
-- `cava` (visualizer, optional)
-- `node`, `deno` or `bun` (optional; needed for 256 kbps audio when signed in to YouTube Music Premium)
-
-The AppImage bundles Python and every Python package, but not these system programs.
-
-On Arch Linux:
 ```bash
-sudo pacman -S mpv ffmpeg cava python nodejs
+sudo pacman -S mpv ffmpeg cava nodejs          # Arch
+sudo apt install mpv ffmpeg cava nodejs        # Debian / Ubuntu
+sudo dnf install mpv ffmpeg cava nodejs        # Fedora
 ```
 
-On Debian / Ubuntu:
-```bash
-sudo apt install mpv ffmpeg cava python3 python3-pip nodejs
-```
-
-On Fedora:
-```bash
-sudo dnf install mpv ffmpeg cava python3 nodejs
-```
-
-### Install with pipx
+### pipx
 
 ```bash
 pipx install spoff
 ```
 
-To update:
-```bash
-pipx upgrade spoff
-```
+spoff tells you when a new release is out; `pipx upgrade spoff` updates it.
 
-### Arch Linux (makepkg)
+### AppImage
 
-Spoff isn't on the AUR yet. The PKGBUILD in this repo builds the latest PyPI release as a normal pacman package:
+Download `spoff-x86_64.AppImage` from the [releases page](https://github.com/vrdq/spoff/releases), make it executable and run it. It bundles Python and all of spoff's Python packages, but not mpv or ffmpeg. AppImages are attached from the release after v0.1.0 on.
+
+### Flatpak
+
+Not on Flathub yet. The manifest in [`packaging/flatpak`](packaging/flatpak) builds a Flatpak that includes mpv, ffmpeg, cava and deno; see its README for the commands.
+
+### Arch (makepkg)
+
+spoff isn't on the AUR yet. The PKGBUILD in this repo builds the latest PyPI release as a pacman package:
+
 ```bash
 git clone https://github.com/vrdq/spoff.git
 cd spoff
 makepkg -si
 ```
-Pacman then owns the install, so update by pulling and running `makepkg -si` again; Spoff won't try to update itself.
 
-### Build from Source
+Pacman owns this install, so update by pulling and running `makepkg -si` again. spoff won't try to update itself.
+
+### From source
 
 ```bash
 git clone https://github.com/vrdq/spoff.git
 cd spoff
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate      # fish: source .venv/bin/activate.fish
 pip install -e .
 spoff
 ```
 
-## Workflows
+## Getting started
 
-### Search and Play
-Press `1` to open Search and begin typing. Press `Enter` to play the highlighted track, or `a` to save it to a playlist. Switch between YouTube Music and Spotify search engines with `Ctrl+E`.
+- Press `1` and type to search. `Enter` plays the highlighted song, `a` adds it to a playlist and `l` likes it. `Ctrl+E` switches between YouTube Music and Spotify search.
+- Paste a Spotify or YouTube Music playlist, album or track link into the sidebar box (`i`) to import it.
+- Press `2` for your playlists, move with `j`/`k`, and press `Enter` or `l` to open one. `h` goes back to the sidebar. `Shift+J`/`Shift+K` reorder songs or playlists, and `S` on a playlist edits its name, description and privacy.
+- `b` downloads the highlighted song and `B` the whole playlist. Press `3` to see everything saved.
+- Press `4` for lyrics while a song plays.
+- Press `L` to connect your Spotify account.
+- Press `,` for settings, the equalizer, YouTube sign-in and key bindings.
 
-### Import Links
-Paste any Spotify URL (`https://open.spotify.com/playlist/...`, album, or track) or YouTube Music URL directly into the sidebar input (`i`). Spoff parses and loads the tracklist immediately.
+## Keys
 
-### Browse Playlists
-Press `2` to focus the playlist sidebar. Use `j` and `k` to scroll through playlists. Press `Enter` or `l` to jump into the tracklist, select a song, and press `Enter` to play. Press `h` to return to the sidebar.
-
-### Synced Lyrics
-Press `4` while playing a track to open live lyrics. Use `j`/`k` or mouse click, and press `Enter` on any line to seek playback to that timestamp.
-
-### Reorder Tracks
-In playlist view, press `Shift+J` or `Shift+K` to move a song down or up. In the sidebar, `Shift+J` and `Shift+K` reorder playlists.
-
-## Keybindings
+Every key can be changed in Settings (`,`). These are the defaults.
 
 ### Navigation
+
 | Key | Action |
 | --- | --- |
-| `1` | Search view |
-| `2` | Playlists view (focus sidebar) |
-| `3` | Offline cached library |
-| `4` | Synced lyrics view |
-| `h` / `Left` | Focus playlists sidebar |
-| `l` / `Right` | Focus tracks table |
-| `j` / `Down` | Move cursor down |
-| `k` / `Up` | Move cursor up |
-| `Tab` | Cycle focus between sidebar and main view |
-| `Escape` | Dismiss modal / unfocus input / return to table |
+| `1` `2` `3` `4` `5` `6` | Search, Playlists, Offline, Lyrics, Liked Songs, Modded |
+| `h` | Focus the playlist sidebar |
+| `Right` | Focus the song list |
+| `j` / `k` (or arrows) | Move down / up |
+| `Tab` | Switch between sidebar and song list |
+| `f` | Find a song in the current view |
+| `/` | Focus the search box |
+| `Esc` | Close a popup or leave a text box |
 
 ### Playback
-| Key | Action |
-| --- | --- |
-| `Enter` | Play highlighted track |
-| `Space` | Toggle Play / Pause |
-| `p` | Previous track in queue |
-| `n` | Next track in queue |
-| `Left` / `Right` | Seek backward / forward 5 seconds |
-| `b` | Focus scrub bar (`h`/`l` for 5s, `0`-`9` for 0%-90%) |
-| `s` | Toggle Shuffle |
-| `r` | Toggle Repeat mode |
-| `c` | Copy track link to clipboard |
-| `F2` / `Down` | Lower volume (-5%) |
-| `F3` / `Up` | Raise volume (+5%) |
-| `F1` | Mute / Unmute |
 
-### Library Management
 | Key | Action |
 | --- | --- |
-| `a` | Add highlighted track to playlist |
-| `y` | Copy playlist link to clipboard |
-| `i` | Focus playlist import input |
-| `Shift+J` / `Shift+Down` | Move track or playlist down |
-| `Shift+K` / `Shift+Up` | Move track or playlist up |
-| `d` / `Delete` | Remove song from playlist |
-| `Shift+D` | Delete playlist |
+| `Enter` | Play the highlighted song |
+| `Space` | Play / pause |
+| `n` / `p` | Next / previous song |
+| `Left` / `Right` | Seek 5 seconds back / forward |
+| `s` | Shuffle |
+| `r` | Cycle repeat mode |
+| `Ctrl+R` | Song radio (similar songs) |
+| `m` | Mod the highlighted song |
+| `c` | Copy the song's link |
+| `F1` / `F2` / `F3` | Mute / volume down / volume up |
 
-### System
+### Library
+
 | Key | Action |
 | --- | --- |
-| `Ctrl+E` | Switch search engine (YouTube Music / Spotify) |
-| `,` | Open Settings |
-| `L` | Connect / Sync Spotify account |
-| `:` | Open Keybindings modal |
+| `a` | Add the song to a playlist |
+| `l` | Like / unlike |
+| `b` / `B` | Download the song / the whole playlist |
+| `i` | New playlist or import a link |
+| `d` | Remove the song (or delete a modded song) |
+| `D` | Delete the playlist |
+| `R` / `Y` / `S` | Rename / copy / playlist settings |
+| `y` | Copy the playlist's link |
+| `Shift+J` / `Shift+K` | Move the song or playlist down / up |
+
+### Sound and visuals
+
+| Key | Action |
+| --- | --- |
+| `e` | Equalizer |
+| `E` | Bypass the EQ (A/B compare) |
+| `Alt+E` | EQ settings |
+| `v` / `Shift+V` / `C` | Visualizer style / on-off / colour |
+
+### Other
+
+| Key | Action |
+| --- | --- |
+| `Ctrl+E` | Switch search between YouTube Music and Spotify |
+| `L` | Spotify account |
+| `,` | Settings |
+| `:` | Help |
 | `u` | Check for updates |
 | `q` | Quit |
 
-## File Locations
+## Files
 
-Configuration and cached audio follow XDG paths:
+Everything lives in `~/.local/share/spoff/`:
 
-- Cached audio: `~/.local/share/spoff/cache/`
-- Playlists and metadata: `~/.local/share/spoff/playlists.json`
-- User settings: `~/.config/spoff/settings.json`
-- Spotify auth tokens: `~/.config/spoff/spotify_auth.json`
+- `cache/` holds downloaded songs and saved mods
+- `playlists.json`, `liked_songs.json` and `modded_tracks.json` hold your library
+- `config.json` holds settings, including the EQ
+- `spotify_auth.json` holds your Spotify login
+
+Your Google login stays in your browser. spoff reads it when it needs it and never writes it to disk.
+
+## Community
+
+Questions, bug reports and EQ presets go on the [Discord server](https://discord.gg/9xHrMRTwwZ). Bugs can also go in [GitHub issues](https://github.com/vrdq/spoff/issues).
 
 ## License
 
