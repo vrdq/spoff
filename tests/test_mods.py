@@ -244,7 +244,7 @@ def test_lyrics_tab_after_a_modded_song_does_not_crash(tmp_path, monkeypatch):
             await pilot.press("4")                          # used to raise MarkupError and quit
             await pilot.pause(0.3)
             assert app.active_tab == "lyrics"
-            assert "modded" in str(app.query_one("#lyrics-table").get_row_at(0)[1])
+            assert "finding lyrics" in str(app.query_one("#lyrics-header").render())
 
     asyncio.run(run())
 
@@ -256,3 +256,19 @@ def test_no_markup_tags_that_textual_rejects():
     src = (Path(__file__).parent.parent / "spoff" / "app.py").read_text()
     bad = re.findall(r'\[(?:dim|bold|italic) #[0-9a-fA-F]{6}\][^\[\]]*\[/(?:dim|bold|italic)\]', src)
     assert bad == []
+
+
+def test_lyrics_lookup_uses_the_original_song():
+    old = {"title": "Jane! (slowed + reverb)", "artist": "The Long Faces", "duration_ms": 200000,
+           "mod_of": "x", "mod": {"speed": 0.85}}
+    assert mods.lyrics_lookup(old) == ("Jane!", "The Long Faces", 170000, 0.85)
+    new = {**old, "title": "Song (Live) (sped up)", "original_title": "Song (Live)", "mod": {"speed": 1.2}}
+    assert mods.lyrics_lookup(new)[0] == "Song (Live)"          # recorded title beats suffix stripping
+
+
+def test_lyrics_stretch_with_the_mod_speed():
+    lyr = {"synced": True, "lines": [{"time": 0.0, "text": "a"}, {"time": 60.0, "text": "b"}]}
+    slowed = mods.scale_lyrics(lyr, 0.85)
+    assert [l["time"] for l in slowed["lines"]] == [0.0, 70.59]
+    assert [l["time"] for l in mods.scale_lyrics(lyr, 1.2)["lines"]] == [0.0, 50.0]
+    assert lyr["lines"][1]["time"] == 60.0                          # cached original untouched

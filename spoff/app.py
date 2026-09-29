@@ -7221,12 +7221,6 @@ class SpoffTUI(App):
         title = curr.get("title", "Unknown")
         artist = curr.get("artist", "Unknown")
 
-        if self.current_lyrics is None and curr.get("mod_of"):
-            # Mods skip the lookup: a changed speed would put synced lyrics out of time.
-            lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]")
-            lt.clear()
-            lt.add_row("", "[dim]No lyrics for modded songs: the new speed would put them out of sync.[/dim]")
-            return
         if self.current_lyrics is None:
             lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]  [dim #767676]finding lyrics…[/]")
             lt.clear()
@@ -10479,11 +10473,16 @@ class SpoffTUI(App):
 
         # Asynchronously fetch synced lyrics in background
         def _fetch_lyr_bg():
-            if not is_current() or track.get("mod_of"):
-                return  # a mod's changed speed would put synced lyrics out of time
+            if not is_current():
+                return
             try:
-                dur_ms = track.get("duration_ms")
-                lyr = fetch_lyrics(title, artist, dur_ms)
+                if track.get("mod_of"):
+                    # A mod plays at a different speed: fetch the original's lyrics
+                    # and stretch their timestamps to match.
+                    l_title, l_artist, l_dur, speed = mods.lyrics_lookup(track)
+                    lyr = mods.scale_lyrics(fetch_lyrics(l_title, l_artist, l_dur), speed)
+                else:
+                    lyr = fetch_lyrics(title, artist, track.get("duration_ms"))
             except Exception:
                 logger.exception("Failed to fetch lyrics")
                 lyr = None

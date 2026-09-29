@@ -8,6 +8,7 @@ renders the modded song with ffmpeg into the cache as a local-only track.
 import hashlib
 import json
 import logging
+import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, replace
@@ -206,6 +207,7 @@ def render(original: Dict[str, Any], src: Path, mod: Mod) -> Dict[str, Any]:
         # Local-only: "local" tracks never sync to Spotify or YouTube Music.
         "source": "local",
         "mod_of": original_id,
+        "original_title": original.get("title") or "",
         "mod": asdict(mod),
     }
     for key in ("art_url", "album_art_url", "thumbnail"):
@@ -216,6 +218,37 @@ def render(original: Dict[str, Any], src: Path, mod: Mod) -> Dict[str, Any]:
     tracks.insert(0, track)
     _save_modded(tracks)
     return track
+
+
+def lyrics_lookup(track: Dict[str, Any]) -> Tuple[str, str, Optional[int], float]:
+    """(title, artist, duration_ms, speed) of the song a mod was made from.
+
+    Lyrics are found under the original title and length, then stretched by
+    the speed so they stay in time with the mod.
+    """
+    speed = float((track.get("mod") or {}).get("speed") or 1.0) or 1.0
+    title = str(track.get("original_title") or "")
+    if not title:
+        # Mods saved before original_title existed: drop the " (slowed + reverb)" suffix.
+        title = re.sub(r"\s*\([^()]*\)\s*$", "", str(track.get("title") or ""))
+    try:
+        duration = int(float(track.get("duration_ms") or 0) * speed) or None
+    except (TypeError, ValueError):
+        duration = None
+    return title, str(track.get("artist") or ""), duration, speed
+
+
+def scale_lyrics(lyrics: Optional[Dict[str, Any]], speed: float) -> Optional[Dict[str, Any]]:
+    """A copy of the lyrics with every timestamp moved to the mod's speed."""
+    if not lyrics or speed == 1.0:
+        return lyrics
+    scaled = dict(lyrics)
+    scaled["lines"] = [
+        {**line, "time": round(line["time"] / speed, 2)}
+        if isinstance(line, dict) and isinstance(line.get("time"), (int, float)) else line
+        for line in lyrics.get("lines") or []
+    ]
+    return scaled
 
 
 def delete_modded(track_id: str) -> None:
