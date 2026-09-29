@@ -226,3 +226,33 @@ def test_custom_reopens_with_your_settings_and_saves(tmp_path, monkeypatch):
 
     MOD_PRESET_NAMES = [name for name, _ in mods.PRESETS]
     asyncio.run(run())
+
+
+def test_lyrics_tab_after_a_modded_song_does_not_crash(tmp_path, monkeypatch):
+    import asyncio
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from spoff import app as app_mod
+
+    async def run():
+        app = app_mod.SpoffTUI()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.5)
+            await pilot.press("escape")
+            app.player.current_track = {"id": "mod_1", "title": "Song (slowed + reverb)", "artist": "B",
+                                        "duration_ms": 1000, "source": "local", "mod_of": "t1"}
+            app.current_lyrics = None
+            await pilot.press("4")                          # used to raise MarkupError and quit
+            await pilot.pause(0.3)
+            assert app.active_tab == "lyrics"
+            assert "modded" in str(app.query_one("#lyrics-table").get_row_at(0)[1])
+
+    asyncio.run(run())
+
+
+def test_no_markup_tags_that_textual_rejects():
+    """'[dim #hex]...[/dim]' raises MarkupError the moment it's shown; close with [/]."""
+    import re
+    from pathlib import Path
+    src = (Path(__file__).parent.parent / "spoff" / "app.py").read_text()
+    bad = re.findall(r'\[(?:dim|bold|italic) #[0-9a-fA-F]{6}\][^\[\]]*\[/(?:dim|bold|italic)\]', src)
+    assert bad == []

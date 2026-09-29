@@ -516,7 +516,7 @@ class TestDeckTrackFormatting(unittest.TestCase):
         self.app.update_player_hud()
 
         updated_text = widgets["#deck-track"].update.call_args[0][0]
-        self.assertEqual(updated_text, "[dim]No track playing[/dim]")
+        self.assertEqual(updated_text, "[dim]Nothing playing[/dim]")
 
     def test_hud_declutter_no_status_pill_or_deck_source(self):
         from collections import defaultdict

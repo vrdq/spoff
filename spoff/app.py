@@ -2877,18 +2877,20 @@ class HelpModal(SafeModalScreen[None]):
             return f"[#e2e2e2 on #2a2a2a]\u2800{escape(key)}\u2800[/]"
 
         def kcap(act_id: str, default: str) -> str:
-            return cap(format_key_display(kb.get(act_id, default)))
+            key = kb.get(act_id, default)
+            # An unbound action shows as plain dim text, not an escaped markup tag.
+            return cap(format_key_display(key)) if key else "[#5f5f5f]unbound[/]"
 
         def make_sec_table(rows: List[Tuple[str, str]]) -> Table:
             t = Table.grid(padding=(0, 2))
-            t.add_column(width=22, no_wrap=True)
+            # Fixed key column so every section's descriptions line up.
+            t.add_column(width=24, min_width=24, no_wrap=True)
             t.add_column(style="#888888", no_wrap=True)
             for k, d in rows:
                 t.add_row(k, d)
             return t
 
         sep = "[#555555] / [/]"
-        comma = "[#555555], [/]"
 
         k_s1 = kcap("nav_search", "1")
         k_s2 = kcap("nav_playlist", "2")
@@ -2906,18 +2908,16 @@ class HelpModal(SafeModalScreen[None]):
         k_share = kcap("share_track", "c")
 
         nav_rows = [
-            (f"{k_s1} {k_s2} {k_s3} {k_s5} {kcap('nav_modded', '6')}", "Search / Playlists / Offline / Liked / Modded"),
-            (kcap("mod_track", "m"), "Mod song: slowed + reverb, sped up, bass, 8D"),
-            (k_s4, "Synchronized lyrics view"),
-            (f"{cap('h')}{sep}{cap('→')}{comma}{cap('Tab')}", "Switch sidebar / main pane"),
-            (f"{cap('j')}{sep}{cap('k')}{comma}{cap('Arrows')}", "Navigate table rows"),
-            (f"{cap('gg')}{sep}{cap('Home')}", "Jump to top row"),
-            (f"{cap('G')}{sep}{cap('End')}", "Jump to bottom row"),
-            (f"{cap('Ctrl+d')}{sep}{cap('Ctrl+u')}", "Scroll page down / up"),
-            (cap("Tab"), "Cycle sidebar / table"),
-            (cap("Enter"), "Play track / open playlist"),
-            (f"{cap('k')} [dim](top row)[/dim]", "Jump into input box"),
-            (cap("Esc"), "Unfocus / back to playlist"),
+            (f"{k_s1} {k_s2} {k_s3}", "Search / Playlists / Offline"),
+            (f"{k_s4} {k_s5} {kcap('nav_modded', '6')}", "Lyrics / Liked / Modded"),
+            (f"{cap('h')}{sep}{cap('→')}", "Sidebar / songs"),
+            (cap("Tab"), "Switch between them"),
+            (f"{cap('j')}{sep}{cap('k')}", "Move down / up"),
+            (f"{cap('gg')}{sep}{cap('G')}", "First / last row"),
+            (f"{cap('Ctrl+d')}{sep}{cap('Ctrl+u')}", "Page down / up"),
+            (cap("Enter"), "Play song / open playlist"),
+            (f"{cap('k')} [dim]on top row[/dim]", "Into the search box"),
+            (cap("Esc"), "Close / leave a text box"),
         ]
 
         k_dl = kcap("download_offline", "b")
@@ -2926,29 +2926,24 @@ class HelpModal(SafeModalScreen[None]):
         k_vis_toggle = kcap("toggle_vis_on_off", "V")
 
         playback_rows = [
-            (f"{k_play}{comma}{cap('F8')}", "Play / pause toggle"),
-            (k_shuf, "Toggle shuffle mode"),
-            (k_rep, "Cycle repeat (off / all / 1)"),
-            (f"{k_prev}{sep}{k_next}{comma}{cap('F7/F9')}", "Previous / next track"),
-            (k_radio, "Song Radio / Recommended tracks"),
-            (k_dl, "Download song / playlist offline"),
-            (k_share, "Copy track link to clipboard"),
-            (f"{cap('Left')}{sep}{cap('Right')}", "Seek -/+ 5 seconds"),
-            (f"{k_vis_cycle}{comma}{cap('Click')}", "Cycle visualizer mode"),
-            (f"{k_vis_toggle}{comma}{cap('Shift+V')}", "Toggle visualizer on / off"),
-            (cap("C"), "Cycle visualizer color theme"),
-            (f"{cap('e')}{sep}{cap('E')}", "Parametric EQ / toggle bypass"),
-            (cap("F1"), "Mute / unmute audio"),
-            (f"{cap('F2')}{sep}{cap('F3')}", "Volume down / up 5%"),
+            (k_play, "Play / pause"),
+            (f"{k_prev}{sep}{k_next}", "Previous / next song"),
+            (k_shuf, "Shuffle"),
+            (k_rep, "Repeat (off / all / one)"),
+            (k_radio, "Song radio"),
+            (kcap("mod_track", "m"), "Mod the song"),
+            (k_dl, "Download song / playlist"),
+            (k_share, "Copy the song's link"),
+            (f"{cap('e')}{sep}{cap('E')}", "Equalizer / bypass it"),
+            (f"{k_vis_cycle}{sep}{k_vis_toggle}{sep}{cap('C')}", "Visualizer style, on, colour"),
+            (f"{cap('F1')}{sep}{cap('F2')}{sep}{cap('F3')}", "Mute / volume down / up"),
         ]
 
         seek_rows = [
-            (f"{cap('Left')}{sep}{cap('Right')}", "Seek -/+ 5s on bar"),
-            (f"{cap('h')}{sep}{cap('l')}", "Seek -/+ 5s on bar"),
-            (f"{cap('H')}{sep}{cap('L')}", "Fast seek -/+ 15s on bar"),
-            (f"{cap('0')} – {cap('9')}", "Jump to 0% – 90% of song"),
-            (f"{cap('Enter')}{comma}{cap('Click')}", "Jump to lyric timestamp"),
-            (f"{cap('Esc')}{sep}{cap('k')}", "Return to table"),
+            (f"{cap('Left')}{sep}{cap('Right')}", "Back / forward 5 s"),
+            (f"{cap('H')}{sep}{cap('L')}", "Back / forward 15 s"),
+            (f"{cap('0')} – {cap('9')}", "Jump to 0% – 90%"),
+            (f"{cap('Enter')}{sep}{cap('Click')}", "Jump to a lyric line"),
         ]
 
         k_like = kcap("like_track", "l")
@@ -2965,44 +2960,42 @@ class HelpModal(SafeModalScreen[None]):
         k_quit = kcap("quit_app", "q")
 
         playlist_rows = [
-            (f"{cap('J')}{sep}{cap('K')}{comma}{cap('Shift+↑↓')}", "Reorder songs in playlist"),
-            (k_like, "Like / unlike song (Spotify sync)"),
-            (f"{k_add}{comma}{cap('+')}", "Add track to playlist"),
-            (f"{k_ren_pl}{comma}{cap('F2')}", "Rename selected playlist"),
-            (f"{k_cln_pl}{comma}{cap('Alt+c')}", "Clone / copy playlist"),
-            (k_pl_sett, "Playlist settings (name, public)"),
-            (k_share_pl, "Copy playlist link to clipboard"),
-            (k_imp, "New playlist / import link"),
-            (k_spot, "Spotify login & sync"),
-            (k_sett, "Settings & rebind keys"),
-            (k_srch, "Focus search box"),
-            (k_del, "Remove track / playlist"),
-            (k_del_pl, "Delete whole playlist"),
-            (k_eng, "Switch engine (YTM / Spotify)"),
-            (k_upd, "Check / pull updates"),
-            (k_quit, "Quit Spoff"),
+            (k_add, "Add song to a playlist"),
+            (k_like, "Like / unlike"),
+            (f"{cap('J')}{sep}{cap('K')}", "Move song or playlist"),
+            (k_del, "Remove song"),
+            (k_del_pl, "Delete playlist"),
+            (f"{k_ren_pl}{sep}{k_cln_pl}{sep}{k_pl_sett}", "Rename / copy / settings"),
+            (k_share_pl, "Copy the playlist's link"),
+            (k_imp, "New playlist / import a link"),
+            (k_srch, "Search box"),
+            (k_eng, "Switch search engine"),
+            (k_spot, "Spotify account"),
+            (k_sett, "Settings and key bindings"),
+            (k_upd, "Check for updates"),
+            (k_quit, "Quit"),
         ]
 
         with Vertical(id="help-dialog"):
             with Horizontal(id="help-header-bar"):
-                yield Static("Keybindings", id="help-title")
+                yield Static("Keys", id="help-title")
                 h_close = "" if getattr(self.app, "advanced_mode", False) else "[dim]esc[/dim]"
                 yield Static(h_close, id="help-close-hint")
 
             with Horizontal(id="help-body"):
                 with Vertical(classes="help-col"):
-                    yield Static("Navigation & views", classes="help-sec-title")
+                    yield Static("Getting around", classes="help-sec-title")
                     yield Static(make_sec_table(nav_rows), classes="help-sec-table")
-                    yield Static("Playback controls", classes="help-sec-title")
+                    yield Static("Playback", classes="help-sec-title")
                     yield Static(make_sec_table(playback_rows), classes="help-sec-table")
 
                 with Vertical(id="help-col-sep"):
                     pass
 
                 with Vertical(classes="help-col"):
-                    yield Static("Seek & timestamps", classes="help-sec-title")
+                    yield Static("Seeking", classes="help-sec-title")
                     yield Static(make_sec_table(seek_rows), classes="help-sec-table")
-                    yield Static("Playlists & library", classes="help-sec-title")
+                    yield Static("Library", classes="help-sec-title")
                     yield Static(make_sec_table(playlist_rows), classes="help-sec-table")
 
     def action_dismiss_modal(self) -> None:
@@ -4253,10 +4246,11 @@ class SpoffTUI(App):
         margin-bottom: 0;
     }
 
+    /* Plain text beside the box: a near-invisible border only showed one edge. */
     #engine-selector-pill {
         width: auto;
         height: 3;
-        border: solid #2a2a2a;
+        border: none;
         background: transparent;
         padding: 0 1;
         margin-left: 1;
@@ -4264,7 +4258,6 @@ class SpoffTUI(App):
     }
 
     #engine-selector-pill:hover {
-        border: solid #444444;
         color: #ffffff;
     }
 
@@ -6103,7 +6096,7 @@ class SpoffTUI(App):
         with Horizontal(id="main-layout"):
             with Vertical(id="sidebar"):
                 yield Static("Playlists", classes="pane-title")
-                yield Input(placeholder="Create a playlist or paste a link", id="sidebar-import-input", classes="action-input")
+                yield Input(placeholder="New playlist or link", id="sidebar-import-input", classes="action-input")
                 yield DataTable(id="side-table", cursor_type="row", show_header=False, show_cursor=False)
                 yield Static("" if self.advanced_mode else "[dim]Enter: open  |  Del: delete[/dim]", id="sidebar-hint")
 
@@ -6121,14 +6114,14 @@ class SpoffTUI(App):
         with Vertical(id="player-deck"):
             yield Static("", id="notification-line")
             with Horizontal(id="deck-line-1"):
-                yield Static("[dim]No track playing[/dim]", id="deck-track")
+                yield Static("[dim]Nothing playing[/dim]", id="deck-track")
                 yield Static("", id="deck-stats-pill")
                 yield VisualizerWidget(self.visualizer, id="deck-visualizer")
                 yield Static("", id="shuf-pill")
                 yield Static("", id="rep-pill")
             with Horizontal(id="deck-line-2"):
                 yield Static("00:00", id="time-elapsed")
-                yield ScrubBar(total=100, show_eta=False, id="playback-bar")
+                yield ScrubBar(total=100, show_eta=False, show_percentage=False, id="playback-bar")
                 yield Static("00:00", id="time-total")
             yield Static("Enter: play  |  Space: pause  |  l: like  |  s: shuf  |  r: rep  |  : help  |  q: quit", id="deck-line-3")
 
@@ -6180,7 +6173,12 @@ class SpoffTUI(App):
 
         tt = self.query_one("#track-table", DataTable)
         tt.cursor_foreground_priority = "renderable"
-        tt.add_columns("Source", "Title", "Artist", "Duration")
+        # One narrow mark (● = saved offline) instead of a "Spotify | stream" label on every row.
+        tt.add_column("", key="mark", width=1)
+        tt.add_column("Title", key="title")
+        tt.add_column("Artist", key="artist")
+        tt.add_column("Time", key="time", width=5)
+        self.call_after_refresh(self._fit_track_columns)
 
         lt = self.query_one("#lyrics-table", DataTable)
         lt.cursor_foreground_priority = "renderable"
@@ -6697,6 +6695,26 @@ class SpoffTUI(App):
 
     def on_resize(self, event: events.Resize) -> None:
         self._last_rendered_width = event.size.width
+        self.call_after_refresh(self._fit_track_columns)
+
+    def _fit_track_columns(self) -> None:
+        """Title and Artist share the table's width, so one long name can't push
+        the Time column off screen (auto-sized columns did)."""
+        try:
+            table = self.query_one("#track-table", DataTable)
+            width = table.size.width
+            if width <= 0 or "title" not in table.columns:
+                return
+            # 4 columns x 2 cells of padding, the mark and time columns, the scrollbar.
+            free = max(20, width - 8 - 1 - 5 - 2)
+            title = int(free * 0.58)
+            for key, w in (("title", title), ("artist", free - title)):
+                col = table.columns[key]
+                col.auto_width = False
+                col.width = w
+            table.refresh()
+        except Exception:
+            logger.debug("Could not fit track columns", exc_info=True)
 
     def on_key(self, event: events.Key) -> None:
         try:
@@ -7195,7 +7213,7 @@ class SpoffTUI(App):
 
         curr = self.player.current_track
         if not curr:
-            lh.update("[dim]NO TRACK PLAYING[/dim]")
+            lh.update("[dim]Nothing playing[/dim]")
             lt.clear()
             lt.add_row("", "[dim]Play a song to view lyrics[/dim]")
             return
@@ -7203,8 +7221,14 @@ class SpoffTUI(App):
         title = curr.get("title", "Unknown")
         artist = curr.get("artist", "Unknown")
 
+        if self.current_lyrics is None and curr.get("mod_of"):
+            # Mods skip the lookup: a changed speed would put synced lyrics out of time.
+            lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]")
+            lt.clear()
+            lt.add_row("", "[dim]No lyrics for modded songs: the new speed would put them out of sync.[/dim]")
+            return
         if self.current_lyrics is None:
-            lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]  [dim #767676]finding lyrics…[/dim]")
+            lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]  [dim #767676]finding lyrics…[/]")
             lt.clear()
             lt.add_row("", "[dim]Searching synchronized lyrics on LRCLIB...[/dim]")
             return
@@ -7213,7 +7237,7 @@ class SpoffTUI(App):
         if lyr.get("synced"):
             tag = "[#569f68]synced[/]"
         elif lyr.get("instrumental"):
-            tag = "[dim #d08770]instrumental[/dim]"
+            tag = "[dim #d08770]instrumental[/]"
         else:
             tag = "[dim]unsynced[/dim]"
 
@@ -7278,9 +7302,6 @@ class SpoffTUI(App):
         table = self.query_one("#track-table", DataTable)
         old_cursor = table.cursor_row
         table.clear()
-        spot_name = "Spotify"
-        ytm_name = "YTMusic"
-        loc_name = "Local disk"
         curr_track = getattr(getattr(self, "player", None), "current_track", None)
         curr_id = curr_track.get("id") if curr_track else None
         playing_idx: Optional[int] = None
@@ -7288,27 +7309,7 @@ class SpoffTUI(App):
         for idx, t in enumerate(tracks):
             t_id = stable_track_id(t)
             is_cached = get_cached_track_path(t_id) is not None if t_id else False
-            raw_src = str(t.get("source", "")).lower()
-            if raw_src == "local" or str(t.get("filepath", "")).startswith("/"):
-                src = "local"
-            elif raw_src == "spotify" or (not raw_src and t_id and len(t_id) == 22 and not t.get("url")):
-                src = "spotify"
-            elif raw_src in ("ytmusic", "youtube") or (not raw_src and (len(t_id) == 11 or "youtube.com" in str(t.get("url", "")) or "youtu.be" in str(t.get("url", "")))) or self.active_tab == "search":
-                src = "ytmusic"
-            else:
-                src = raw_src or "remote"
-
-            sep = "[dim #555555] | [/]"
-            if src == "local":
-                type_tag = f"[#569f68]{loc_name}[/]"
-            elif src == "spotify":
-                status = "[#569f68]offline[/]" if is_cached else "[#c4a768]stream[/]"
-                type_tag = f"[#569f68]{spot_name}[/]{sep}{status}"
-            elif src == "ytmusic":
-                status = "[#569f68]offline[/]" if is_cached else "[#c4a768]stream[/]"
-                type_tag = f"[#e06c75]{ytm_name}[/]{sep}{status}"
-            else:
-                type_tag = "[#569f68]offline[/]" if is_cached else "[dim]remote[/dim]"
+            type_tag = "[#569f68]●[/]" if is_cached else ""
 
             try:
                 dur_ms = float(t.get("duration_ms") or 0)
@@ -9919,7 +9920,7 @@ class SpoffTUI(App):
                 track_display = f"[bold #ffffff]{safe_title}[/]"
             self.query_one("#deck-track", Static).update(track_display)
         else:
-            self.query_one("#deck-track", Static).update("[dim]No track playing[/dim]")
+            self.query_one("#deck-track", Static).update("[dim]Nothing playing[/dim]")
 
         queue_len = len(self.queue)
         queue_pos = f"{self.current_index + 1}/{queue_len}" if queue_len > 0 and self.current_index >= 0 else ""
