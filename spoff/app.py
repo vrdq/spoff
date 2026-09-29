@@ -2085,8 +2085,10 @@ class ModModal(SafeModalScreen[Optional["Mod"]]):
         self.slider_idx = 0
         self.custom = Mod()
         self.mod = Mod()
+        self.on_add = False  # cursor on the "Add to Modded songs" row
 
     SLIDERS = ("Speed", "Reverb", "Bass", "8D")
+    ADD_LABEL = "+ Add to Modded songs"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="mod-dialog"):
@@ -2099,6 +2101,7 @@ class ModModal(SafeModalScreen[Optional["Mod"]]):
             with Vertical(id="mod-sliders"):
                 for i, _ in enumerate(self.SLIDERS):
                     yield Static("", id=f"mod-slider-{i}", classes="mod-row")
+            yield Static(self.ADD_LABEL, id="mod-add", classes="mod-row")
             yield Static("", id="mod-footer")
 
     def on_mount(self) -> None:
@@ -2133,20 +2136,27 @@ class ModModal(SafeModalScreen[Optional["Mod"]]):
         self.query_one("#mod-sliders").display = not in_presets
         for i, (name, _) in enumerate(MOD_PRESETS):
             row = self.query_one(f"#mod-preset-{i}", Static)
-            row.set_class(i == self.preset_idx, "-active")
+            row.set_class(in_presets and i == self.preset_idx and not self.on_add, "-active")
+            # On the add row, keep showing which preset gets saved.
+            row.set_class(in_presets and i == self.preset_idx and self.on_add, "-chosen")
         for i, _ in enumerate(self.SLIDERS):
             row = self.query_one(f"#mod-slider-{i}", Static)
             row.update(self._slider_text(i))
-            row.set_class(i == self.slider_idx, "-active")
+            row.set_class(not in_presets and i == self.slider_idx and not self.on_add, "-active")
+        add = self.query_one("#mod-add", Static)
+        add.set_class(self.on_add, "-active")
+        add.set_class(self.mod.is_original, "-disabled")
+        add.update(f"{self.ADD_LABEL}  [#5a5a5a]pick a mod first[/]" if self.mod.is_original and self.on_add
+                   else self.ADD_LABEL)
         where = "" if in_presets else f"[#5a5a5a]{mods.describe(self.mod)}[/]"
         self.query_one("#mod-song", Static).update(
             where or f"[#5a5a5a]{escape(str(self.track.get('title') or ''))}[/]")
         if getattr(self.app, "advanced_mode", False):
             hints = ""
         elif in_presets:
-            hints = "j/k preset · l adjust · r reset · esc save · q close"
+            hints = "j/k preset · enter choose · l adjust · r reset · q close"
         else:
-            hints = "j/k slider · h/l change · tab back · r reset · esc save"
+            hints = "j/k slider · h/l change · tab back · a add · r reset"
         footer = self.query_one("#mod-footer", Static)
         footer.update(f"[dim]{hints}[/dim]" if hints else "")
         footer.set_class(bool(hints), "has-hints")
@@ -2174,9 +2184,38 @@ class ModModal(SafeModalScreen[Optional["Mod"]]):
         self.preset_idx = match
         self._apply(mod)
 
+    def add(self) -> None:
+        """Saves the mod. Nothing to save for the original song."""
+        if self.mod.is_original:
+            self.on_add = True
+            self._redraw()
+            return
+        self.dismiss(self.mod)
+
+    def _move(self, step: int) -> None:
+        """j/k. Presets cycle among themselves: walking down to the add row
+        would apply every preset on the way. Sliders can reach the add row,
+        since passing a slider doesn't change it."""
+        if self.mode == "presets":
+            if self.on_add:
+                if step < 0:
+                    self.on_add = False
+                    self._redraw()
+                return
+            self._select_preset(self.preset_idx + step)
+            return
+        count = len(self.SLIDERS)
+        pos = (count if self.on_add else self.slider_idx) + step
+        pos %= count + 1
+        self.on_add = pos == count
+        if not self.on_add:
+            self.slider_idx = pos
+        self._redraw()
+
     def reset(self) -> None:
         self.custom = Mod()
         self.mode = "presets"
+        self.on_add = False
         self._select_preset(0)
 
     def on_key(self, event: events.Key) -> None:
@@ -2187,28 +2226,35 @@ class ModModal(SafeModalScreen[Optional["Mod"]]):
             self.dismiss(None)
         elif key == "r":
             self.reset()
+        elif key == "a" or (key == "enter" and self.on_add):
+            self.add()
+        elif key in ("j", "down"):
+            self._move(1)
+        elif key in ("k", "up"):
+            self._move(-1)
+        elif self.on_add:
+            if key in ("tab", "shift+tab", "backspace"):
+                self.on_add = False  # back to where you were, nothing changed
+                if self.mode == "sliders" and key != "tab":
+                    self.mode = "presets"
+                self._redraw()
+            else:
+                return
         elif self.mode == "presets":
-            if key in ("j", "down"):
-                self._select_preset(self.preset_idx + 1)
-            elif key in ("k", "up"):
-                self._select_preset(self.preset_idx - 1)
-            elif key in ("g", "home"):
+            if key in ("g", "home"):
                 self._select_preset(0)
             elif key in ("G", "end"):
                 self._select_preset(len(MOD_PRESETS) - 1)
-            elif key in ("l", "right", "enter", "tab"):
+            elif key in ("enter", "tab"):
+                self.on_add = True  # keep this preset, go to "Add to Modded songs"
+                self._redraw()
+            elif key in ("l", "right"):
                 self.mode = "sliders"
                 self._redraw()
             else:
                 return
         else:
-            if key in ("j", "down"):
-                self.slider_idx = (self.slider_idx + 1) % len(self.SLIDERS)
-                self._redraw()
-            elif key in ("k", "up"):
-                self.slider_idx = (self.slider_idx - 1) % len(self.SLIDERS)
-                self._redraw()
-            elif key in ("l", "right"):
+            if key in ("l", "right"):
                 self._change_slider(1)
             elif key in ("h", "left"):
                 self._change_slider(-1)
@@ -5338,6 +5384,20 @@ class SpoffTUI(App):
         background: #1e1e1e;
         color: #ffffff;
         border-left: outer #569f68;
+    }
+
+    .mod-row.-chosen {
+        color: #ffffff;
+    }
+
+    /* The save row sits apart from the list and reads as an action. */
+    #mod-add {
+        margin-top: 1;
+        color: #6cc483;
+    }
+
+    #mod-add.-disabled {
+        color: #5f5f5f;
     }
 
     #mod-footer {

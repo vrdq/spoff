@@ -140,3 +140,46 @@ def test_mod_menu_end_to_end(tmp_path, monkeypatch):
             app.player.clear_mod.assert_called()
 
     asyncio.run(run())
+
+
+def test_add_to_modded_songs_row(tmp_path, monkeypatch):
+    import asyncio
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from spoff import app as app_mod
+
+    async def run():
+        app = app_mod.SpoffTUI()
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause(0.5)
+            await pilot.press("escape")
+            app.search_results = [{"id": "t1", "title": "Song", "artist": "B", "duration_ms": 3000, "source": "local"}]
+            app.switch_view("search")
+            await pilot.pause(0.2)
+            app.query_one("#track-table").focus()
+            monkeypatch.setattr(app.player, "set_mod", MagicMock())
+            monkeypatch.setattr(app.player, "clear_mod", MagicMock())
+            monkeypatch.setattr(app, "play_current_table_row", MagicMock())
+            monkeypatch.setattr(app_mod, "get_cached_track_path", lambda tid: tmp_path / "s.opus")
+            saved = []
+            monkeypatch.setattr(app_mod.mods, "render", lambda t, src, mod: saved.append(mod) or {**t, "id": "m", "title": "x"})
+
+            await pilot.press("m", "enter")                 # Original chosen: go to the add row
+            await pilot.pause(0.1)
+            modal = app.screen
+            assert modal.on_add
+            await pilot.press("enter")                      # original: nothing to save
+            await pilot.pause(0.1)
+            assert isinstance(app.screen, app_mod.ModModal)
+            assert "pick a mod first" in str(modal.query_one("#mod-add").render())
+
+            await pilot.press("k", "j")                     # back to the presets; Slowed + reverb
+            assert not modal.on_add and modal.mod.speed == 0.85
+            await pilot.press("enter")                      # choose it: jumps to the add row, mod unchanged
+            await pilot.pause(0.1)
+            assert modal.on_add and modal.mod.speed == 0.85
+            await pilot.press("enter")
+            await pilot.pause(0.5)
+            assert saved and saved[0].reverb == "hall"
+            assert not isinstance(app.screen, app_mod.ModModal)
+
+    asyncio.run(run())
