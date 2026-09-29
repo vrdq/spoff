@@ -6173,10 +6173,10 @@ class SpoffTUI(App):
 
         tt = self.query_one("#track-table", DataTable)
         tt.cursor_foreground_priority = "renderable"
-        # One narrow mark (● = saved offline) instead of a "Spotify | stream" label on every row.
-        tt.add_column("", key="mark", width=1)
+        tt.add_column("Source", key="mark", width=17)
         tt.add_column("Title", key="title")
         tt.add_column("Artist", key="artist")
+        tt.add_column("Album", key="album")
         tt.add_column("Time", key="time", width=5)
         self.call_after_refresh(self._fit_track_columns)
 
@@ -6705,10 +6705,11 @@ class SpoffTUI(App):
             width = table.size.width
             if width <= 0 or "title" not in table.columns:
                 return
-            # 4 columns x 2 cells of padding, the mark and time columns, the scrollbar.
-            free = max(20, width - 8 - 1 - 5 - 2)
-            title = int(free * 0.58)
-            for key, w in (("title", title), ("artist", free - title)):
+            # 5 columns x 2 cells of padding, the source and time columns, the scrollbar.
+            free = max(24, width - 10 - 17 - 5 - 2)
+            title = int(free * 0.42)
+            artist = int(free * 0.30)
+            for key, w in (("title", title), ("artist", artist), ("album", free - title - artist)):
                 col = table.columns[key]
                 col.auto_width = False
                 col.width = w
@@ -7303,7 +7304,26 @@ class SpoffTUI(App):
         for idx, t in enumerate(tracks):
             t_id = stable_track_id(t)
             is_cached = get_cached_track_path(t_id) is not None if t_id else False
-            type_tag = "[#569f68]●[/]" if is_cached else ""
+            raw_src = str(t.get("source", "")).lower()
+            if raw_src == "local" or str(t.get("filepath", "")).startswith("/"):
+                src = "local"
+            elif raw_src == "spotify" or (not raw_src and t_id and len(t_id) == 22 and not t.get("url")):
+                src = "spotify"
+            elif raw_src in ("ytmusic", "youtube") or (not raw_src and (len(t_id) == 11 or "youtube.com" in str(t.get("url", "")) or "youtu.be" in str(t.get("url", "")))) or self.active_tab == "search":
+                src = "ytmusic"
+            else:
+                src = raw_src or "remote"
+
+            sep = "[#555555] | [/]"
+            status = "[#569f68]offline[/]" if is_cached else "[#c4a768]stream[/]"
+            if src == "local":
+                type_tag = "[#569f68]Local disk[/]"
+            elif src == "spotify":
+                type_tag = f"[#569f68]Spotify[/]{sep}{status}"
+            elif src == "ytmusic":
+                type_tag = f"[#e06c75]YTMusic[/]{sep}{status}"
+            else:
+                type_tag = "[#569f68]offline[/]" if is_cached else "[#5f5f5f]remote[/]"
 
             try:
                 dur_ms = float(t.get("duration_ms") or 0)
@@ -7311,7 +7331,6 @@ class SpoffTUI(App):
                 dur_ms = 0.0
             dur = format_time(dur_ms / 1000.0)
             safe_title = escape(str(t.get("title") or ""))
-            safe_artist = escape(str(t.get("artist") or ""))
 
             is_playing = False
             if curr_track:
@@ -7324,8 +7343,11 @@ class SpoffTUI(App):
                 playing_idx = idx
 
             title_col = safe_title
-
-            table.add_row(type_tag, title_col, safe_artist, dur, key=str(idx))
+            # Brightness follows importance: title, then artist, album, time.
+            # Text objects, not markup: no escaping needed and they align with the headers.
+            table.add_row(type_tag, title_col, Text(str(t.get("artist") or ""), style="#9a9a9a"),
+                          Text(str(t.get("album") or ""), style="#6a6a6a"),
+                          Text(dur, style="#6a6a6a"), key=str(idx))
         if tracks:
             if select_row is not None:
                 target = max(0, min(select_row, len(tracks) - 1))
