@@ -2130,33 +2130,38 @@ class ModModal(SafeModalScreen[Optional["Mod"]]):
             return f"{'Bass':<10}{self._track(mods.BASS_STEPS, m.bass)}{'+' if m.bass else ''}{m.bass} dB"
         return f"{'8D':<10}{self._track((False, True), m.eight_d)}{'on' if m.eight_d else 'off'}"
 
+    def _preset_name(self) -> str:
+        """The preset the current settings match, or 'Custom'."""
+        return next((name for name, p in MOD_PRESETS if p == self.mod), "Custom")
+
     def _redraw(self) -> None:
         in_presets = self.mode == "presets"
         self.query_one("#mod-presets").display = in_presets
         self.query_one("#mod-sliders").display = not in_presets
         for i, (name, _) in enumerate(MOD_PRESETS):
             row = self.query_one(f"#mod-preset-{i}", Static)
-            row.set_class(in_presets and i == self.preset_idx and not self.on_add, "-active")
-            # On the add row, keep showing which preset gets saved.
-            row.set_class(in_presets and i == self.preset_idx and self.on_add, "-chosen")
+            row.set_class(i == self.preset_idx, "-active")
+            row.remove_class("-chosen")
         for i, _ in enumerate(self.SLIDERS):
             row = self.query_one(f"#mod-slider-{i}", Static)
             row.update(self._slider_text(i))
-            row.set_class(not in_presets and i == self.slider_idx and not self.on_add, "-active")
+            row.set_class(i == self.slider_idx and not self.on_add, "-active")
+        # The add row lives with the sliders: choose a preset, adjust, then add.
         add = self.query_one("#mod-add", Static)
+        add.display = not in_presets
         add.set_class(self.on_add, "-active")
         add.set_class(self.mod.is_original, "-disabled")
-        add.update(f"{self.ADD_LABEL}  [#5a5a5a]pick a mod first[/]" if self.mod.is_original and self.on_add
-                   else self.ADD_LABEL)
-        where = "" if in_presets else f"[#5a5a5a]{mods.describe(self.mod)}[/]"
+        add.update(f"{self.ADD_LABEL}  [#5a5a5a]change a setting first[/]"
+                   if self.mod.is_original and self.on_add else self.ADD_LABEL)
+        where = "" if in_presets else f"[#5a5a5a]{self._preset_name()}[/]"
         self.query_one("#mod-song", Static).update(
             where or f"[#5a5a5a]{escape(str(self.track.get('title') or ''))}[/]")
         if getattr(self.app, "advanced_mode", False):
             hints = ""
         elif in_presets:
-            hints = "j/k preset · enter choose · l adjust · r reset · q close"
+            hints = "j/k preview · enter adjust · a add · r reset · q close"
         else:
-            hints = "j/k slider · h/l change · tab back · a add · r reset"
+            hints = "j/k move · h/l change · enter on add saves · tab presets"
         footer = self.query_one("#mod-footer", Static)
         footer.update(f"[dim]{hints}[/dim]" if hints else "")
         footer.set_class(bool(hints), "has-hints")
@@ -2178,14 +2183,27 @@ class ModModal(SafeModalScreen[Optional["Mod"]]):
     def _change_slider(self, direction: int) -> None:
         changers = (mods.with_speed, mods.with_reverb, mods.with_bass, mods.with_eight_d)
         mod = changers[self.slider_idx](self.mod, direction)
-        self.custom = mod
-        # Keep the preset cursor honest: a slider change usually means "Custom".
-        match = next((i for i, (_, p) in enumerate(MOD_PRESETS) if p == mod), len(MOD_PRESETS) - 1)
-        self.preset_idx = match
+        self.custom = mod  # "Custom" reopens with these settings
+        self.preset_idx = next((i for i, (_, p) in enumerate(MOD_PRESETS) if p == mod), len(MOD_PRESETS) - 1)
         self._apply(mod)
+
+    def open_sliders(self) -> None:
+        """Enter on a preset: adjust it. The sliders start from that preset."""
+        self.mode = "sliders"
+        self.slider_idx = 0
+        self.on_add = False
+        self._redraw()
+
+    def back_to_presets(self) -> None:
+        self.mode = "presets"
+        self.on_add = False
+        self._redraw()
 
     def add(self) -> None:
         """Saves the mod. Nothing to save for the original song."""
+        if self.mode == "presets" and self.mod.is_original:
+            self.open_sliders()  # Original highlighted: go adjust instead of saving a copy
+            return
         if self.mod.is_original:
             self.on_add = True
             self._redraw()
@@ -2193,20 +2211,13 @@ class ModModal(SafeModalScreen[Optional["Mod"]]):
         self.dismiss(self.mod)
 
     def _move(self, step: int) -> None:
-        """j/k. Presets cycle among themselves: walking down to the add row
-        would apply every preset on the way. Sliders can reach the add row,
-        since passing a slider doesn't change it."""
+        """j/k. Presets preview as the cursor moves; in the sliders the add row
+        comes after the last slider."""
         if self.mode == "presets":
-            if self.on_add:
-                if step < 0:
-                    self.on_add = False
-                    self._redraw()
-                return
             self._select_preset(self.preset_idx + step)
             return
         count = len(self.SLIDERS)
-        pos = (count if self.on_add else self.slider_idx) + step
-        pos %= count + 1
+        pos = ((count if self.on_add else self.slider_idx) + step) % (count + 1)
         self.on_add = pos == count
         if not self.on_add:
             self.slider_idx = pos
@@ -2220,7 +2231,7 @@ class ModModal(SafeModalScreen[Optional["Mod"]]):
 
     def on_key(self, event: events.Key) -> None:
         key = event.key
-        if key in ("escape",):
+        if key == "escape":
             self.dismiss(None if self.mod.is_original else self.mod)
         elif key in ("q", "ctrl+c"):
             self.dismiss(None)
@@ -2232,35 +2243,24 @@ class ModModal(SafeModalScreen[Optional["Mod"]]):
             self._move(1)
         elif key in ("k", "up"):
             self._move(-1)
-        elif self.on_add:
-            if key in ("tab", "shift+tab", "backspace"):
-                self.on_add = False  # back to where you were, nothing changed
-                if self.mode == "sliders" and key != "tab":
-                    self.mode = "presets"
-                self._redraw()
-            else:
-                return
         elif self.mode == "presets":
             if key in ("g", "home"):
                 self._select_preset(0)
             elif key in ("G", "end"):
                 self._select_preset(len(MOD_PRESETS) - 1)
-            elif key in ("enter", "tab"):
-                self.on_add = True  # keep this preset, go to "Add to Modded songs"
-                self._redraw()
-            elif key in ("l", "right"):
-                self.mode = "sliders"
-                self._redraw()
+            elif key in ("enter", "l", "right", "tab"):
+                self.open_sliders()
             else:
                 return
         else:
-            if key in ("l", "right"):
+            if key in ("tab", "shift+tab", "backspace"):
+                self.back_to_presets()
+            elif self.on_add:
+                return
+            elif key in ("l", "right"):
                 self._change_slider(1)
             elif key in ("h", "left"):
                 self._change_slider(-1)
-            elif key in ("tab", "shift+tab", "backspace"):
-                self.mode = "presets"
-                self._redraw()
             else:
                 return
         event.prevent_default()
