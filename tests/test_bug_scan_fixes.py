@@ -156,7 +156,8 @@ def test_pip_update_of_a_pypi_install_upgrades_from_pypi():
     run = MagicMock(return_value=MagicMock(returncode=0, stdout="", stderr=""))
     with patch.object(updater, "get_local_commit", return_value=None), \
          patch.object(updater, "is_git_checkout", return_value=False), \
-         patch.object(updater.sys, "prefix", "/usr"), \
+         patch.object(updater.sys, "prefix", "/home/u/venv"), \
+         patch.object(updater.sys, "base_prefix", "/usr"), \
          patch.object(updater.subprocess, "run", run), \
          patch.object(updater.subprocess, "check_output", side_effect=Exception("no git")):
         ok, _ = updater.perform_update()
@@ -168,3 +169,44 @@ def test_eq_settings_bindings_have_actions():
     from spoff.app import EQSettingsModal
     for binding in EQSettingsModal.BINDINGS:
         assert hasattr(EQSettingsModal, f"action_{binding.action}"), binding.action
+
+
+def test_package_manager_installs_never_self_update():
+    from unittest.mock import patch, MagicMock
+    from spoff import updater
+    run = MagicMock()
+    with patch.object(updater, "is_git_checkout", return_value=False), \
+         patch.object(updater.sys, "prefix", "/usr"), \
+         patch.object(updater.sys, "base_prefix", "/usr"), \
+         patch.dict("os.environ", {}, clear=False), \
+         patch.object(updater.subprocess, "run", run):
+        import os
+        os.environ.pop("FLATPAK_ID", None); os.environ.pop("APPIMAGE", None)
+        assert updater.install_kind() == "system"
+        assert not updater.can_self_update()
+        ok, msg = updater.perform_update()
+    assert not ok and "package manager" in msg
+    run.assert_not_called()                     # no pip run against the system Python
+
+
+def test_install_kinds():
+    from unittest.mock import patch
+    from spoff import updater
+    import os
+    with patch.object(updater, "is_git_checkout", return_value=False):
+        for env, prefix, base, kind in [
+            ({"FLATPAK_ID": "dev.vrdq.spoff"}, "/app", "/app", "flatpak"),
+            ({"APPIMAGE": "/x/spoff.AppImage"}, "/tmp/.mount", "/tmp/.mount", "appimage"),
+            ({}, "/home/u/.local/share/pipx/venvs/spoff", "/usr", "pipx"),
+            ({}, "/home/u/.local/share/uv/tools/spoff", "/usr", "uv-tool"),
+            ({}, "/home/u/venv", "/usr", "venv"),
+        ]:
+            saved = {k: os.environ.pop(k, None) for k in ("FLATPAK_ID", "APPIMAGE")}
+            try:
+                with patch.dict("os.environ", env), patch.object(updater.sys, "prefix", prefix), \
+                     patch.object(updater.sys, "base_prefix", base):
+                    assert updater.install_kind() == kind, kind
+            finally:
+                for k, v in saved.items():
+                    if v is not None:
+                        os.environ[k] = v

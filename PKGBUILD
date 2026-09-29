@@ -16,7 +16,7 @@ depends=(
     'python-pydbus'
     'python-gobject'
     'python-secretstorage'
-    'python-yt-dlp-ejs'
+    'yt-dlp-ejs'
 )
 optdepends=(
     'nodejs: unscrambles signed-in YouTube streams (or deno/bun)'
@@ -30,31 +30,16 @@ makedepends=(
     'python-wheel'
     'python-hatchling'
 )
-
-prepare() {
-    cd "$srcdir"
-    if [ ! -f "pyproject.toml" ]; then
-        if [ -f "$startdir/pyproject.toml" ]; then
-            cp -a "$startdir/pyproject.toml" "$startdir/spoff" "$startdir/README.md" "$startdir/LICENSE" "$srcdir/"
-        elif [ -d "$srcdir/$pkgname-$pkgver" ]; then
-            cd "$srcdir/$pkgname-$pkgver"
-        fi
-    fi
-}
+source=("https://files.pythonhosted.org/packages/source/${pkgname::1}/$pkgname/$pkgname-$pkgver.tar.gz")
+sha256sums=('3288956b7e44b2e300abacd455ea59c244bcddcddd45d5702d969e16ad79c502')
 
 build() {
-    cd "$srcdir"
-    if [ -d "$srcdir/$pkgname-$pkgver" ]; then
-        cd "$srcdir/$pkgname-$pkgver"
-    fi
+    cd "$pkgname-$pkgver"
     python -m build --wheel --no-isolation
 }
 
 package() {
-    cd "$srcdir"
-    if [ -d "$srcdir/$pkgname-$pkgver" ]; then
-        cd "$srcdir/$pkgname-$pkgver"
-    fi
+    cd "$pkgname-$pkgver"
     python -m installer --destdir="$pkgdir" dist/*.whl
     install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

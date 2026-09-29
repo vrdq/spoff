@@ -109,7 +109,7 @@ try:
     from .lyrics import fetch_lyrics, get_active_lyric_index
     from .mpris import MPRISService
     from .visualizer import VisualizerWidget, CavaVisualizer
-    from .updater import check_for_updates, perform_update, run_cli_update, is_git_checkout
+    from .updater import check_for_updates, perform_update, run_cli_update, is_git_checkout, can_self_update
     from .art import resolve_track_artwork, get_cached_artwork
     from .spotify_audio import SpotifyAudio, librespot_path
     from . import youtube_account
@@ -170,7 +170,7 @@ except ImportError:
     from lyrics import fetch_lyrics, get_active_lyric_index
     from mpris import MPRISService
     from visualizer import VisualizerWidget, CavaVisualizer
-    from updater import check_for_updates, perform_update, run_cli_update, is_git_checkout
+    from updater import check_for_updates, perform_update, run_cli_update, is_git_checkout, can_self_update
     from art import resolve_track_artwork, get_cached_artwork
     from spotify_audio import SpotifyAudio, librespot_path
     import youtube_account
@@ -2619,7 +2619,7 @@ class UpdateModal(SafeModalScreen[bool]):
             return
         self.is_updating = True
         try:
-            self.query_one("#update-status", Static).update("[bold #c4a768]Pulling latest changes from GitHub...[/]")
+            self.query_one("#update-status", Static).update("[bold #c4a768]Updating Spoff…[/]")
         except Exception:
             pass
 
@@ -7838,7 +7838,9 @@ class SpoffTUI(App):
                 self.update_info = info
                 # Never auto-pull a git working clone: it rebases the developer's
                 # checkout (and uncommitted work) behind their back. Notify instead.
-                if self.auto_update and not is_git_checkout():
+                # Package-manager, Flatpak and AppImage installs can't update
+                # themselves; they get the notice below instead.
+                if self.auto_update and not is_git_checkout() and can_self_update():
                     def _auto_start():
                         try:
                             self.query_one("#update-pill", Static).update("[bold #c4a768]▲ Updating...[/]")

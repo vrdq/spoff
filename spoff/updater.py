@@ -117,8 +117,8 @@ def check_for_updates() -> Optional[Dict[str, Any]]:
     Checks GitHub for the latest push to the main branch.
     Returns details if a new commit exists, otherwise None.
     """
-    if os.environ.get("FLATPAK_ID") or os.environ.get("APPIMAGE"):
-        return None  # Flatpak updates itself; an AppImage is replaced by a new file
+    if os.environ.get("FLATPAK_ID"):
+        return None  # Flatpak (and Flathub) handle updates and their notices
     local_sha = get_local_commit()
     if not local_sha:
         # pipx / pip installs from PyPI carry no commit; compare versions instead.
@@ -234,6 +234,42 @@ def is_git_checkout() -> bool:
         return False
     return Path(top_level).resolve() == repo_root.resolve()
 
+def install_kind() -> str:
+    """How this copy of Spoff was installed, which decides how it updates.
+
+    flatpak / appimage: updated from outside, never by Spoff itself.
+    git: a working clone (git pull). pipx / uv-tool: their own upgrade
+    commands. venv: pip inside a virtualenv. system: a distro/AUR package in
+    the system Python, which only the package manager may change.
+    """
+    if os.environ.get("FLATPAK_ID"):
+        return "flatpak"
+    if os.environ.get("APPIMAGE"):
+        return "appimage"
+    if is_git_checkout():
+        return "git"
+    prefix = sys.prefix.replace(os.sep, "/")
+    if "pipx" in prefix.lower():
+        return "pipx"
+    if "uv/tools" in prefix:
+        return "uv-tool"
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+        return "venv"
+    return "system"
+
+
+# Shown instead of self-updating when something else owns the installation.
+EXTERNAL_UPDATE_HINTS = {
+    "flatpak": "Spoff updates through Flatpak: run 'flatpak update dev.vrdq.spoff'.",
+    "appimage": "Download the new Spoff AppImage from github.com/vrdq/spoff/releases.",
+    "system": "Spoff was installed by your package manager; update it there (e.g. 'yay -Syu spoff').",
+}
+
+
+def can_self_update() -> bool:
+    return install_kind() not in EXTERNAL_UPDATE_HINTS
+
+
 def perform_update() -> Tuple[bool, str]:
     """
     Pulls latest code from GitHub and synchronizes the running installation.
@@ -267,6 +303,10 @@ def perform_update() -> Tuple[bool, str]:
             lock_fd = None
 
     try:
+        kind = install_kind()
+        if kind in EXTERNAL_UPDATE_HINTS:
+            return False, EXTERNAL_UPDATE_HINTS[kind]
+
         # 1. Git repository update flow: verify git top-level is the project root containing pyproject.toml
         pyproject_file = repo_root / "pyproject.toml"
         is_git = False
@@ -407,16 +447,23 @@ def perform_update() -> Tuple[bool, str]:
 
 def run_cli_update():
     """Runs the update process from the CLI."""
-    print("Checking for updates on github.com/vrdq/spoff...")
+    kind = install_kind()
+    if kind == "flatpak":
+        print(EXTERNAL_UPDATE_HINTS["flatpak"])
+        return
+    print("Checking for updates...")
     info = check_for_updates()
     if not info:
-        print("Spoff is already up to date on the latest GitHub commit.")
+        print("Spoff is up to date.")
         return
 
     print("\nNew update found:")
-    print(f"  Current commit: {info['local_sha']}")
-    print(f"  Latest commit:  {info['remote_sha']} ({info['message']}) by {info['author']}")
-    print("\nPulling updates...")
+    print(f"  Installed: {info['local_sha']}")
+    print(f"  Latest:    {info['remote_sha']} ({info['message']})")
+    if kind in EXTERNAL_UPDATE_HINTS:
+        print("\n" + EXTERNAL_UPDATE_HINTS[kind])
+        return
+    print("\nUpdating...")
 
     ok, msg = perform_update()
     if ok:
