@@ -1159,7 +1159,7 @@ class SettingsModal(SafeModalScreen[None]):
                 self._row("Notifications", "on" if notif else "off", on=notif))
             style = getattr(app, "song_list_style", {"source": "dots", "album": False})
             self.query_one("#song-source-toggle", Static).update(
-                self._row("Song source", "dots" if style["source"] == "dots" else "words"))
+                self._row("Song source", "dots" if style["source"] == "dots" else "Spotify | offline"))
             self.query_one("#album-column-toggle", Static).update(
                 self._row("Album column", "on" if style["album"] else "off", on=style["album"]))
             trans = bool(getattr(app, "transparency", True))
