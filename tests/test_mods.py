@@ -1,6 +1,7 @@
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+import pytest
 
 from spoff import mods
 from spoff.mods import Mod
@@ -78,6 +79,49 @@ def test_render_failure_leaves_no_partial_file(tmp_path):
         except RuntimeError as exc:
             assert "ffmpeg" in str(exc)
     assert not list(tmp_path.glob("mod_*"))
+
+
+@pytest.mark.parametrize('same_track', [False, True])
+def test_concurrent_mod_renders_use_distinct_files_and_keep_both_records(tmp_path, same_track):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time
+    barrier = threading.Barrier(2)
+    paths = []
+    original_load = mods.load_modded
+    def slow_load():
+        result = original_load()
+        time.sleep(0.05)  # expose a read/modify/write lost update without the lock
+        return result
+    def run(cmd, **kwargs):
+        paths.append(cmd[-1])
+        barrier.wait(timeout=3)
+        Path(cmd[-1]).write_bytes(b'finished')
+        return MagicMock(returncode=0, stderr='')
+    with patch.object(mods, 'CACHE_DIR', tmp_path), \
+         patch.object(mods, 'MODDED_FILE', tmp_path / 'mods.json'), \
+         patch.object(mods, 'load_modded', side_effect=slow_load), \
+         patch.object(mods, 'register_cached_track'), \
+         patch.object(mods, '_encoder', return_value=(['-c:a', 'flac'], '.flac')), \
+         patch.object(mods.shutil, 'which', return_value='/ffmpeg'), \
+         patch.object(mods.subprocess, 'run', side_effect=run):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(mods.render, {'id': 'same' if same_track else str(i), 'title': 'Song'}, tmp_path / 'input', Mod())
+                       for i in range(2)]
+            tracks = [f.result(timeout=5) for f in futures]
+        assert {t['id'] for t in original_load()} == {t['id'] for t in tracks}
+    assert len(set(paths)) == 2
+
+
+def test_ffmpeg_spawn_failure_removes_temporary_render(tmp_path):
+    import pytest
+    with patch.object(mods, 'CACHE_DIR', tmp_path), \
+         patch.object(mods, '_encoder', return_value=([], '.flac')), \
+         patch.object(mods.shutil, 'which', return_value='/ffmpeg'), \
+         patch.object(mods.subprocess, 'run', side_effect=OSError('spawn failed')):
+        with pytest.raises(RuntimeError, match='Could not start ffmpeg'):
+            mods.render({'id': 'a'}, tmp_path / 'input', Mod())
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_mod_files_are_never_upgraded_or_copied_to_youtube_music(tmp_path):

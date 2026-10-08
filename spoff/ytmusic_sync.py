@@ -55,12 +55,14 @@ def client() -> Optional[Any]:
 def _load_state() -> Dict[str, Any]:
     try:
         state = json.loads(STATE_FILE.read_text())
-    except (OSError, ValueError):
+    except FileNotFoundError:
         state = {}
     if not isinstance(state, dict):
-        state = {}
+        raise ValueError("YouTube Music sync state must be an object; the existing file was preserved")
     state.setdefault("playlists", {})
     state.setdefault("videos", {})
+    if not isinstance(state["playlists"], dict) or not isinstance(state["videos"], dict):
+        raise ValueError("Invalid YouTube Music sync state; the existing file was preserved")
     return state
 
 
@@ -127,9 +129,12 @@ def _sync_one(yt: Any, playlist: Dict[str, Any], entry: Optional[Dict[str, Any]]
     if entry and entry.get("ytm_id"):
         try:
             remote = yt.get_playlist(entry["ytm_id"], limit=None)
-        except Exception:
-            logger.info("YouTube Music copy of %s is gone; making a new one", name)
-            remote = None
+        except Exception as exc:
+            # A timeout or expired login is not evidence that the copy vanished.
+            if getattr(getattr(exc, "response", None), "status_code", None) != 404:
+                logger.warning("Could not read YouTube Music playlist %s; keeping its sync state", name, exc_info=True)
+                return None
+            logger.info("YouTube Music copy of %s returned 404; making a new one", name)
 
     if remote is None:
         created = yt.create_playlist(name, description, privacy_status=privacy, video_ids=wanted or None)
@@ -147,16 +152,22 @@ def _sync_one(yt: Any, playlist: Dict[str, Any], entry: Optional[Dict[str, Any]]
     to_add = [v for v in wanted if v not in present]
     if to_add and not _ok(yt.add_playlist_items(ytm_id, to_add, duplicates=False)):
         logger.warning("Could not add %d songs to YouTube Music playlist %s", len(to_add), name)
-        to_add = []
+        return None
+    if to_add:
+        # Retain ownership of successful additions even if a later edit fails.
+        entry["videos"] = list(dict.fromkeys([*(entry.get("videos") or []), *to_add]))
     # Only remove songs Spoff put there, never ones added in the YouTube Music app.
     to_remove = [t for t in remote.get("tracks") or []
                  if t.get("videoId") in pushed_before and t.get("videoId") not in wanted_set
                  and t.get("setVideoId")]
     if to_remove and not _ok(yt.remove_playlist_items(ytm_id, to_remove)):
         logger.warning("Could not remove %d songs from YouTube Music playlist %s", len(to_remove), name)
+        return None
 
     if (name, description, privacy) != (entry.get("name"), entry.get("description"), entry.get("privacy")):
-        yt.edit_playlist(ytm_id, title=name, description=description, privacyStatus=privacy)
+        if not _ok(yt.edit_playlist(ytm_id, title=name, description=description, privacyStatus=privacy)):
+            logger.warning("Could not update YouTube Music playlist metadata for %s", name)
+            return None
 
     # YouTube Music takes a few seconds to list new songs, so a song pushed
     # earlier may be missing from `present` (and re-adding it fails as a
@@ -170,7 +181,8 @@ def sync_playlists(playlists: List[Dict[str, Any]],
     """Copies every playlist to YouTube Music. Returns counts for a status message."""
     counts = {"playlists": 0, "songs": 0, "missing": 0, "failed": 0, "deleted": 0}
     if not _sync_lock.acquire(blocking=False):
-        return counts  # a sync is already running; it will see the latest playlists
+        counts["busy"] = 1  # caller must retry with a fresh library snapshot
+        return counts
     try:
         yt = client()
         if yt is None:
@@ -210,7 +222,9 @@ def sync_playlists(playlists: List[Dict[str, Any]],
             ytm_id = state["playlists"][pid].get("ytm_id")
             try:
                 if ytm_id:
-                    yt.delete_playlist(ytm_id)
+                    if not _ok(yt.delete_playlist(ytm_id)):
+                        counts["failed"] += 1
+                        continue
                 counts["deleted"] += 1
             except Exception:
                 logger.warning("Could not delete YouTube Music copy %s", ytm_id, exc_info=True)

@@ -12,13 +12,16 @@ leaves the caller free to fall back to YouTube.
 import json
 import logging
 import os
+import select
 import shutil
 import socket
 import stat
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, Optional
 
 try:
@@ -60,9 +63,14 @@ class SpotifyAudio:
         self._sink: Optional[subprocess.Popen] = None
         self._sink_socket = str(self.dir / "sink.sock")
         self._lock = threading.RLock()
+        self._command_lock = threading.RLock()
+        self._commands: Optional[ThreadPoolExecutor] = None
+        self._control_revision = 0
+        self._play_generation = 0
         self._events = threading.Condition()
         self._last_event: Dict[str, Any] = {}
         self._events_fifo: Optional[Path] = None
+        self._event_stop = threading.Event()
 
         # Playback state read by the player facade.
         self.track_id: Optional[str] = None
@@ -86,6 +94,15 @@ class SpotifyAudio:
                     and not self.keys_refused)
 
     def start(self, on_login_url: Optional[Callable[[str], None]] = None, timeout: float = 180.0) -> bool:
+        try:
+            return self._start(on_login_url, timeout)
+        except (OSError, RuntimeError):
+            logger.exception("Could not start Spotify audio")
+            self.last_error = "Could not start Spotify audio"
+            self.shutdown()
+            return False
+
+    def _start(self, on_login_url: Optional[Callable[[str], None]], timeout: float) -> bool:
         """Starts everything and waits until the device is visible to the Web API.
 
         If librespot has no saved login, it runs its browser sign-in first and
@@ -127,12 +144,13 @@ class SpotifyAudio:
             )
             threading.Thread(target=self._relay_audio, args=(self._librespot,), daemon=True).start()
             threading.Thread(target=self._read_log, args=(self._librespot, on_login_url), daemon=True).start()
-            threading.Thread(target=self._read_events, args=(events,), daemon=True).start()
+            threading.Thread(target=self._read_events, args=(events, self._event_stop), daemon=True).start()
 
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self._librespot is None or self._librespot.poll() is not None:
                 self.last_error = self.last_error or "librespot stopped while starting"
+                self.shutdown()
                 return False
             device = self._find_device()
             if device:
@@ -146,7 +164,8 @@ class SpotifyAudio:
     def _make_event_fifo(self) -> Path:
         # One FIFO per session: a reader left over from an earlier session
         # would otherwise take events meant for this one.
-        path = self.dir / f"events-{os.getpid()}-{id(self)}.fifo"
+        path = self.dir / f"events-{os.getpid()}-{uuid.uuid4().hex}.fifo"
+        self._event_stop = threading.Event()
         try:
             if path.exists() and not stat.S_ISFIFO(path.stat().st_mode):
                 path.unlink()
@@ -154,12 +173,14 @@ class SpotifyAudio:
                 os.mkfifo(path, 0o600)
         except OSError:
             logger.exception("Could not create librespot event FIFO")
+            raise
         self._events_fifo = path
         return path
 
     def _close_event_fifo(self) -> None:
         """Wakes the event reader with an empty line so it exits, then removes the FIFO."""
         path, self._events_fifo = self._events_fifo, None
+        self._event_stop.set()
         if path is None:
             return
         try:
@@ -214,6 +235,8 @@ class SpotifyAudio:
             chunk = src.read1(16384) if hasattr(src, "read1") else src.read(16384)
             if not chunk:
                 return
+            if proc is not self._librespot:
+                return
             sink = self._sink
             if sink is None or sink.stdin is None:
                 continue
@@ -223,7 +246,8 @@ class SpotifyAudio:
             except (BrokenPipeError, OSError, ValueError):
                 logger.warning("Spotify audio sink stopped; restarting it")
                 with self._lock:
-                    self._start_sink()
+                    if proc is self._librespot:
+                        self._start_sink()
 
     def _read_log(self, proc: subprocess.Popen, on_login_url: Optional[Callable[[str], None]]) -> None:
         for raw in iter(proc.stderr.readline, b""):
@@ -241,26 +265,37 @@ class SpotifyAudio:
                 self.last_error = line.split("] ", 1)[-1]
                 logger.warning("librespot: %s", line)
 
-    def _read_events(self, fifo: Path) -> None:
+    def _read_events(self, fifo: Path, stop_event: Optional[threading.Event] = None) -> None:
         # O_RDWR keeps the FIFO open with a writer, so reads never hit EOF
         # between the short-lived event script runs.
+        stop_event = stop_event or self._event_stop
+        if stop_event.is_set():
+            return
         try:
-            fd = os.open(fifo, os.O_RDWR)
+            fd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
         except OSError:
             logger.exception("Could not open librespot event FIFO")
             return
-        with os.fdopen(fd, "r", encoding="utf-8", errors="replace") as stream:
-            for line in stream:
-                if not line.strip():
-                    return  # shutdown() asked this reader to stop
-                parts = (line.rstrip("\n").split("\t") + ["", "", "", ""])[:4]
-                self._handle_event(*parts)
+        try:
+            pending = b""
+            while not stop_event.is_set():
+                if not select.select([fd], [], [], 0.2)[0]:
+                    continue
+                pending += os.read(fd, 65536)
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    if stop_event.is_set() or not line.strip():
+                        return
+                    parts = (line.decode("utf-8", errors="replace").split("\t") + ["", "", "", ""])[:4]
+                    self._handle_event(*parts)
+        finally:
+            os.close(fd)
 
     def _handle_event(self, name: str, track_id: str, position_ms: str, duration_ms: str) -> None:
         pos = _ms_to_s(position_ms)
         callback = None
         with self._events:
-            if track_id and self.track_id and track_id != self.track_id and name != "track_changed":
+            if not self.track_id or (track_id and track_id != self.track_id):
                 return  # stale event from the previous song
             if name == "track_changed" and _ms_to_s(duration_ms):
                 self.duration = _ms_to_s(duration_ms)
@@ -295,6 +330,10 @@ class SpotifyAudio:
         return None
 
     def _api(self, endpoint: str, method: str = "PUT", body: Optional[Dict[str, Any]] = None) -> bool:
+        with self._command_lock:
+            return self._send_api(endpoint, method, body)
+
+    def _send_api(self, endpoint: str, method: str, body: Optional[Dict[str, Any]]) -> bool:
         if not self.device_id:
             return False
         sep = "&" if "?" in endpoint else "?"
@@ -307,6 +346,9 @@ class SpotifyAudio:
         """Starts a track and waits until librespot confirms it is playing."""
         track_id = uri.rsplit(":", 1)[-1]
         with self._events:
+            self._play_generation += 1
+            generation = self._play_generation
+            self._control_revision += 1
             self.track_id = track_id
             self.duration = duration_s
             self.is_paused = False
@@ -314,9 +356,15 @@ class SpotifyAudio:
             self._on_end = on_end
             started = time.monotonic()
         if not self._api("/me/player/play", body={"uris": [uri], "position_ms": 0}):
+            with self._events:
+                if self.track_id == track_id and self._play_generation == generation:
+                    self._on_end = None
+                    self.track_id = None
             return False
         with self._events:
             while True:
+                if self.track_id != track_id or self._play_generation != generation:
+                    return False
                 if self.keys_refused:
                     self._on_end = None
                     return False
@@ -335,32 +383,78 @@ class SpotifyAudio:
                     return False
                 self._events.wait(remaining)
 
-    def pause(self) -> None:
-        if self._api("/me/player/pause"):
-            with self._events:
-                self._set_position(self.position())
-                self.is_paused = True
+    def _queue_control(self, endpoint: str, expected_track: Optional[str], rollback=None, on_success=None):
+        """Serialize controls off the UI thread; discard commands for old songs."""
+        session_stop = self._event_stop
+        generation = self._play_generation
+        def send():
+            with self._command_lock:
+                with self._events:
+                    if session_stop.is_set() or self.track_id != expected_track or self._play_generation != generation:
+                        return False
+                ok = self._api(endpoint)
+                if not ok and rollback is not None:
+                    rollback()
+                elif ok and on_success is not None:
+                    with self._events:
+                        if self._play_generation == generation:
+                            on_success()
+                return ok
+        with self._lock:
+            if session_stop.is_set() or not self.device_id:
+                if rollback is not None:
+                    rollback()
+                return None
+            if self._commands is None:
+                self._commands = ThreadPoolExecutor(max_workers=1, thread_name_prefix="spoff-audio-control")
+            try:
+                return self._commands.submit(send)
+            except RuntimeError:
+                logger.exception("Could not queue Spotify control")
+                if rollback is not None:
+                    rollback()
+                return None
 
-    def resume(self) -> None:
-        if self._api("/me/player/play"):
+    def _set_paused(self, paused: bool):
+        with self._events:
+            previous = self.is_paused
+            self._set_position(self.position())
+            self.is_paused = paused
+            track_id = self.track_id
+            self._control_revision += 1
+            revision = self._control_revision
+        def rollback():
             with self._events:
-                self._anchor_time = time.monotonic()
-                self.is_paused = False
+                if self.track_id == track_id and self._control_revision == revision:
+                    self.is_paused = previous
+                    self._anchor_time = time.monotonic()
+        return self._queue_control("/me/player/pause" if paused else "/me/player/play", track_id, rollback)
 
-    def seek(self, seconds: float) -> None:
+    def pause(self):
+        return self._set_paused(True)
+
+    def resume(self):
+        return self._set_paused(False)
+
+    def seek(self, seconds: float):
         seconds = max(0.0, min(float(seconds), self.duration or float(seconds)))
-        if self._api(f"/me/player/seek?position_ms={int(seconds * 1000)}"):
-            with self._events:
-                self._set_position(seconds)
+        with self._events:
+            track_id = self.track_id
+        return self._queue_control(f"/me/player/seek?position_ms={int(seconds * 1000)}", track_id,
+                                   on_success=lambda: self._set_position(seconds))
 
     def stop_playback(self) -> None:
         """Stops the current song without firing its end callback."""
         with self._events:
             self._on_end = None
-            was_playing = self.track_id is not None and not self.is_paused
+            self._play_generation += 1
+            # A queued pause may not have reached Spotify yet.
+            was_playing = self.track_id is not None
             self.track_id = None
+            self.is_paused = True
+            self._events.notify_all()
         if was_playing:
-            self._api("/me/player/pause")
+            self._queue_control("/me/player/pause", None)
 
     def position(self) -> float:
         with self._events:
@@ -387,18 +481,30 @@ class SpotifyAudio:
 
     def shutdown(self) -> None:
         with self._lock:
-            self._on_end = None
+            with self._events:
+                self._on_end = None
+                self.track_id = None
+                self.is_paused = True
+                self._events.notify_all()
             self.device_id = None
-            for proc in (self._librespot, self._sink):
-                if proc and proc.poll() is None:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
+            processes = (self._librespot, self._sink)
             self._librespot = None
             self._sink = None
             self._close_event_fifo()
+            if self._commands is not None:
+                self._commands.shutdown(wait=False, cancel_futures=True)
+                self._commands = None
+            for proc in processes:
+                try:
+                    if proc and proc.poll() is None:
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait(timeout=2)
+                except (OSError, subprocess.TimeoutExpired):
+                    logger.exception("Could not finish shutting down Spotify audio process")
 
 
 def _ms_to_s(value: str) -> Optional[float]:

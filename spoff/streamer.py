@@ -11,11 +11,11 @@ from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 import yt_dlp
 try:
     from . import storage
-    from .matching import _seconds, _matches_recording, _normalized_name
+    from .matching import _seconds, _matches_recording
     from .storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS, is_low_quality_cache, set_hq_upgrades, mark_hq_checked
 except ImportError:
     import storage  # type: ignore
-    from matching import _seconds, _matches_recording, _normalized_name
+    from matching import _seconds, _matches_recording
     from storage import CACHE_DIR as CACHE_DIR, register_cached_track, get_cached_track_path, validate_track_id, CACHE_EXTENSIONS, is_low_quality_cache, set_hq_upgrades, mark_hq_checked  # type: ignore
 
 import tempfile
@@ -199,28 +199,6 @@ def cached_audio_matches_duration(path: Path, duration_ms: Any) -> bool:
         return True
 
 
-def _same_recording_other_uploader(ytm: Any, track_title: str, duration: float) -> list:
-    """Same title and near-identical length under any uploader.
-
-    Spotify-only artist names are often distributor re-uploads of audio that
-    exists on YouTube under another name. A length within 2 s together with an
-    identical title is strong evidence it is the same recording.
-    """
-    wanted = _normalized_name(track_title)
-    found = []
-    for flt in ("songs", "videos"):
-        for match in ytm.search(track_title, filter=flt, limit=15) or []:
-            length = _seconds(match.get("duration_seconds") or match.get("duration"))
-            if (match.get("videoId") and length and abs(length - duration) <= 2.0
-                    and _normalized_name(match.get("title")) == wanted):
-                query = (f"https://www.youtube.com/watch?v={match['videoId']}", True)
-                if query not in found:
-                    found.append(query)
-        if found:
-            break
-    return found
-
-
 def _ytmusic_match_queries(track_title: str, clean_artist: str, duration: float) -> list:
     """Verified YouTube URLs for a recording, found through YouTube Music search.
 
@@ -246,8 +224,6 @@ def _ytmusic_match_queries(track_title: str, clean_artist: str, duration: float)
                             queries.append(query)
                 if queries:
                     return queries
-        if duration:
-            queries.extend(_same_recording_other_uploader(ytm, track_title, duration))
     except Exception:
         logger.debug("YTMusic song match lookup failed", exc_info=True)
     return queries

@@ -1,4 +1,5 @@
 from unittest.mock import patch
+import pytest
 
 from spoff import ytmusic_sync
 
@@ -23,7 +24,10 @@ class FakeYTM:
 
     def get_playlist(self, pid, limit=None):
         if pid not in self.playlists:
-            raise Exception("not found")
+            from requests import HTTPError, Response
+            response = Response()
+            response.status_code = 404
+            raise HTTPError("not found", response=response)
         return {"tracks": list(self.playlists[pid]["tracks"])}
 
     def add_playlist_items(self, pid, video_ids, duplicates=False):
@@ -115,6 +119,63 @@ def test_spotify_tracks_are_matched_once_and_misses_are_counted(tmp_path):
 def test_signed_out_does_nothing(tmp_path):
     with patch.object(ytmusic_sync, "client", return_value=None):
         assert ytmusic_sync.sync_playlists([{"id": "p", "name": "x", "tracks": []}])["playlists"] == 0
+
+
+def test_fetch_timeout_does_not_create_another_playlist(tmp_path):
+    fake = FakeYTM()
+    playlist = {'id': 'p', 'name': 'Keep', 'tracks': []}
+    _run(fake, [playlist], tmp_path)
+    with patch.object(fake, 'get_playlist', side_effect=TimeoutError('network down')):
+        result = _run(fake, [playlist], tmp_path)
+    assert result['failed'] == 1
+    assert len(fake.playlists) == 1
+
+
+@pytest.mark.parametrize('data', ['{broken', '[]', '{"playlists": [], "videos": {}}'])
+def test_corrupt_sync_state_cannot_create_untracked_duplicate_copies(tmp_path, data):
+    fake = FakeYTM()
+    path = tmp_path / 'state.json'
+    path.write_text(data)
+    with pytest.raises(ValueError):
+        _run(fake, [{'id': 'p', 'name': 'Keep', 'tracks': []}], tmp_path)
+    assert fake.playlists == {}
+    assert path.read_text() == data
+
+
+def test_failed_removal_is_retried_on_next_sync(tmp_path):
+    fake = FakeYTM()
+    playlist = {'id': 'p', 'name': 'Keep', 'tracks': [_yt_track('a', 'AAAAAAAAAAA')]}
+    _run(fake, [playlist], tmp_path)
+    playlist['tracks'] = []
+    with patch.object(fake, 'remove_playlist_items', return_value='STATUS_FAILED'):
+        assert _run(fake, [playlist], tmp_path)['failed'] == 1
+    assert fake.videos('PL1') == ['AAAAAAAAAAA']
+    _run(fake, [playlist], tmp_path)
+    assert fake.videos('PL1') == []
+
+
+def test_failed_delete_keeps_the_copy_tracked_for_retry(tmp_path):
+    fake = FakeYTM()
+    _run(fake, [{'id': 'p', 'name': 'Keep', 'tracks': []}], tmp_path)
+    with patch.object(fake, 'delete_playlist', return_value='STATUS_FAILED'):
+        result = _run(fake, [], tmp_path)
+    assert result['deleted'] == 0
+    assert result['failed'] == 1
+    assert _run(fake, [], tmp_path)['deleted'] == 1
+    assert not fake.playlists
+
+
+def test_failed_rename_retries_without_losing_successful_additions(tmp_path):
+    fake = FakeYTM()
+    playlist = {'id': 'p', 'name': 'Old', 'tracks': []}
+    _run(fake, [playlist], tmp_path)
+    playlist.update(name='New', tracks=[_yt_track('a', 'AAAAAAAAAAA')])
+    with patch.object(fake, 'edit_playlist', return_value='STATUS_FAILED'):
+        assert _run(fake, [playlist], tmp_path)['failed'] == 1
+    playlist['tracks'] = []
+    _run(fake, [playlist], tmp_path)
+    assert fake.videos('PL1') == []
+    assert fake.edits[-1]['title'] == 'New'
 
 
 def test_songs_youtube_hasnt_listed_yet_stay_recorded_as_spoffs(tmp_path):

@@ -75,7 +75,7 @@ try:
         get_saved_loudness_normalization, save_loudness_normalization, migrate_eq_to_native_rate,
         get_saved_spotify_audio, save_spotify_audio, _spotify_track_id_of,
         get_saved_youtube_login, save_youtube_login,
-        get_saved_ytmusic_playlist_sync, save_ytmusic_playlist_sync, on_playlists_saved,
+        get_saved_ytmusic_playlist_sync, save_ytmusic_playlist_sync, on_playlists_saved, remove_playlists_saved_listener,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
@@ -139,7 +139,7 @@ except ImportError:
         get_saved_loudness_normalization, save_loudness_normalization, migrate_eq_to_native_rate,
         get_saved_spotify_audio, save_spotify_audio, _spotify_track_id_of,
         get_saved_youtube_login, save_youtube_login,
-        get_saved_ytmusic_playlist_sync, save_ytmusic_playlist_sync, on_playlists_saved,
+        get_saved_ytmusic_playlist_sync, save_ytmusic_playlist_sync, on_playlists_saved, remove_playlists_saved_listener,
         get_saved_visualizer_style, save_visualizer_style, get_saved_visualizer_color, save_visualizer_color,
         get_saved_visualizer_enabled, save_visualizer_enabled,
         get_custom_keybindings, save_custom_keybindings, reset_custom_keybindings,
@@ -5672,6 +5672,7 @@ class SpoffTUI(App):
         self._failed_indices: set[int] = set()
         self._thread_id: int = threading.get_ident()
         self._play_request_id: int = 0
+        self._backend_load_lock = threading.Lock()
         self.shuffle_mode: bool = False
         self.repeat_mode: str = "off"  # "off", "all", "one"
         self._shuffle_history: List[int] = []
@@ -6107,6 +6108,12 @@ class SpoffTUI(App):
             pass
         self._shutting_down = True
         self._play_request_id += 1
+        listener = getattr(self, "schedule_ytmusic_sync", None)
+        if listener is not None:
+            remove_playlists_saved_listener(listener)
+        timer = getattr(self, "_ytmusic_sync_timer", None)
+        if timer is not None:
+            timer.cancel()
         try:
             cur_tab = getattr(self, "active_tab", "search")
             cur_pid = getattr(self, "current_playlist_id", None) if cur_tab == "playlist" else None
@@ -6402,7 +6409,7 @@ class SpoffTUI(App):
 
     def schedule_ytmusic_sync(self, delay: Optional[float] = None, announce: bool = False) -> None:
         """Copies playlists to YouTube Music after a quiet period (thread-safe)."""
-        if not (get_saved_ytmusic_playlist_sync() and self.youtube_signed_in()):
+        if getattr(self, "_shutting_down", False) or not (get_saved_ytmusic_playlist_sync() and self.youtube_signed_in()):
             return
         with self._ytmusic_sync_timer_lock:
             if self._ytmusic_sync_timer is not None:
@@ -6414,8 +6421,13 @@ class SpoffTUI(App):
             timer.start()
 
     def _run_ytmusic_sync(self, announce: bool = False) -> None:
+        if getattr(self, "_shutting_down", False) or not (get_saved_ytmusic_playlist_sync() and self.youtube_signed_in()):
+            return
         try:
             counts = ytmusic_sync.sync_playlists(load_saved_playlists())
+            if counts.get("busy"):
+                self.schedule_ytmusic_sync(announce=announce)
+                return
         except Exception as exc:
             logger.exception("Copying playlists to YouTube Music failed")
             if announce:
@@ -10485,7 +10497,47 @@ class SpoffTUI(App):
         req_id = self._play_request_id
         self.start_playback(track, req_id)
 
-    def _commit_playback(self, req_id: int, source: str, track: Dict[str, Any]) -> bool:
+    def _load_and_commit_playback(self, req_id: int, source: str, track: Dict[str, Any]) -> bool:
+        """Prepare audio in the resolver worker; publish only the current request."""
+        def is_current():
+            return not getattr(self, "_shutting_down", False) and req_id == self._play_request_id
+
+        with self._backend_load_lock:
+            if not is_current():
+                return False
+            event_lock = threading.Lock()
+            deferred = []
+            ready = False
+            committed = False
+
+            def ended(reason="eof"):
+                with event_lock:
+                    if not ready:
+                        deferred.append(reason)
+                        return
+                    deliver = committed
+                if deliver:
+                    self._on_ui(self._handle_track_end, req_id, reason, track, source)
+
+            self.player.register_pending_callback(ended, req_id)
+            loaded = self.player.load_and_play(source, track)
+            if not is_current():
+                # This worker still owns backend admission, so stopping cannot
+                # stop a newer request that has already acquired the player.
+                self.player.stop()
+                return False
+            committed = self.call_from_thread(self._commit_playback, req_id, source, track, loaded)
+            if loaded and not committed:
+                self.player.stop()
+            with event_lock:
+                ready = True
+                reasons = list(deferred)
+            if committed:
+                for reason in reasons:
+                    ended(reason)
+            return committed
+
+    def _commit_playback(self, req_id: int, source: str, track: Dict[str, Any], loaded: Optional[bool] = None) -> bool:
         if getattr(self, "_shutting_down", False) or req_id != getattr(self, "_play_request_id", None):
             return False
         pending = getattr(self, "_pending_track", None)
@@ -10496,13 +10548,15 @@ class SpoffTUI(App):
                 return False
             if liked_index([self.queue[self.current_index]], track) is None:
                 return False
-        cb = lambda reason="eof": self._on_ui(self._handle_track_end, req_id, reason, track, source)
-        if hasattr(self.player, "register_pending_callback"):
-            self.player.register_pending_callback(cb, req_id)
-        else:
-            self.player.playback_finished_callback = cb
+        if loaded is None:
+            cb = lambda reason="eof": self._on_ui(self._handle_track_end, req_id, reason, track, source)
+            if hasattr(self.player, "register_pending_callback"):
+                self.player.register_pending_callback(cb, req_id)
+            else:
+                self.player.playback_finished_callback = cb
+            loaded = self.player.load_and_play(source, track)
 
-        if not self.player.load_and_play(source, track):
+        if not loaded:
             if source.startswith("spotify:track:"):
                 # Spotify couldn't play it (region, removed, Premium ended): try YouTube.
                 audio = getattr(self, "spotify_audio", None)
@@ -10669,7 +10723,7 @@ class SpoffTUI(App):
         if sp_id and not track.get("_spotify_unavailable") and self.spotify_audio_ready():
             if not is_current():
                 return
-            self.call_from_thread(self._commit_playback, req_id, f"spotify:track:{sp_id}", track)
+            self._load_and_commit_playback(req_id, f"spotify:track:{sp_id}", track)
             return
 
         cached = get_cached_track_path(t_id)
@@ -10683,7 +10737,7 @@ class SpoffTUI(App):
                 register_cached_track(t_id, track, cached)
             except Exception:
                 pass
-            self.call_from_thread(self._commit_playback, req_id, str(cached), track)
+            self._load_and_commit_playback(req_id, str(cached), track)
             if is_low_quality_cache(cached):
                 # Saved before the switch to Opus, or below the 256 kbps a
                 # signed-in account gets: keep playing it, and quietly fetch
@@ -10730,7 +10784,7 @@ class SpoffTUI(App):
             self._on_ui(_publish_res_art)
 
         stream_url = res["stream_url"]
-        committed = self.call_from_thread(self._commit_playback, req_id, stream_url, track)
+        committed = self._load_and_commit_playback(req_id, stream_url, track)
         if not committed or getattr(self, "_shutting_down", False) or req_id != getattr(self, "_play_request_id", None):
             return
 

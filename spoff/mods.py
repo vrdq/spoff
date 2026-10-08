@@ -8,17 +8,19 @@ renders the modded song with ffmpeg into the cache as a local-only track.
 import hashlib
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    from .storage import DATA_DIR, CACHE_DIR, _atomic_json_dump, register_cached_track
+    from .storage import DATA_DIR, CACHE_DIR, _atomic_json_dump, register_cached_track, storage_transaction
 except ImportError:
-    from storage import DATA_DIR, CACHE_DIR, _atomic_json_dump, register_cached_track  # type: ignore
+    from storage import DATA_DIR, CACHE_DIR, _atomic_json_dump, register_cached_track, storage_transaction  # type: ignore
 
 logger = logging.getLogger("mods")
 
@@ -180,13 +182,18 @@ def render(original: Dict[str, Any], src: Path, mod: Mod) -> Dict[str, Any]:
     codec, ext = _encoder()
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     dst = CACHE_DIR / f"{new_id}{ext}"
-    part = dst.with_name(dst.stem + ".part" + ext)
+    fd, part_name = tempfile.mkstemp(prefix=f".{new_id}-", suffix=ext, dir=CACHE_DIR)
+    os.close(fd)
+    part = Path(part_name)
     try:
         result = subprocess.run(render_command(src, part, mod, codec), capture_output=True, text=True,
                                 timeout=900)
     except subprocess.TimeoutExpired as exc:
         part.unlink(missing_ok=True)
         raise RuntimeError("Rendering took too long") from exc
+    except OSError as exc:
+        part.unlink(missing_ok=True)
+        raise RuntimeError("Could not start ffmpeg to render this song") from exc
     if result.returncode != 0 or not part.exists() or part.stat().st_size == 0:
         part.unlink(missing_ok=True)
         logger.warning("ffmpeg mod render failed: %s", result.stderr.strip()[-500:])
@@ -213,10 +220,11 @@ def render(original: Dict[str, Any], src: Path, mod: Mod) -> Dict[str, Any]:
     for key in ("art_url", "album_art_url", "thumbnail"):
         if original.get(key):
             track[key] = original[key]
-    register_cached_track(new_id, track, dst)
-    tracks = [t for t in load_modded() if t.get("id") != new_id]
-    tracks.insert(0, track)
-    _save_modded(tracks)
+    with storage_transaction():
+        register_cached_track(new_id, track, dst)
+        tracks = [t for t in load_modded() if t.get("id") != new_id]
+        tracks.insert(0, track)
+        _save_modded(tracks)
     return track
 
 
@@ -252,7 +260,8 @@ def scale_lyrics(lyrics: Optional[Dict[str, Any]], speed: float) -> Optional[Dic
 
 
 def delete_modded(track_id: str) -> None:
-    _save_modded([t for t in load_modded() if t.get("id") != track_id])
+    with storage_transaction():
+        _save_modded([t for t in load_modded() if t.get("id") != track_id])
 
 
 def with_speed(mod: Mod, direction: int) -> Mod:

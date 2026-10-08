@@ -242,7 +242,7 @@ class TestAuditReproductionsFixed(unittest.TestCase):
     # Audit Case 11: Rejected commit does not download to cache
     # -------------------------------------------------------------------------
     def test_11_rejected_commit_does_not_download(self):
-        fake = make_fake_app(_commit_playback=Mock(return_value=False))
+        fake = make_fake_app(_load_and_commit_playback=Mock(return_value=False))
         track = {"id": "a", "title": "A", "artist": "B"}
 
         with patch("spoff.app.get_cached_artwork", return_value={}), \

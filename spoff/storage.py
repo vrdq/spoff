@@ -1147,6 +1147,11 @@ def on_playlists_saved(listener: Callable[[], None]) -> None:
         _playlist_listeners.append(listener)
 
 
+def remove_playlists_saved_listener(listener: Callable[[], None]) -> None:
+    if listener in _playlist_listeners:
+        _playlist_listeners.remove(listener)
+
+
 def save_saved_playlists(playlists: List[Dict[str, Any]]) -> None:
     _atomic_json_dump(_get_playlists_file(), playlists)
     for listener in list(_playlist_listeners):
@@ -1761,4 +1766,3 @@ def quarantine_cached_track(track_id: str, source: Optional[Any] = None) -> bool
         removed = True
 
     return removed
-

@@ -115,3 +115,122 @@ def test_each_session_gets_its_own_event_fifo(tmp_path):
     first, second = _audio(tmp_path), _audio(tmp_path)
     first.dir.mkdir(parents=True)
     assert first._make_event_fifo() != second._make_event_fifo()
+
+
+def test_reader_started_after_shutdown_exits_without_waiting(tmp_path):
+    audio = _audio(tmp_path)
+    audio.dir.mkdir(parents=True)
+    fifo = audio._make_event_fifo()
+    stop = audio._event_stop
+    audio.shutdown()
+    reader = threading.Thread(target=audio._read_events, args=(fifo, stop), daemon=True)
+    reader.start()
+    reader.join(timeout=1)
+    assert not reader.is_alive()
+
+
+def test_same_instance_restart_uses_new_fifo_and_stop_event(tmp_path):
+    audio = _audio(tmp_path)
+    audio.dir.mkdir(parents=True)
+    old = audio._make_event_fifo()
+    old_stop = audio._event_stop
+    audio.shutdown()
+    new = audio._make_event_fifo()
+    assert old != new
+    assert old_stop.is_set()
+    assert not audio._event_stop.is_set()
+    audio.shutdown()
+
+
+def test_failed_play_request_cannot_trigger_late_queue_advance(tmp_path):
+    audio = _audio(tmp_path)
+    ended = []
+    with patch.object(audio, '_api', return_value=False):
+        assert not audio.play('spotify:track:ABC', 100, ended.append)
+    audio._handle_event('end_of_track', 'ABC', '', '')
+    assert ended == []
+
+
+def test_stale_track_changed_cannot_replace_current_duration(tmp_path):
+    audio = _audio(tmp_path)
+    audio.track_id = 'NEW'
+    audio.duration = 200
+    audio._handle_event('track_changed', 'OLD', '', '400000')
+    assert audio.duration == 200
+
+
+def test_librespot_spawn_failure_cleans_started_sink(tmp_path):
+    audio = _audio(tmp_path)
+    sink = MagicMock()
+    sink.poll.return_value = None
+    def start_sink():
+        audio._sink = sink
+    with patch('spoff.spotify_audio.librespot_path', return_value='/fake/librespot'), \
+         patch.object(audio, '_start_sink', side_effect=start_sink), \
+         patch('spoff.spotify_audio.subprocess.Popen', side_effect=OSError('spawn failed')):
+        assert not audio.start(timeout=0)
+    sink.terminate.assert_called_once()
+    assert audio._sink is None
+    assert audio._events_fifo is None
+
+
+def test_pause_and_resume_do_not_block_caller_and_keep_command_order(tmp_path):
+    audio = _audio(tmp_path)
+    audio.track_id = 'ABC'
+    entered, release = threading.Event(), threading.Event()
+    commands, callers = [], []
+    def api(endpoint):
+        commands.append(endpoint)
+        callers.append(threading.get_ident())
+        entered.set()
+        assert release.wait(2)
+        return True
+    try:
+        with patch.object(audio, '_api', side_effect=api):
+            paused = audio.pause()
+            assert entered.wait(1)
+            resumed = audio.resume()
+            assert not audio.is_paused
+            release.set()
+            assert paused.result(timeout=2)
+            assert resumed.result(timeout=2)
+        assert commands == ['/me/player/pause', '/me/player/play']
+        assert all(tid != threading.get_ident() for tid in callers)
+    finally:
+        release.set()
+        audio.shutdown()
+
+
+def test_failed_pause_restores_transport_state(tmp_path):
+    audio = _audio(tmp_path)
+    audio.track_id = 'ABC'
+    try:
+        with patch.object(audio, '_api', return_value=False):
+            assert not audio.pause().result(timeout=2)
+        assert not audio.is_paused
+    finally:
+        audio.shutdown()
+
+
+def test_queued_seek_cannot_affect_the_next_song(tmp_path):
+    audio = _audio(tmp_path)
+    audio.track_id = 'ABC'
+    entered, release = threading.Event(), threading.Event()
+    def api(endpoint):
+        entered.set()
+        assert release.wait(2)
+        return True
+    try:
+        with patch.object(audio, '_api', side_effect=api) as request:
+            paused = audio.pause()
+            assert entered.wait(1)
+            seek = audio.seek(20)
+            with audio._events:
+                audio.track_id = 'NEW'
+            release.set()
+            paused.result(timeout=2)
+            assert not seek.result(timeout=2)
+            assert request.call_count == 1
+    finally:
+        release.set()
+        audio.shutdown()

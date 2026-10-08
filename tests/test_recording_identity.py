@@ -245,6 +245,13 @@ def test_malformed_direct_url_fails_without_crashing():
     assert streamer.search_and_resolve_stream('Song','Artist','https://[') is None
 
 
+def test_matching_title_and_length_never_verifies_an_unrelated_performer():
+    ytm = Mock()
+    ytm.search.return_value = [song('Song', artist='Cover Band', duration='3:20')]
+    with patch('spoff.ytmusic.get_ytmusic_client', return_value=ytm):
+        assert streamer._ytmusic_match_queries('Song', 'Original Artist', 200) == []
+
+
 def test_mpv_watcher_start_failure_closes_audio_process_and_socket(tmp_path):
     from spoff import player as player_module
     player = player_module.MPVController(socket_path=str(tmp_path / 'mpv.sock'))

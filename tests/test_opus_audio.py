@@ -36,7 +36,7 @@ def test_playing_an_old_aac_file_starts_a_background_upgrade():
     app._play_request_id = 3
     app.call_from_thread = lambda fn, *a: fn(*a)
     app._on_ui = lambda fn, *a, **k: None
-    app._commit_playback = MagicMock()
+    app._load_and_commit_playback = MagicMock()
     track = {"id": "dQw4w9WgXcQ", "title": "T", "artist": "A", "duration_ms": 1000}
     with patch("spoff.app.get_cached_track_path", return_value=Path("/c/dQw4w9WgXcQ.m4a")), \
          patch("spoff.app.cached_audio_matches_duration", return_value=True), \
@@ -46,5 +46,5 @@ def test_playing_an_old_aac_file_starts_a_background_upgrade():
          patch("spoff.app.resolve_track_artwork", return_value={}), \
          patch("spoff.app.download_track_to_cache") as download:
         SpoffTUI._resolve_playback(app, track, 3)
-    app._commit_playback.assert_called_once_with(3, "/c/dQw4w9WgXcQ.m4a", track)   # still plays right away
+    app._load_and_commit_playback.assert_called_once_with(3, "/c/dQw4w9WgXcQ.m4a", track)
     download.assert_called_once()                                                    # and upgrades quietly
