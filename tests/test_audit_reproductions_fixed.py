@@ -22,7 +22,7 @@ def make_fake_app(**kwargs):
         "query_one": lambda *a: Mock(),
         "player": Mock(),
         "mpris": Mock(),
-        "_closing": False,
+        "_shutting_down": False,
         "_play_request_id": 1,
         "active_tab": "search",
         "current_index": 0,

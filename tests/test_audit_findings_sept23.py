@@ -30,7 +30,7 @@ def make_fake_app(**kwargs):
         query_one=lambda *a: Mock(),
         player=Mock(),
         mpris=Mock(),
-        _closing=False,
+        _shutting_down=False,
         _play_request_id=1,
         active_tab="search",
         current_index=0,
@@ -195,7 +195,7 @@ class TestAuditFindingsSept23(unittest.TestCase):
 
     def test_09_obsolete_playback_requests_do_not_launch_work(self):
         """Finding 8: Obsolete or closing playback requests do not launch threads or resolvers."""
-        fake = make_fake_app(_closing=True, _play_request_id=99)
+        fake = make_fake_app(_shutting_down=True, _play_request_id=99)
         t = {"id": "a", "title": "Song", "artist": "Artist"}
 
         with patch.object(app.threading, "Thread") as threads, \

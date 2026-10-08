@@ -4122,6 +4122,23 @@ def _set_kitty_opacity(op: str) -> None:
                 pass
         threading.Thread(target=_worker, daemon=True).start()
 
+def _kill_child_processes() -> None:
+    """Kills mpv, cava, librespot and anything else spoff started, so a hard exit
+    never leaves music playing with no window."""
+    pids = set()
+    try:
+        for task in os.listdir("/proc/self/task"):
+            with open(f"/proc/self/task/{task}/children") as f:
+                pids.update(int(pid) for pid in f.read().split())
+    except OSError:
+        return
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+
 class SpoffTUI(App):
     CSS = """
     * {
@@ -5651,7 +5668,7 @@ class SpoffTUI(App):
         self.current_liked_tracks: List[Dict[str, Any]] = []
         self.search_results: List[Dict[str, Any]] = []
         self.active_tab: str = "search"
-        self._closing: bool = False
+        self._shutting_down: bool = False
         self._failed_indices: set[int] = set()
         self._thread_id: int = threading.get_ident()
         self._play_request_id: int = 0
@@ -5677,7 +5694,7 @@ class SpoffTUI(App):
         atexit.register(self._cleanup_on_exit)
 
     def _on_ui(self, callback, *args, **kwargs):
-        if getattr(self, "_closing", False):
+        if getattr(self, "_shutting_down", False):
             return
         if threading.get_ident() == getattr(self, "_thread_id", None):
             return callback(*args, **kwargs)
@@ -6088,7 +6105,7 @@ class SpoffTUI(App):
             atexit.unregister(self._cleanup_on_exit)
         except Exception:
             pass
-        self._closing = True
+        self._shutting_down = True
         self._play_request_id += 1
         try:
             cur_tab = getattr(self, "active_tab", "search")
@@ -6349,7 +6366,7 @@ class SpoffTUI(App):
 
         def _worker() -> None:
             spec = youtube_account.wait_for_login(
-                since=opened_at, cancelled=lambda: getattr(self, "_closing", False))
+                since=opened_at, cancelled=lambda: getattr(self, "_shutting_down", False))
             if not spec:
                 _say("Didn't see a YouTube sign-in in your browser. Try again from Settings.")
                 return
@@ -8317,7 +8334,7 @@ class SpoffTUI(App):
                     work_items.append(("liked", t.get("id"), dict(t)))
             updated = False
             for p_id, t_id, t in work_items:
-                if getattr(self, "_closing", False):
+                if getattr(self, "_shutting_down", False):
                     return
                 try:
                     art = resolve_track_artwork(t, timeout=3.0)
@@ -8327,7 +8344,7 @@ class SpoffTUI(App):
                 except Exception:
                     pass
                 time.sleep(0.12)
-            if updated and not getattr(self, "_closing", False):
+            if updated and not getattr(self, "_shutting_down", False):
                 def _refresh():
                     self.playlists = load_saved_playlists()
                     self.current_liked_tracks = load_liked_songs()
@@ -8421,10 +8438,23 @@ class SpoffTUI(App):
             self.play_index(0)
 
     def action_quit_app(self):
-        self._closing = True
+        """Quits like ending the process: Textual's own shutdown has hung before and
+        left a frozen, half-drawn screen, so it's skipped entirely."""
+        self._shutting_down = True
         self._play_request_id += 1
-        self._cleanup_on_exit()
-        self.exit()
+        restore_terminal = getattr(self, "_restore_terminal", None)
+        if restore_terminal is None:
+            # Not started through main() (tests, embedding): no terminal of ours to restore.
+            self._cleanup_on_exit()
+            self.exit()
+            return
+        # Saving state is quick, but one stuck mpv or D-Bus call mustn't hold up the quit.
+        cleanup = threading.Thread(target=self._cleanup_on_exit, daemon=True)
+        cleanup.start()
+        cleanup.join(timeout=1.5)
+        _kill_child_processes()
+        restore_terminal()
+        os._exit(0)
 
     def play_current_table_row(self, row_idx: int):
         tracks = self._get_current_view_tracks()
@@ -9917,7 +9947,7 @@ class SpoffTUI(App):
                 self.action_delete_playlist()
 
     def _handle_track_end(self, request_id: int, reason: str = "eof", track: Optional[Dict[str, Any]] = None, source: Optional[str] = None):
-        if getattr(self, "_closing", False) or not getattr(self, "is_mounted", False):
+        if getattr(self, "_shutting_down", False) or not getattr(self, "is_mounted", False):
             return
         if request_id != getattr(self, "_play_request_id", None):
             return
@@ -10131,7 +10161,7 @@ class SpoffTUI(App):
 
     @work(thread=True)
     def _search_worker(self, query: str, req_id: int, engine: str, engine_name: str):
-        if getattr(self, "_closing", False) or req_id != getattr(self, "_search_request_id", None):
+        if getattr(self, "_shutting_down", False) or req_id != getattr(self, "_search_request_id", None):
             return
         try:
             SpoffTUI._run_search(self, query, req_id, engine, engine_name)
@@ -10224,7 +10254,7 @@ class SpoffTUI(App):
         lock = threading.Lock()
 
         def current() -> bool:
-            return req_id == getattr(self, "_search_request_id", None) and not getattr(self, "_closing", False)
+            return req_id == getattr(self, "_search_request_id", None) and not getattr(self, "_shutting_down", False)
 
         if to_check:
             self._search_status_text = "Checking which songs play…"
@@ -10456,7 +10486,7 @@ class SpoffTUI(App):
         self.start_playback(track, req_id)
 
     def _commit_playback(self, req_id: int, source: str, track: Dict[str, Any]) -> bool:
-        if getattr(self, "_closing", False) or req_id != getattr(self, "_play_request_id", None):
+        if getattr(self, "_shutting_down", False) or req_id != getattr(self, "_play_request_id", None):
             return False
         pending = getattr(self, "_pending_track", None)
         if pending is not None:
@@ -10516,7 +10546,7 @@ class SpoffTUI(App):
         return True
 
     def _playback_failed(self, req_id: int, track: Dict[str, Any]):
-        if getattr(self, "_closing", False) or req_id != getattr(self, "_play_request_id", None):
+        if getattr(self, "_shutting_down", False) or req_id != getattr(self, "_play_request_id", None):
             return
         self._pending_track = None
         invalidate_stream_cache(track.get("title", ""), track.get("artist", ""), playback_direct_url(track))
@@ -10560,7 +10590,7 @@ class SpoffTUI(App):
 
     def _resolve_playback(self, track: Dict[str, Any], req_id: int):
         def is_current():
-            return (not getattr(self, "_closing", False)
+            return (not getattr(self, "_shutting_down", False)
                     and req_id == getattr(self, "_play_request_id", None))
 
         if not is_current():
@@ -10701,7 +10731,7 @@ class SpoffTUI(App):
 
         stream_url = res["stream_url"]
         committed = self.call_from_thread(self._commit_playback, req_id, stream_url, track)
-        if not committed or getattr(self, "_closing", False) or req_id != getattr(self, "_play_request_id", None):
+        if not committed or getattr(self, "_shutting_down", False) or req_id != getattr(self, "_play_request_id", None):
             return
 
         def on_cached(path):
@@ -10755,11 +10785,13 @@ def main():
         try:
             # Leave alt screen, show cursor, stop mouse tracking and bracketed paste,
             # pop the kitty keyboard protocol.
-            sys.stdout.write(
+            # sys.__stdout__: while the app runs, Textual swaps sys.stdout for a print capture.
+            out = sys.__stdout__
+            out.write(
                 "\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l"
                 "\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[<u"
             )
-            sys.stdout.flush()
+            out.flush()
         except Exception:
             pass
         if termios is not None and saved_tty is not None:
@@ -10825,6 +10857,7 @@ def main():
     exit_code = 0
     try:
         app = SpoffTUI(visualizer_enabled=vis_arg, notifications_enabled=notif_arg)
+        app._restore_terminal = _restore_terminal
         app.run()
     except KeyboardInterrupt:
         pass

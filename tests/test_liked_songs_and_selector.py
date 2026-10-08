@@ -653,12 +653,12 @@ class TestDeckTrackFormatting(unittest.TestCase):
         mock_call = Mock()
         self.app.call_from_thread = mock_call
 
-        self.app._closing = True
+        self.app._shutting_down = True
         self.app.is_mounted = True
         self.app.on_track_finished()
         mock_call.assert_not_called()
 
-        self.app._closing = False
+        self.app._shutting_down = False
         self.app.is_mounted = False
         self.app.on_track_finished()
         mock_call.assert_not_called()

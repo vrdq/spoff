@@ -143,7 +143,7 @@ class TestPlaybackSelection(unittest.TestCase):
         app.player = Mock()
         app.player.load_and_play = Mock(return_value=True)
         app._play_request_id = 1
-        app._closing = False
+        app._shutting_down = False
         app._pending_track = {"id": "song_b", "title": "Song B"}
         app.queue = [app._pending_track]
         app.current_index = 0

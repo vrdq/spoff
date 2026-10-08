@@ -12,7 +12,7 @@ from spoff import app
 def fake_app(**kwargs):
     pill = Mock()
     values = dict(_is_mounted=True, _pending_track=None, _search_loading_request_id=None,
-                  _search_request_id=1, _closing=False, active_tab='search', advanced_mode=False,
+                  _search_request_id=1, _shutting_down=False, active_tab='search', advanced_mode=False,
                   search_results=[], current_playlist_tracks=[], current_liked_tracks=[],
                   query_one=Mock(return_value=pill), call_from_thread=lambda fn,*a:fn(*a),
                   notify_user=Mock(), render_tracks=Mock())

@@ -133,7 +133,7 @@ def test_tracks_match_featured_artist_normalization():
 
 def test_playback_failed_search_origin_halts_without_cascading():
     fake = SimpleNamespace(
-        _closing=False,
+        _shutting_down=False,
         _play_request_id=1,
         _pending_track="track1",
         _failed_indices=set(),

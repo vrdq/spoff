@@ -32,7 +32,7 @@ def test_an_old_aac_file_is_redownloaded_instead_of_reused(tmp_path):
 def test_playing_an_old_aac_file_starts_a_background_upgrade():
     from spoff.app import SpoffTUI
     app = SpoffTUI.__new__(SpoffTUI)
-    app._closing = False
+    app._shutting_down = False
     app._play_request_id = 3
     app.call_from_thread = lambda fn, *a: fn(*a)
     app._on_ui = lambda fn, *a, **k: None

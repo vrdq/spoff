@@ -146,7 +146,7 @@ class TestAuditRemainingFixed(unittest.TestCase):
             player=Mock(),
             cava=None,
             mpris=None,
-            _closing=False,
+            _shutting_down=False,
             _play_request_id=0,
             repeat_mode="off",
             _cleanup_on_exit=app.SpoffTUI._cleanup_on_exit,
@@ -190,7 +190,7 @@ class TestAuditRemainingFixed(unittest.TestCase):
 
         f = types.SimpleNamespace(
             is_mounted=True,
-            _closing=False,
+            _shutting_down=False,
             _play_request_id=1,
             _playback_failed=Mock(),
             player=Mock(),
