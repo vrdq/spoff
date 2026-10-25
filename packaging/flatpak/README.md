@@ -37,9 +37,9 @@ Regenerate `python3-modules.yaml` after changing dependencies:
 ```bash
 curl -LO https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/pip/flatpak-pip-generator.py
 uv run --with requirements-parser --with pyyaml --with pip python flatpak-pip-generator.py \
-  --runtime org.gnome.Sdk//50 --prefer-wheels cryptography,cffi --yaml -o python3-modules \
+  --runtime org.gnome.Sdk//50 --prefer-wheels cryptography,cffi,python-bidi --yaml -o python3-modules \
   "pydbus>=0.6.0" "rich>=13.0.0" "secretstorage>=3.3" "textual>=8.0.0" \
-  "yt-dlp-ejs>=0.8.0" "yt-dlp>=2024.0.0" "ytmusicapi>=1.12.0" hatchling
+  "yt-dlp-ejs>=0.8.0" "yt-dlp>=2024.0.0" "ytmusicapi>=1.12.0" "arabic-reshaper>=3.0" "python-bidi>=0.6" hatchling
 ```
 
 Run the installed Flatpak:

@@ -85,6 +85,15 @@ class MPVController:
         self.mod_speed = 1.0
 
     @property
+    def is_active(self) -> bool:
+        """True if mpv or Spotify currently has an active playback session loaded."""
+        with self._lock:
+            if self._on_spotify:
+                spotify = self._active_spotify()
+                return bool(spotify and getattr(spotify, "is_active", True))
+            return self._playback_socket is not None
+
+    @property
     def playback_finished_callback(self) -> Optional[Callable]:
         with self._lock:
             return self._playback_finished_callback
@@ -128,12 +137,14 @@ class MPVController:
 
             cmd = [
                 "mpv",
+                "--no-config",
                 "--idle=yes",
                 f"--input-ipc-server={self.socket_path}",
                 "--no-video",
                 f"--volume={self._volume}",
                 "--really-quiet",
                 "--gapless-audio=yes",
+                "--keep-open=no",
                 "--audio-client-name=spoff",
                 "--title=spoff",
                 "--force-media-title=spoff",

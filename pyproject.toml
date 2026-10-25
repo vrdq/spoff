@@ -28,6 +28,8 @@ dependencies = [
     "pydbus>=0.6.0",
     "secretstorage>=3.3",
     "yt-dlp-ejs>=0.8.0",
+    "arabic-reshaper>=3.0",
+    "python-bidi>=0.6",
 ]
 
 [project.scripts]

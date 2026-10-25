@@ -23,6 +23,8 @@ optdepends=(
     'cava: audio spectrum visualizer'
     'ffmpeg: verify cached audio integrity and duration'
     'wl-clipboard: copy share links on Wayland'
+    'python-arabic-reshaper: joined Arabic letters in lyrics and titles (AUR)'
+    'python-bidi: right-to-left lyrics and titles (AUR)'
 )
 makedepends=(
     'python-build'

@@ -136,6 +136,31 @@ modules:
       - type: file
         url: https://files.pythonhosted.org/packages/29/ad/6d471ea9d81e1f59a4d01badda21e7f3f508b94ed171c677b6547b292f73/ytmusicapi-1.12.3-py3-none-any.whl
         sha256: f65db840907a43ca23b29bd563951a1e390fbe2089d7aa4ddbe2043824b2acd9
+  - name: python3-arabic-reshaper
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "arabic-reshaper>=3.0" --no-build-isolation
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/6e/7d/77752d819ede528c664ecf4de974b17b049e054a14537b74b53c8568014f/arabic_reshaper-3.0.1-py3-none-any.whl
+        sha256: 41c5adc2420f85758eada7e880251c4b6a2adbd83377bd27e5d4eba71f648bc7
+  - name: python3-python-bidi
+    buildsystem: simple
+    build-commands:
+      - pip3 install --verbose --exists-action=i --no-index --find-links="file://${PWD}"
+        --prefix=${FLATPAK_DEST} "python-bidi>=0.6" --no-build-isolation
+    sources:
+      - type: file
+        url: https://files.pythonhosted.org/packages/66/60/569132a43fff4e52abbdd640b76b761a773c1c1b07f5bf3576be5049e8da/python_bidi-0.6.11-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+        sha256: 74457b43db34f984252e915828b5d1a4042a771f44e853a5643506d01562eccb
+        only-arches:
+          - x86_64
+      - type: file
+        url: https://files.pythonhosted.org/packages/6c/12/0c599f95cfd3433bb773dba3624fb0f00e74ee4d9f7c0c0455d935cf938d/python_bidi-0.6.11-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+        sha256: 302f4ca7dabfe447e707d40e98520551181036c15750bdd1e73292ad8b3d8e75
+        only-arches:
+          - aarch64
   - name: python3-hatchling
     buildsystem: simple
     build-commands:

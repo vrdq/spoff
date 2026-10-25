@@ -83,6 +83,11 @@ class SpotifyAudio:
     # ------------------------------------------------------------------ setup
 
     @property
+    def is_active(self) -> bool:
+        with self._events:
+            return self._on_end is not None
+
+    @property
     def credentials_file(self) -> Path:
         return self.dir / "credentials.json"
 
@@ -210,7 +215,7 @@ class SpotifyAudio:
         except OSError:
             pass
         cmd = [
-            "mpv", "--no-video", "--really-quiet", "--idle=no",
+            "mpv", "--no-config", "--no-video", "--really-quiet", "--idle=no",
             f"--input-ipc-server={self._sink_socket}",
             "--demuxer=rawaudio",
             f"--demuxer-rawaudio-rate={SAMPLE_RATE}",

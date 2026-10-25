@@ -108,6 +108,7 @@ try:
         apply_pending_unlikes, update_spotify_playlist_details
     )
     from .lyrics import fetch_lyrics, get_active_lyric_index
+    from .rtl import for_terminal, is_rtl_line
     from .mpris import MPRISService
     from .visualizer import VisualizerWidget, CavaVisualizer
     from .updater import check_for_updates, perform_update, run_cli_update, is_git_checkout, can_self_update
@@ -172,6 +173,7 @@ except ImportError:
         apply_pending_unlikes, update_spotify_playlist_details
     )
     from lyrics import fetch_lyrics, get_active_lyric_index
+    from rtl import for_terminal, is_rtl_line
     from mpris import MPRISService
     from visualizer import VisualizerWidget, CavaVisualizer
     from updater import check_for_updates, perform_update, run_cli_update, is_git_checkout, can_self_update
@@ -4139,6 +4141,12 @@ def _kill_child_processes() -> None:
             pass
 
 
+def _lyric_cell(text: str, style: str) -> Text:
+    """A lyric line, laid out for the terminal. Right-to-left lines hug the right
+    edge, where a reader of that script starts."""
+    return Text(for_terminal(text), style=style, justify="right" if is_rtl_line(text) else "left")
+
+
 class SpoffTUI(App):
     CSS = """
     * {
@@ -7304,8 +7312,8 @@ class SpoffTUI(App):
             lt.add_row("", "[dim]Play a song to view lyrics[/dim]")
             return
 
-        title = curr.get("title", "Unknown")
-        artist = curr.get("artist", "Unknown")
+        title = for_terminal(str(curr.get("title") or "Unknown"))
+        artist = for_terminal(str(curr.get("artist") or "Unknown"))
 
         if self.current_lyrics is None:
             lh.update(f"[bold #ffffff]{escape(title)}[/]  [#767676]—[/]  [#cccccc]{escape(artist)}[/]  [dim #767676]finding lyrics…[/]")
@@ -7340,14 +7348,14 @@ class SpoffTUI(App):
         for idx, line in enumerate(lines):
             t_sec = line.get("time")
             time_label = format_time(t_sec) if t_sec is not None else ""
-            text = escape(line.get("text") or "♪")
+            text = line.get("text") or "♪"
 
             if idx == active_idx:
-                lt.add_row(f"[#cccccc]{time_label}[/]", f"[bold #ffffff]{text}[/]", key=str(idx))
+                lt.add_row(f"[#cccccc]{time_label}[/]", _lyric_cell(text, "bold #ffffff"), key=str(idx))
             elif active_idx != -1 and idx < active_idx:
-                lt.add_row(f"[dim #555555]{time_label}[/]", f"[#555555]{text}[/]", key=str(idx))
+                lt.add_row(f"[dim #555555]{time_label}[/]", _lyric_cell(text, "#555555"), key=str(idx))
             else:
-                lt.add_row(f"[dim #555555]{time_label}[/]", f"[#888888]{text}[/]", key=str(idx))
+                lt.add_row(f"[dim #555555]{time_label}[/]", _lyric_cell(text, "#888888"), key=str(idx))
 
         if 0 <= active_idx < len(lines):
             try:
@@ -7365,7 +7373,7 @@ class SpoffTUI(App):
             t_str = format_time(old_line.get("time", 0))
             try:
                 lt.update_cell_at(Coordinate(old_idx, 0), f"[dim #555555]{t_str}[/]")
-                lt.update_cell_at(Coordinate(old_idx, 1), f"[#555555]{escape(old_line.get('text') or '♪')}[/]")
+                lt.update_cell_at(Coordinate(old_idx, 1), _lyric_cell(old_line.get("text") or "♪", "#555555"))
             except Exception:
                 pass
         if 0 <= new_idx < lt.row_count and new_idx < len(lines):
@@ -7373,7 +7381,7 @@ class SpoffTUI(App):
             t_str = format_time(new_line.get("time", 0))
             try:
                 lt.update_cell_at(Coordinate(new_idx, 0), f"[#cccccc]{t_str}[/]")
-                lt.update_cell_at(Coordinate(new_idx, 1), f"[bold #ffffff]{escape(new_line.get('text') or '♪')}[/]")
+                lt.update_cell_at(Coordinate(new_idx, 1), _lyric_cell(new_line.get("text") or "♪", "bold #ffffff"))
                 lt.move_cursor(row=new_idx)
             except Exception:
                 pass
@@ -7434,7 +7442,7 @@ class SpoffTUI(App):
             except (ValueError, TypeError):
                 dur_ms = 0.0
             dur = format_time(dur_ms / 1000.0)
-            safe_title = escape(clip_text(str(t.get("title") or ""), title_cap))
+            safe_title = escape(for_terminal(clip_text(str(t.get("title") or ""), title_cap)))
 
             is_playing = False
             if curr_track:
@@ -7449,10 +7457,10 @@ class SpoffTUI(App):
             title_col = safe_title
             # Brightness follows importance: title, then artist, album, time.
             # Text objects, not markup: no escaping needed and they align with the headers.
-            cells = [type_tag, title_col, Text(clip_text(str(t.get("artist") or ""), artist_cap), style="#9a9a9a")]
+            cells = [type_tag, title_col, Text(for_terminal(clip_text(str(t.get("artist") or ""), artist_cap)), style="#9a9a9a")]
             cells.append(Text(dur, style="#6a6a6a"))
             if style["album"]:
-                cells.append(Text(clip_text(str(t.get("album") or ""), 30), style="#6a6a6a"))
+                cells.append(Text(for_terminal(clip_text(str(t.get("album") or ""), 30)), style="#6a6a6a"))
             table.add_row(*cells, key=str(idx))
         if tracks:
             if select_row is not None:
@@ -7975,6 +7983,16 @@ class SpoffTUI(App):
             return
 
         if self.player.current_track is not None:
+            try:
+                prog = self.player.get_progress()
+                pos, dur = float(prog[0]), float(prog[1])
+            except Exception:
+                pos, dur = 0.0, 0.0
+            is_active = getattr(self.player, "is_active", True)
+            if not is_active or (dur > 0 and pos >= max(0.0, dur - 1.0)):
+                if getattr(self, "current_index", -1) >= 0:
+                    self.play_index(self.current_index)
+                    return
             self.player.toggle_pause()
             self.update_player_hud()
         else:
@@ -8196,6 +8214,16 @@ class SpoffTUI(App):
 
     def _mpris_play(self):
         if self.player.is_paused:
+            try:
+                prog = self.player.get_progress()
+                pos, dur = float(prog[0]), float(prog[1])
+            except Exception:
+                pos, dur = 0.0, 0.0
+            is_active = getattr(self.player, "is_active", True)
+            if not is_active or (dur > 0 and pos >= max(0.0, dur - 1.0)):
+                if getattr(self, "current_index", -1) >= 0:
+                    self.play_index(self.current_index)
+                    return
             self.player.resume()
             self.update_player_hud()
         elif self.player.current_track is None:
@@ -8482,6 +8510,15 @@ class SpoffTUI(App):
                         self.notify_user(f"Loading '{track_title}'...")
                     return
                 if getattr(self, "player", None) and self.player.current_track is not None:
+                    try:
+                        prog = self.player.get_progress()
+                        pos, dur = float(prog[0]), float(prog[1])
+                    except Exception:
+                        pos, dur = 0.0, 0.0
+                    is_active = getattr(self.player, "is_active", True)
+                    if not is_active or (dur > 0 and pos >= max(0.0, dur - 1.0)):
+                        self.play_index(row_idx)
+                        return
                     self.player.toggle_pause()
                     self.update_player_hud()
                     return
@@ -10047,8 +10084,8 @@ class SpoffTUI(App):
             self.mpris.update_status(curr is not None, is_paused)
 
         if curr:
-            safe_title = escape(str(curr.get("title", "") or "Unknown Track"))
-            safe_artist = escape(str(curr.get("artist", "") or "")).strip()
+            safe_title = escape(for_terminal(str(curr.get("title", "") or "Unknown Track")))
+            safe_artist = escape(for_terminal(str(curr.get("artist", "") or ""))).strip()
             if safe_artist and safe_artist.lower() not in ("unknown", "unknown artist", ""):
                 track_display = f"[bold #ffffff]{safe_title}[/]  [#555555]—[/]  [#cccccc]{safe_artist}[/]"
             else:

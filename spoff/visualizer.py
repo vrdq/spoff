@@ -472,11 +472,15 @@ class VisualizerWidget(Static):
             if getattr(app, "vis_enabled", True):
                 self.display = True
 
-        app = getattr(self, "app", None)
+        try:
+            app = self.app
+        except Exception:
+            app = getattr(self, "_app", None)
         if not app or not hasattr(app, "player"):
             return
         curr = app.player.current_track
-        is_playing = curr is not None
+        is_active = getattr(app.player, "is_active", True)
+        is_playing = curr is not None and is_active
         is_paused = app.player.is_paused if is_playing else False
 
         if is_playing and not is_paused:
