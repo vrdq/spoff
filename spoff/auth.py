@@ -1,4 +1,5 @@
 import re
+import os
 import html
 import json
 import time
@@ -19,14 +20,18 @@ try:
         DATA_DIR, load_saved_playlists, save_saved_playlists, storage_transaction, mutate_playlist,
         get_deleted_spotify_playlist_ids, record_deleted_spotify_playlist_id,
         load_liked_songs, save_liked_songs, stable_track_id, liked_index,
-        get_pending_spotify_unlikes, set_pending_spotify_unlike
+        get_pending_spotify_unlikes, set_pending_spotify_unlike,
+        get_spotify_client_id as _get_config_client_id,
+        save_spotify_client_id as _save_config_client_id
     )
 except ImportError:
     from storage import (
         DATA_DIR, load_saved_playlists, save_saved_playlists, storage_transaction, mutate_playlist,
         get_deleted_spotify_playlist_ids, record_deleted_spotify_playlist_id,
         load_liked_songs, save_liked_songs, stable_track_id, liked_index,
-        get_pending_spotify_unlikes, set_pending_spotify_unlike
+        get_pending_spotify_unlikes, set_pending_spotify_unlike,
+        get_spotify_client_id as _get_config_client_id,
+        save_spotify_client_id as _save_config_client_id
     )
 
 try:
@@ -40,6 +45,49 @@ logger = logging.getLogger("auth")
 SPOTIFY_CLIENT_ID = "d420a117a32841c2b3474932e49fb54b"
 SPOTIFY_REDIRECT_URI = "http://127.0.0.1:8989/login"
 SPOTIFY_PORT = 8989
+
+def get_spotify_client_id() -> str:
+    """Returns effective Spotify client ID: session > config > env > default."""
+    auth = load_spotify_auth()
+    if auth and auth.get("client_id"):
+        cid = str(auth["client_id"]).strip()
+        if cid:
+            return cid
+    try:
+        cid = _get_config_client_id()
+        if cid:
+            return cid
+    except Exception:
+        pass
+    env_cid = os.environ.get("SPOTIFY_CLIENT_ID", "").strip()
+    if env_cid:
+        return env_cid
+    return SPOTIFY_CLIENT_ID
+
+def get_saved_custom_client_id() -> str:
+    """Returns custom client ID if saved in session/config/env, else empty string."""
+    auth = load_spotify_auth()
+    if auth and auth.get("client_id"):
+        cid = str(auth["client_id"]).strip()
+        if cid and cid != SPOTIFY_CLIENT_ID:
+            return cid
+    try:
+        cid = _get_config_client_id()
+        if cid and cid != SPOTIFY_CLIENT_ID:
+            return cid
+    except Exception:
+        pass
+    env_cid = os.environ.get("SPOTIFY_CLIENT_ID", "").strip()
+    if env_cid and env_cid != SPOTIFY_CLIENT_ID:
+        return env_cid
+    return ""
+
+def save_spotify_client_id(client_id: str) -> None:
+    """Persists Spotify client ID to configuration."""
+    try:
+        _save_config_client_id(client_id)
+    except Exception as e:
+        logger.error(f"Error saving Spotify client ID: {e}")
 
 SPOTIFY_AUTH_URL = "https://accounts.spotify.com/authorize"
 SPOTIFY_TOKEN_URL = "https://accounts.spotify.com/api/token"
@@ -124,15 +172,16 @@ def generate_pkce_pair() -> Tuple[str, str]:
     challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
     return verifier, challenge
 
-def build_auth_url(verifier: str, client_id: str = SPOTIFY_CLIENT_ID, redirect_uri: str = SPOTIFY_REDIRECT_URI) -> Tuple[str, str]:
+def build_auth_url(verifier: str, client_id: Optional[str] = None, redirect_uri: str = SPOTIFY_REDIRECT_URI) -> Tuple[str, str]:
     """Builds the authorization URL and returns (auth_url, state)."""
+    cid = (client_id.strip() if client_id and client_id.strip() else None) or get_spotify_client_id()
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
     challenge = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
     state = secrets.token_urlsafe(16)
     
     params = {
         "response_type": "code",
-        "client_id": client_id,
+        "client_id": cid,
         "redirect_uri": redirect_uri,
         "scope": " ".join(SCOPES),
         "code_challenge_method": "S256",
@@ -226,13 +275,14 @@ class OAuthCallbackServer:
             except Exception as e:
                 logger.debug(f"Error closing OAuth server: {e}")
 
-def exchange_code_for_tokens(code: str, verifier: str, client_id: str = SPOTIFY_CLIENT_ID, redirect_uri: str = SPOTIFY_REDIRECT_URI) -> Optional[Dict[str, Any]]:
+def exchange_code_for_tokens(code: str, verifier: str, client_id: Optional[str] = None, redirect_uri: str = SPOTIFY_REDIRECT_URI) -> Optional[Dict[str, Any]]:
     """Exchanges an authorization code for Spotify access & refresh tokens."""
+    cid = (client_id.strip() if client_id and client_id.strip() else None) or get_spotify_client_id()
     data = urllib.parse.urlencode({
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": redirect_uri,
-        "client_id": client_id,
+        "client_id": cid,
         "code_verifier": verifier
     }).encode("utf-8")
 
@@ -247,17 +297,19 @@ def exchange_code_for_tokens(code: str, verifier: str, client_id: str = SPOTIFY_
             res = json.loads(body)
             expires_in = res.get("expires_in", 3600)
             res["expires_at"] = time.time() + expires_in
+            res["client_id"] = cid
             return res
     except Exception as e:
         logger.error(f"Failed to exchange code for token: {e}")
         return None
 
-def refresh_spotify_token(refresh_token: str, client_id: str = SPOTIFY_CLIENT_ID) -> Optional[Dict[str, Any]]:
+def refresh_spotify_token(refresh_token: str, client_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Refreshes an expired Spotify access token using the refresh token."""
+    cid = (client_id.strip() if client_id and client_id.strip() else None) or get_spotify_client_id()
     data = urllib.parse.urlencode({
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
-        "client_id": client_id
+        "client_id": cid
     }).encode("utf-8")
 
     req = urllib.request.Request(
@@ -273,6 +325,7 @@ def refresh_spotify_token(refresh_token: str, client_id: str = SPOTIFY_CLIENT_ID
             res["expires_at"] = time.time() + expires_in
             if "refresh_token" not in res:
                 res["refresh_token"] = refresh_token
+            res["client_id"] = cid
             return res
     except Exception as e:
         logger.error(f"Failed to refresh Spotify token: {e}")
@@ -340,7 +393,11 @@ def get_valid_token() -> Optional[str]:
                     if time.time() < cur_exp - 60 and current.get("access_token"):
                         return current.get("access_token")
 
-                new_tokens = refresh_spotify_token(refresh_token)
+                cid = (current.get("client_id") if current else None) or (auth.get("client_id") if auth else None) or get_spotify_client_id()
+                try:
+                    new_tokens = refresh_spotify_token(refresh_token, client_id=cid)
+                except TypeError:
+                    new_tokens = refresh_spotify_token(refresh_token)
                 if not new_tokens:
                     return None
                 with storage_transaction():
@@ -368,7 +425,11 @@ def _force_refresh_token(stale_token: str) -> Optional[str]:
         refresh_token = current.get("refresh_token")
         if not refresh_token:
             return None
-        new_tokens = refresh_spotify_token(refresh_token)
+        cid = (current.get("client_id") if current else None) or get_spotify_client_id()
+        try:
+            new_tokens = refresh_spotify_token(refresh_token, client_id=cid)
+        except TypeError:
+            new_tokens = refresh_spotify_token(refresh_token)
         if not new_tokens or not new_tokens.get("access_token"):
             return None
         with storage_transaction():
@@ -496,16 +557,20 @@ def fetch_user_playlists(token: str) -> Optional[List[Dict[str, Any]]]:
             return None
         items = res.get("items", [])
         for item in items:
-            if not item:
+            if not item or not isinstance(item, dict):
                 continue
+            tracks_info = item.get("tracks") if isinstance(item.get("tracks"), dict) else (
+                item.get("items") if isinstance(item.get("items"), dict) else {}
+            )
+            tracks_count = tracks_info.get("total", 0) if isinstance(tracks_info, dict) else 0
             playlists.append({
                 "id": item.get("id"),
                 "name": item.get("name", "Untitled"),
                 "description": item.get("description", ""),
-                "url": item.get("external_urls", {}).get("spotify", ""),
-                "tracks_count": item.get("tracks", {}).get("total", 0),
+                "url": item.get("external_urls", {}).get("spotify", "") if isinstance(item.get("external_urls"), dict) else "",
+                "tracks_count": tracks_count,
                 "public": item.get("public"),
-                "owner_id": (item.get("owner") or {}).get("id"),
+                "owner_id": (item.get("owner") or {}).get("id") if isinstance(item.get("owner"), dict) else None,
             })
         url = res.get("next")
     return playlists
@@ -517,17 +582,26 @@ def fetch_playlist_tracks(token: str, playlist_id: str) -> Optional[List[Dict[st
     while url:
         res = spotify_api_get(url, token)
         if res is None:
-            logger.error(f"Failed to fetch tracks page for playlist {playlist_id}")
-            return None
+            if "/tracks" in url:
+                alt_url = url.replace("/tracks", "/items", 1)
+                res = spotify_api_get(alt_url, token)
+            if res is None:
+                logger.error(f"Failed to fetch tracks page for playlist {playlist_id}")
+                return None
         for entry in res.get("items", []):
-            if not entry or not entry.get("track"):
+            if not entry or not isinstance(entry, dict):
                 continue
-            t = entry["track"]
+            t = entry.get("track") if isinstance(entry.get("track"), dict) else entry.get("item")
+            if not isinstance(t, dict):
+                continue
             t_id = t.get("id") or stable_track_id(t)
-            artists = ", ".join(a.get("name", "Unknown") for a in t.get("artists", []))
-            album_info = t.get("album") or {}
+            artists_list = t.get("artists") if isinstance(t.get("artists"), list) else []
+            artists = ", ".join(
+                str(a.get("name") or "Unknown") for a in artists_list if isinstance(a, dict)
+            ) if artists_list else "Unknown"
+            album_info = t.get("album") if isinstance(t.get("album"), dict) else {}
             album_name = album_info.get("name")
-            images = album_info.get("images") or []
+            images = album_info.get("images") if isinstance(album_info.get("images"), list) else []
             art_url = images[0].get("url") if images and isinstance(images[0], dict) else None
             tracks.append({
                 "id": t_id,
@@ -554,14 +628,19 @@ def fetch_liked_songs(token: str, max_tracks: Optional[int] = 200) -> Optional[L
             logger.error("Failed to fetch liked songs from Spotify")
             return None
         for entry in res.get("items", []):
-            if not entry or not entry.get("track"):
+            if not entry or not isinstance(entry, dict):
                 continue
-            t = entry["track"]
+            t = entry.get("track") if isinstance(entry.get("track"), dict) else entry.get("item")
+            if not isinstance(t, dict):
+                continue
             t_id = t.get("id") or stable_track_id(t)
-            artists = ", ".join(a.get("name", "Unknown") for a in t.get("artists", []))
-            album_info = t.get("album") or {}
+            artists_list = t.get("artists") if isinstance(t.get("artists"), list) else []
+            artists = ", ".join(
+                str(a.get("name") or "Unknown") for a in artists_list if isinstance(a, dict)
+            ) if artists_list else "Unknown"
+            album_info = t.get("album") if isinstance(t.get("album"), dict) else {}
             album_name = album_info.get("name")
-            images = album_info.get("images") or []
+            images = album_info.get("images") if isinstance(album_info.get("images"), list) else []
             art_url = images[0].get("url") if images and isinstance(images[0], dict) else None
             tracks.append({
                 "id": t_id,
@@ -792,8 +871,9 @@ def sync_spotify_library(token: str, progress_callback: Optional[Callable[[str],
 
         tracks = fetch_playlist_tracks(token, p_id)
         if tracks is None:
-            logger.warning(f"Skipping sync for playlist '{p_name}' due to fetch error")
-            continue
+            logger.warning(f"Could not fetch tracks for '{p_name}', preserving existing tracks if present")
+            existing_p = next((p for p in initial_local if p.get("id") == p_id or (p.get("spotify_id") and p.get("spotify_id") == p_id)), None)
+            tracks = existing_p.get("tracks", []) if existing_p else []
         fetched_remote.append((pl, tracks))
 
     synced_count = 0

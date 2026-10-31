@@ -621,6 +621,27 @@ def save_spotify_audio(enabled: bool) -> None:
     cfg["spotify_audio"] = bool(enabled)
     save_config(cfg)
 
+def get_spotify_client_id() -> str:
+    """Retrieves saved custom Spotify client ID from config, if any."""
+    try:
+        val = load_config().get("spotify_client_id")
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    except Exception:
+        pass
+    return ""
+
+@transactional
+def save_spotify_client_id(client_id: str) -> None:
+    """Persists custom Spotify client ID to config."""
+    cfg = load_config()
+    cid = client_id.strip() if client_id else ""
+    if cid:
+        cfg["spotify_client_id"] = cid
+    else:
+        cfg.pop("spotify_client_id", None)
+    save_config(cfg)
+
 def get_saved_youtube_login() -> Optional[Tuple[str, Optional[str], Optional[str]]]:
     """Browser whose YouTube login Spoff uses: (yt-dlp browser, profile path, keyring)."""
     try:

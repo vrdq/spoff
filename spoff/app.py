@@ -105,7 +105,8 @@ try:
         reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track, extract_spotify_playlist_id,
         fetch_liked_songs, merge_spotify_and_client_tracks, sync_playlist_tracks_to_spotify,
-        apply_pending_unlikes, update_spotify_playlist_details
+        apply_pending_unlikes, update_spotify_playlist_details,
+        get_spotify_client_id, get_saved_custom_client_id, save_spotify_client_id
     )
     from .lyrics import fetch_lyrics, get_active_lyric_index
     from .rtl import for_terminal, is_rtl_line
@@ -170,7 +171,8 @@ except ImportError:
         reorder_spotify_playlist_track, delete_spotify_playlist, rename_spotify_playlist, clone_spotify_playlist, has_modify_scopes,
         search_spotify_tracks, is_client_side_track, extract_spotify_playlist_id,
         fetch_liked_songs, merge_spotify_and_client_tracks, sync_playlist_tracks_to_spotify,
-        apply_pending_unlikes, update_spotify_playlist_details
+        apply_pending_unlikes, update_spotify_playlist_details,
+        get_spotify_client_id, get_saved_custom_client_id, save_spotify_client_id
     )
     from lyrics import fetch_lyrics, get_active_lyric_index
     from rtl import for_terminal, is_rtl_line
@@ -2561,6 +2563,10 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
 
                 yield Static(user_line, id="spotify-user-info")
                 yield Static(f"Plan    [#e2e2e2]Spotify {escape(str(plan))}[/]", id="spotify-desc")
+                cid = self.auth_session.get("client_id") or get_spotify_client_id()
+                if cid:
+                    masked = f"{cid[:8]}…{cid[-4:]}" if len(cid) > 12 else cid
+                    yield Static(f"App     [#888888]Client ID: {escape(masked)}[/]", id="spotify-client-id-info")
 
                 can_modify = has_modify_scopes()
                 if can_modify:
@@ -2585,9 +2591,23 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
             else:
                 is_adv = getattr(self.app, "advanced_mode", False)
                 if self.first_run:
-                    yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff, and enable two-way synchronization. You can also skip and use local offline playback anytime.", id="spotify-desc")
+                    yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff. Enter your Spotify Client ID below (create a free app in developer.spotify.com/dashboard).", id="spotify-desc")
                 else:
-                    yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff, and enable two-way synchronization.", id="spotify-desc")
+                    yield Static("Connect your Spotify account to sync your playlists and Liked Songs into Spoff.", id="spotify-desc")
+
+                saved_cid = get_saved_custom_client_id()
+                yield Static("Spotify App Client ID", id="spotify-client-id-label")
+                yield Input(
+                    value=saved_cid,
+                    placeholder="Enter Spotify Client ID (from developer.spotify.com)...",
+                    id="spotify-client-id-input"
+                )
+                yield Static(
+                    "[dim]Callback URI:[/] [#4f8a5e]http://127.0.0.1:8989/login[/]  "
+                    "[dim]|  Create free app: developer.spotify.com/dashboard[/dim]",
+                    id="spotify-client-id-help"
+                )
+
                 yield Static("[dim]Not connected[/dim]", id="spotify-status")
 
                 with Horizontal(id="spotify-actions"):
@@ -2642,9 +2662,17 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
             threading.Thread(target=_fetch_bg, daemon=True).start()
         else:
             try:
-                self.query_one("#btn-login", Button).focus()
+                inp = self.query_one("#spotify-client-id-input", Input)
+                inp.focus()
             except Exception:
-                pass
+                try:
+                    self.query_one("#btn-login", Button).focus()
+                except Exception:
+                    pass
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "spotify-client-id-input":
+            self.start_browser_login()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         btn_id = event.button.id
@@ -2692,6 +2720,13 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
 
     def on_key(self, event: events.Key) -> None:
         if isinstance(self.focused, Input):
+            if event.key == "down":
+                try:
+                    self.query_one("#btn-login", Button).focus()
+                    event.prevent_default()
+                    event.stop()
+                except Exception:
+                    pass
             return
 
         if event.key in ("s", "S") or event.character in ("s", "S"):
@@ -2727,6 +2762,14 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
             event.stop()
 
     def action_focus_prev_button(self) -> None:
+        try:
+            inp = self.query_one("#spotify-client-id-input", Input)
+            buttons = [b for b in self.query(Button) if b.display]
+            if inp.display and buttons and self.focused == buttons[0]:
+                inp.focus()
+                return
+        except Exception:
+            pass
         buttons = [b for b in self.query(Button) if b.display]
         if not buttons:
             return
@@ -2751,9 +2794,32 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
     def start_browser_login(self) -> None:
         if self.is_logging_in:
             return
+
+        cid = None
+        try:
+            inp = self.query_one("#spotify-client-id-input", Input)
+            val = inp.value.strip()
+            if val:
+                cid = val
+        except Exception:
+            pass
+
+        if not cid:
+            cid = get_spotify_client_id()
+
+        if not cid:
+            try:
+                self.query_one("#spotify-status", Static).update("[#c47676]Please enter a Spotify Client ID[/]")
+            except Exception:
+                pass
+            return
+
+        self.effective_client_id = cid
+        save_spotify_client_id(cid)
+
         self.is_logging_in = True
         self.pkce_verifier, _challenge = generate_pkce_pair()
-        auth_url, state = build_auth_url(self.pkce_verifier)
+        auth_url, state = build_auth_url(self.pkce_verifier, client_id=self.effective_client_id)
 
         try:
             self.query_one("#spotify-status", Static).update("[#c4a768]Waiting for authorization in browser...[/]")
@@ -2809,10 +2875,12 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
         except Exception:
             pass
         verifier = self.pkce_verifier or secrets.token_urlsafe(32)
+        cid = getattr(self, "effective_client_id", None) or get_spotify_client_id()
 
         def _worker():
-            tokens = exchange_code_for_tokens(code, verifier)
+            tokens = exchange_code_for_tokens(code, verifier, client_id=cid)
             if tokens and "access_token" in tokens:
+                tokens["client_id"] = cid
                 prof = fetch_current_user_profile(tokens["access_token"])
                 if prof:
                     tokens["user"] = prof
@@ -2822,7 +2890,7 @@ class SpotifyAuthModal(SafeModalScreen[Optional[str]]):
                     return
                 if not tokens or not tokens.get("access_token"):
                     try:
-                        self.query_one("#spotify-status", Static).update("[#c47676]Token exchange failed. Please try again.[/]")
+                        self.query_one("#spotify-status", Static).update("[#c47676]Token exchange failed. Check your Client ID and try again.[/]")
                     except Exception:
                         pass
                     self.is_logging_in = False
@@ -4963,6 +5031,37 @@ class SpoffTUI(App):
     #spotify-user-info {
         color: #e2e2e2;
         margin-bottom: 0;
+    }
+
+    #spotify-client-id-info {
+        color: #777777;
+        margin-bottom: 1;
+    }
+
+    #spotify-client-id-label {
+        color: #cccccc;
+        margin-top: 1;
+        margin-bottom: 0;
+        text-style: bold;
+    }
+
+    #spotify-client-id-input {
+        width: 100%;
+        margin-top: 0;
+        margin-bottom: 0;
+        background: #181818;
+        border: tall #333333;
+        color: #ffffff;
+    }
+
+    #spotify-client-id-input:focus {
+        border: tall #4f8a5e;
+    }
+
+    #spotify-client-id-help {
+        color: #666666;
+        margin-top: 0;
+        margin-bottom: 1;
     }
 
     #spotify-desc {
